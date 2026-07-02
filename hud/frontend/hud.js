@@ -34,28 +34,41 @@
       box-shadow: 0 18px 50px rgba(0,0,0,.38);
     }
     .tauri-hud .topbar {
+      position: relative;
+      z-index: 20;
+      display: flex;
+      flex-wrap: nowrap;
+      align-items: center;
       height: 34px;
-      grid-template-columns: auto minmax(0, 1fr) auto auto;
+      min-height: 34px;
+      max-height: 34px;
       gap: 9px;
       padding: 0 8px 0 14px;
       border-bottom: 1px solid rgba(255,255,255,.10);
       background: rgba(5,8,12,.50);
+      overflow: hidden;
       user-select: none;
       -webkit-user-select: none;
     }
     .tauri-hud .top-dot {
       width: 10px;
       height: 10px;
+      flex: 0 0 10px;
     }
     .tauri-hud .title {
       display: block;
+      flex: 1 1 auto;
       min-width: 0;
+      overflow: hidden;
     }
     .tauri-hud h1 {
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       font-size: 12px;
       line-height: 34px;
       text-transform: none;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     .tauri-hud .subtitle,
     .tauri-hud .clock {
@@ -73,14 +86,20 @@
     .hud-button {
       width: 24px;
       height: 24px;
+      min-width: 24px;
+      max-width: 24px;
+      flex: 0 0 24px;
       display: grid;
       place-items: center;
+      padding: 0;
       border: 0;
       border-radius: 6px;
       background: transparent;
       color: rgba(238,244,255,.86);
       font: 700 15px/1 system-ui, sans-serif;
-      cursor: default;
+      cursor: pointer;
+      position: relative;
+      z-index: 30;
     }
     .hud-button:hover {
       background: rgba(255,255,255,.10);
@@ -130,11 +149,11 @@
 
     collapseButton.addEventListener("click", async event => {
       event.stopPropagation();
-      collapsed = await invoke("toggle_collapse");
-      document.documentElement.classList.toggle("is-collapsed", collapsed);
-      collapseButton.textContent = collapsed ? "+" : "-";
-      collapseButton.title = collapsed ? "Expand" : "Collapse";
-      renderHudTitle(latestRuns);
+      try {
+        applyCollapsedState(Boolean(await invoke("toggle_collapse")), collapseButton);
+      } catch (error) {
+        console.error("Ringside collapse toggle failed", error);
+      }
     });
 
     hideButton.addEventListener("click", event => {
@@ -164,14 +183,52 @@
       const agents = liveRuns.reduce((sum, run) => sum + (run.tasks || []).length, 0);
       headline.textContent = `${liveRuns.length} ringer${liveRuns.length === 1 ? "" : "s"} · ${agents} agent${agents === 1 ? "" : "s"}`;
     } else if (runs.length > 0) {
-      const newest = runs[0];
-      headline.textContent = newest.state === "died" ? `${newest.run_name || "ringer"} died` : (newest.run_name || "ringer");
+      const newest = newestRun(runs);
+      headline.textContent = finalTickerText(newest);
     } else {
       headline.textContent = "no ringers running";
     }
 
     if (subtitle) subtitle.textContent = "";
     if (clock) clock.textContent = "";
+  }
+
+  function applyCollapsedState(nextCollapsed, collapseButton) {
+    collapsed = nextCollapsed;
+    const root = document.documentElement;
+    root.classList.toggle("is-collapsed", collapsed);
+    if (collapsed && !root.classList.contains("is-collapsed")) {
+      console.error("Ringside collapse class did not apply to document.documentElement");
+    }
+    collapseButton.textContent = collapsed ? "+" : "-";
+    collapseButton.title = collapsed ? "Expand" : "Collapse";
+    renderHudTitle(latestRuns);
+  }
+
+  function finalTickerText(run) {
+    const name = run.run_name || "ringer";
+    if (run.state === "died") return `${name} · died`;
+    const pass = numberOrZero(run.pass ?? run.summary?.pass ?? run.totals?.pass);
+    const fail = numberOrZero(run.fail ?? run.summary?.fail ?? run.totals?.fail);
+    return `${name} · ok ${pass} fail ${fail}`;
+  }
+
+  function newestRun(runs) {
+    return runs.reduce((latest, run) => {
+      return runTimestamp(run) > runTimestamp(latest) ? run : latest;
+    }, runs[0]);
+  }
+
+  function runTimestamp(run) {
+    const modified = Number(run?.mtime);
+    if (Number.isFinite(modified)) return modified * 1000;
+    const started = Date.parse(run?.started_at || "");
+    return Number.isFinite(started) ? started : 0;
+  }
+
+  function numberOrZero(value) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : 0;
   }
 
   function invoke(command) {

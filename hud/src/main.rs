@@ -27,6 +27,7 @@ mod names {
     pub const MAIN_WINDOW_LABEL: &str = "main";
     pub const TRAY_ID: &str = "main-tray";
     pub const MENU_TOGGLE_ID: &str = "toggle";
+    pub const MENU_VERSION_ID: &str = "version";
     pub const MENU_QUIT_ID: &str = "quit";
     pub const RUNS_EVENT: &str = "ringer-runs";
 }
@@ -137,6 +138,14 @@ fn configure_main_window(app: &AppHandle) {
 }
 
 fn build_tray(app: &mut tauri::App) -> tauri::Result<()> {
+    let version_label = format!("{} v{}", names::PRODUCT_NAME, env!("CARGO_PKG_VERSION"));
+    let version = MenuItem::with_id(
+        app,
+        names::MENU_VERSION_ID,
+        version_label.as_str(),
+        false,
+        None::<&str>,
+    )?;
     let toggle = MenuItem::with_id(
         app,
         names::MENU_TOGGLE_ID,
@@ -145,8 +154,12 @@ fn build_tray(app: &mut tauri::App) -> tauri::Result<()> {
         None::<&str>,
     )?;
     let quit = MenuItem::with_id(app, names::MENU_QUIT_ID, "Quit", true, Some("q"))?;
+    let version_separator = PredefinedMenuItem::separator(app)?;
     let separator = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&toggle, &separator, &quit])?;
+    let menu = Menu::with_items(
+        app,
+        &[&version, &version_separator, &toggle, &separator, &quit],
+    )?;
     let icon = Image::from_bytes(include_bytes!("../icons/32x32.png"))?;
 
     TrayIconBuilder::with_id(names::TRAY_ID)

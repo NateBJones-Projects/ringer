@@ -1,6 +1,6 @@
 [package]
 name = "ringside"
-version = "0.1.0"
+version = "0.1.1"
 description = "Ringside mission-control HUD for Ringer"
 authors = ["Jonathan Edwards"]
 edition = "2021"
