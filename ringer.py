@@ -24,8 +24,9 @@ import threading
 import time
 import tomllib
 import urllib.parse
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as dataclass_replace
 from datetime import datetime, timezone
+from html import escape as html_escape
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -90,6 +91,48 @@ class EvalConfig:
 
 
 @dataclass(frozen=True)
+class ArtifactConfig:
+    """Tier 0 zero-LLM HTML artifacts: live status page + final report + multi-run index.
+
+    See ringer-live-artifacts-plan.md. Templates support {run_id}, {run_name} substitutions.
+    """
+
+    enabled: bool
+    out_template: str
+    report_template: str
+    index_out: Path
+
+    def artifact_path(self, run_id: str, run_name: str) -> Path:
+        return Path(format_artifact_template(self.out_template, run_id, run_name))
+
+    def report_path(self, run_id: str, run_name: str) -> Path:
+        return Path(format_artifact_template(self.report_template, run_id, run_name))
+
+
+def format_artifact_template(template: str, run_id: str, run_name: str) -> str:
+    text = template.replace("{run_id}", run_id).replace("{run_name}", run_name)
+    return str(Path(text).expanduser())
+
+
+def load_artifact_config(raw: Any, state_dir: Path) -> ArtifactConfig:
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ValueError("artifact must be a TOML table")
+    default_dir = state_dir / "artifacts"
+    enabled = bool(raw.get("enabled", True))
+    out_template = str(raw.get("out", str(default_dir / "{run_id}.html")))
+    report_template = str(raw.get("report_out", str(default_dir / "{run_id}-report.html")))
+    index_out = expand_path(raw.get("index_out"), default_dir / "index.html")
+    return ArtifactConfig(
+        enabled=enabled,
+        out_template=out_template,
+        report_template=report_template,
+        index_out=index_out,
+    )
+
+
+@dataclass(frozen=True)
 class AppConfig:
     path: Path | None
     identity_default: str | None
@@ -99,6 +142,7 @@ class AppConfig:
     allow_full_access: bool
     eval: EvalConfig
     engines: dict[str, EngineConfig]
+    artifact: ArtifactConfig
 
     @classmethod
     def load(cls, path: Path | None = None) -> "AppConfig":
@@ -123,6 +167,7 @@ class AppConfig:
         allow_full_access = bool(data.get("allow_full_access", False))
         eval_config = load_eval_config(data.get("eval"), state_dir)
         engines = load_engines(data.get("engines"))
+        artifact_config = load_artifact_config(data.get("artifact"), state_dir)
         return cls(
             path=config_path if config_path.exists() else None,
             identity_default=identity_default,
@@ -132,6 +177,7 @@ class AppConfig:
             allow_full_access=allow_full_access,
             eval=eval_config,
             engines=engines,
+            artifact=artifact_config,
         )
 
 
@@ -415,6 +461,9 @@ class TaskRuntime:
     worker_pid: int | None = None
     tokens: int | None = None
     final_verdict: str | None = None
+    last_check_returncode: int | None = None
+    last_check_timed_out: bool = False
+    last_check_output: str = ""
 
     def elapsed_s(self, now: float) -> float:
         if self.started_at_monotonic is None:
@@ -504,6 +553,8 @@ class StateWriter:
         started_at: datetime,
         runtimes: list[TaskRuntime],
         lock: threading.RLock,
+        max_parallel: int = 1,
+        artifact: ArtifactConfig | None = None,
         path: Path | None = None,
     ) -> None:
         self.run_id = run_id
@@ -513,6 +564,8 @@ class StateWriter:
         self.started_at = started_at
         self.runtimes = runtimes
         self.lock = lock
+        self.max_parallel = max_parallel
+        self.state_dir = state_dir
         self.path = path or (state_dir / "runs" / f"{run_id}.json")
         self.pid = os.getpid()
         self.port: int | None = None
@@ -520,6 +573,15 @@ class StateWriter:
         self.summary: dict[str, int] | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self.artifact = artifact or ArtifactConfig(
+            enabled=False,
+            out_template=str(state_dir / "artifacts" / "{run_id}.html"),
+            report_template=str(state_dir / "artifacts" / "{run_id}-report.html"),
+            index_out=state_dir / "artifacts" / "index.html",
+        )
+        self.artifact_path = self.artifact.artifact_path(self.run_id, self.run_name)
+        self.report_path = self.artifact.report_path(self.run_id, self.run_name)
+        self.report_written = False
 
     def start(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -536,7 +598,8 @@ class StateWriter:
     def finish(self) -> None:
         self.finished = True
         self.summary = self.build_summary()
-        self.flush()
+        state = self.flush()
+        self._write_final_report_safe(state)
 
     def stop(self) -> None:
         self._stop.set()
@@ -544,11 +607,15 @@ class StateWriter:
             self._thread.join(timeout=2)
         self.flush()
 
-    def flush(self) -> None:
+    def flush(self) -> dict[str, Any]:
         state = self.snapshot()
         tmp = self.path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
         os.replace(tmp, self.path)
+        if self.artifact.enabled:
+            self._write_status_artifact_safe(state)
+            self._write_index_safe()
+        return state
 
     def snapshot(self) -> dict[str, Any]:
         now = time.monotonic()
@@ -557,15 +624,23 @@ class StateWriter:
             tasks = []
             for runtime in self.runtimes:
                 log_tail = tail_lines(runtime.log_path, line_count=3)
+                log_tail_full = tail_lines(runtime.log_path, line_count=40)
                 engine = self.engines.get(runtime.task.engine)
                 process_name = engine.process_name if engine else runtime.task.engine
                 tasks.append(
                     {
                         "key": runtime.task.key,
                         "status": runtime.status,
+                        "verdict": runtime.final_verdict,
                         "engine": runtime.task.engine,
                         "spec": runtime.task.spec,
                         "spec_short": runtime.spec_short,
+                        "check": runtime.task.check,
+                        "check_returncode": runtime.last_check_returncode,
+                        "check_timed_out": runtime.last_check_timed_out,
+                        "check_output_tail": shorten(runtime.last_check_output, 4000),
+                        "timeout_s": runtime.task.timeout_s,
+                        "taskdir": str(runtime.taskdir),
                         "activity": worker_activity(runtime.log_path, log_tail),
                         "elapsed_s": round(runtime.elapsed_s(now), 1),
                         "tokens": runtime.tokens,
@@ -574,6 +649,7 @@ class StateWriter:
                             runtime.worker_pid, children, commands, process_name
                         ),
                         "log_tail": log_tail,
+                        "log_tail_full": log_tail_full,
                     }
                 )
             pass_count = sum(1 for item in tasks if item["status"] == "pass")
@@ -595,6 +671,7 @@ class StateWriter:
                 "state": "finished" if self.finished else "live",
                 "pid": self.pid,
                 "port": self.port,
+                "max_parallel": self.max_parallel,
                 "finished": self.finished,
                 "summary": self.summary if self.finished else None,
                 "started_at": self.started_at.isoformat(),
@@ -604,6 +681,9 @@ class StateWriter:
                 "pass": totals["pass"],
                 "fail": totals["fail"],
                 "tokens": totals["tokens"],
+                "artifact_path": str(self.artifact_path) if self.artifact.enabled else None,
+                "report_path": str(self.report_path) if self.artifact.enabled else None,
+                "report_ready": self.report_written,
             }
 
     def build_summary(self) -> dict[str, int]:
@@ -614,12 +694,402 @@ class StateWriter:
                 "tokens": sum(int(runtime.tokens or 0) for runtime in self.runtimes),
             }
 
+    def _write_status_artifact_safe(self, state: dict[str, Any]) -> None:
+        try:
+            html = render_status_html(state)
+            atomic_write_text(self.artifact_path, html)
+        except Exception as exc:
+            print(f"artifact render error (status page, non-fatal): {exc}", file=sys.stderr)
+
+    def _write_final_report_safe(self, state: dict[str, Any]) -> None:
+        if not self.artifact.enabled:
+            return
+        try:
+            html = render_final_report_html(state)
+            atomic_write_text(self.report_path, html)
+            self.report_written = True
+            # Re-flush the plain state JSON so report_ready/report_path are accurate for
+            # anything (Ringside) polling the state file right after the run ends.
+            tmp = self.path.with_suffix(".json.tmp")
+            state = dict(state)
+            state["report_ready"] = True
+            tmp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+            os.replace(tmp, self.path)
+        except Exception as exc:
+            print(f"artifact render error (final report, non-fatal): {exc}", file=sys.stderr)
+
+    def _write_index_safe(self) -> None:
+        try:
+            entries = scan_run_states(self.state_dir)
+            html = render_artifact_index_html(entries)
+            atomic_write_text(self.artifact.index_out, html)
+        except Exception as exc:
+            print(f"artifact render error (index, non-fatal): {exc}", file=sys.stderr)
+
     def _loop(self) -> None:
         while not self._stop.wait(1.0):
             try:
                 self.flush()
             except Exception as exc:
                 print(f"state writer error: {exc}", file=sys.stderr)
+
+
+def atomic_write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def scan_run_states(state_dir: Path) -> list[dict[str, Any]]:
+    """Best-effort scan of every run state file, for the multi-run index artifact."""
+    runs_dir = state_dir / "runs"
+    entries: list[dict[str, Any]] = []
+    try:
+        paths = list(runs_dir.glob("*.json"))
+    except OSError:
+        return entries
+    for path in paths:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        entries.append(
+            {
+                "run_id": data.get("run_id", path.stem),
+                "run_name": data.get("run_name", "ringer"),
+                "identity": data.get("identity", "unknown"),
+                "state": data.get("state", "finished" if data.get("finished") else "live"),
+                "pass": data.get("pass", 0),
+                "fail": data.get("fail", 0),
+                "elapsed_s": data.get("elapsed_s", 0),
+                "started_at": data.get("started_at", ""),
+                "artifact_path": data.get("artifact_path"),
+                "report_path": data.get("report_path"),
+                "report_ready": data.get("report_ready", False),
+                "mtime": mtime,
+            }
+        )
+    entries.sort(key=lambda item: item["mtime"], reverse=True)
+    return entries
+
+
+STATUS_COLORS = {
+    "pass": "#49e27d",
+    "fail": "#ff5468",
+    "error": "#ff5468",
+    "timeout": "#ff5468",
+    "running": "#28d7ff",
+    "retrying": "#28d7ff",
+    "verifying": "#ffbe45",
+    "queued": "#778195",
+    "died": "#ff5468",
+    "live": "#28d7ff",
+    "finished": "#49e27d",
+}
+
+
+def status_color(status: str) -> str:
+    return STATUS_COLORS.get(str(status).lower(), "#778195")
+
+
+def fmt_duration(seconds: Any) -> str:
+    try:
+        total = max(0, int(float(seconds or 0)))
+    except (TypeError, ValueError):
+        total = 0
+    h, rem = divmod(total, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m:02d}:{s:02d}"
+
+
+def fmt_datetime(value: str) -> str:
+    if not value:
+        return ""
+    try:
+        dt = datetime.fromisoformat(value)
+    except ValueError:
+        return value
+    return dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+ARTIFACT_BASE_CSS = """
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; min-height: 100%;
+    background: linear-gradient(180deg, #080a0f 0%, #0d1119 60%, #080a0f 100%);
+    color: #eef4ff;
+    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 22px 18px 48px; }
+  h1 { font-size: 21px; letter-spacing: .02em; text-transform: uppercase; margin: 0 0 4px; }
+  .meta { color: #8f9db2; font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; margin-bottom: 16px; line-height: 1.7; }
+  .meta b { color: #cbd6e8; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid rgba(255,255,255,.08); vertical-align: top; }
+  th { color: #8f9db2; font-weight: 700; text-transform: uppercase; font-size: 10px; letter-spacing: .05em; }
+  tr:hover td { background: rgba(255,255,255,.025); }
+  .chip { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 10px; font-weight: 800; text-transform: uppercase; color: #080a0f; white-space: nowrap; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; color: #cbd6e8; }
+  .muted { color: #8f9db2; }
+  .spec { max-width: 340px; color: #b8c4d6; }
+  details { margin-top: 6px; }
+  summary { cursor: pointer; color: #35d5ff; font-size: 11px; }
+  pre { white-space: pre-wrap; word-break: break-word; background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.08); border-radius: 6px; padding: 8px; font-size: 11px; max-height: 320px; overflow: auto; margin: 6px 0 0; }
+  a { color: #35d5ff; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .top-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; vertical-align: middle; box-shadow: 0 0 14px currentColor; }
+"""
+
+
+def render_status_html(state: dict[str, Any]) -> str:
+    """Tier 0 zero-LLM live status artifact. Rendered on every state flush (~1s)."""
+    run_name = html_escape(str(state.get("run_name", "ringer")))
+    identity = html_escape(str(state.get("identity", "unknown")))
+    run_state = str(state.get("state", "live"))
+    dot_color = status_color(run_state)
+    started = fmt_datetime(str(state.get("started_at", "")))
+    elapsed = fmt_duration(state.get("elapsed_s"))
+    totals = state.get("totals") or {}
+    pass_n = totals.get("pass", state.get("pass", 0))
+    fail_n = totals.get("fail", state.get("fail", 0))
+    done_n = totals.get("done", pass_n + fail_n)
+    tasks = state.get("tasks") or []
+    task_count = len(tasks)
+    max_parallel = state.get("max_parallel", "?")
+    tokens = int(totals.get("tokens", state.get("tokens", 0)) or 0)
+
+    rows = "".join(render_status_row(task) for task in tasks) or (
+        '<tr><td colspan="6" class="muted">no tasks</td></tr>'
+    )
+
+    report_note = ""
+    if state.get("report_ready") and state.get("report_path"):
+        report_path = str(state["report_path"])
+        report_note = (
+            f'<p class="meta">Final report ready: '
+            f'<a href="file://{html_escape(report_path)}">{html_escape(report_path)}</a></p>'
+        )
+
+    refresh = "" if state.get("finished") else '<meta http-equiv="refresh" content="5">'
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ringer &middot; {run_name}</title>
+{refresh}
+<style>{ARTIFACT_BASE_CSS}</style>
+</head>
+<body>
+<div class="wrap">
+  <h1><span class="top-dot" style="background:{dot_color};color:{dot_color}"></span>{run_name}</h1>
+  <div class="meta">
+    identity <b>{identity}</b> &middot; state <b>{html_escape(run_state)}</b> &middot;
+    started <b>{started}</b> &middot; elapsed <b>{elapsed}</b> &middot;
+    <b>{done_n}/{task_count}</b> done ({pass_n} pass / {fail_n} fail) &middot;
+    max_parallel <b>{max_parallel}</b> &middot; tokens <b>{tokens:,}</b>
+  </div>
+  {report_note}
+  <table>
+    <thead><tr><th>Task</th><th>Status</th><th>Attempts</th><th>Duration</th><th>Check</th><th>Spec</th></tr></thead>
+    <tbody>
+      {rows}
+    </tbody>
+  </table>
+</div>
+</body>
+</html>
+"""
+
+
+def render_status_row(task: dict[str, Any]) -> str:
+    status = str(task.get("status", "queued"))
+    verdict = task.get("verdict")
+    key = html_escape(str(task.get("key", "")))
+    color = status_color(status)
+    label = status if not verdict or verdict == "PASS" else f"{status} ({verdict})"
+    attempts = task.get("attempts", 0)
+    elapsed = fmt_duration(task.get("elapsed_s"))
+    check_rc = task.get("check_returncode")
+    check_rc_text = "—" if check_rc is None else str(check_rc)
+    check_cmd = html_escape(shorten(str(task.get("check", "")), 200))
+    spec_preview = html_escape(shorten(str(task.get("spec_short") or task.get("spec") or ""), 200))
+
+    fail_block = ""
+    if status == "fail" and str(task.get("check_output_tail", "")).strip():
+        output = html_escape(shorten(str(task.get("check_output_tail", "")), 2000))
+        fail_block = f"<details><summary>check output</summary><pre>{output}</pre></details>"
+
+    return f"""<tr>
+      <td class="mono">{key}</td>
+      <td><span class="chip" style="background:{color}">{html_escape(label)}</span></td>
+      <td>{attempts}</td>
+      <td class="mono">{elapsed}</td>
+      <td class="mono">rc={check_rc_text}<br>{check_cmd}</td>
+      <td class="spec">{spec_preview}{fail_block}</td>
+    </tr>"""
+
+
+def render_final_report_html(state: dict[str, Any]) -> str:
+    """Feature 4: self-contained final report, rendered once when a run finishes."""
+    run_name = html_escape(str(state.get("run_name", "ringer")))
+    identity = html_escape(str(state.get("identity", "unknown")))
+    started = fmt_datetime(str(state.get("started_at", "")))
+    elapsed = fmt_duration(state.get("elapsed_s"))
+    totals = state.get("totals") or {}
+    pass_n = totals.get("pass", state.get("pass", 0))
+    fail_n = totals.get("fail", state.get("fail", 0))
+    tasks = state.get("tasks") or []
+    task_count = len(tasks)
+    tokens = int(totals.get("tokens", state.get("tokens", 0)) or 0)
+    max_parallel = state.get("max_parallel", "?")
+    overall = "PASS" if fail_n == 0 else "FAIL"
+    overall_color = status_color("pass" if fail_n == 0 else "fail")
+    run_id = html_escape(str(state.get("run_id", "")))
+
+    rows = "".join(render_report_row(task) for task in tasks) or (
+        '<tr><td colspan="8" class="muted">no tasks</td></tr>'
+    )
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ringer report &middot; {run_name}</title>
+<style>{ARTIFACT_BASE_CSS}</style>
+</head>
+<body>
+<div class="wrap">
+  <h1><span class="top-dot" style="background:{overall_color};color:{overall_color}"></span>{run_name} &mdash; final report</h1>
+  <div class="meta">
+    identity <b>{identity}</b> &middot; overall <b>{overall}</b> &middot;
+    started <b>{started}</b> &middot; elapsed <b>{elapsed}</b> &middot;
+    <b>{pass_n}/{task_count}</b> pass ({fail_n} fail) &middot;
+    max_parallel <b>{max_parallel}</b> &middot; tokens <b>{tokens:,}</b> &middot;
+    run_id <span class="mono">{run_id}</span>
+  </div>
+  <table>
+    <thead><tr>
+      <th>Task</th><th>Verdict</th><th>Attempts</th><th>Duration</th><th>Tokens</th>
+      <th>Check</th><th>Spec preview</th><th>Links</th>
+    </tr></thead>
+    <tbody>
+      {rows}
+    </tbody>
+  </table>
+  <p class="meta">Generated by ringer.py (zero-LLM Tier 0 artifact) at run completion. Spec text
+  is truncated to 200 chars in this report by design (task specs may embed paths from other
+  tasks); see the task's own worker.log / report files linked above for full detail.</p>
+</div>
+</body>
+</html>
+"""
+
+
+def render_report_row(task: dict[str, Any]) -> str:
+    status = str(task.get("status", "queued"))
+    verdict = str(task.get("verdict") or status.upper())
+    color = status_color(status)
+    key = html_escape(str(task.get("key", "")))
+    attempts = task.get("attempts", 0)
+    retried = " (retried)" if isinstance(attempts, int) and attempts > 1 else ""
+    elapsed = fmt_duration(task.get("elapsed_s"))
+    tokens = task.get("tokens")
+    tokens_text = "—" if tokens is None else f"{int(tokens):,}"
+    check_rc = task.get("check_returncode")
+    check_rc_text = "—" if check_rc is None else str(check_rc)
+    check_cmd = html_escape(shorten(str(task.get("check", "")), 300))
+    spec_preview = html_escape(shorten(str(task.get("spec_short") or task.get("spec") or ""), 200))
+    output = html_escape(shorten(str(task.get("check_output_tail", "")), 4000))
+    output_block = (
+        f"<details><summary>check output</summary><pre>{output}</pre></details>"
+        if output.strip()
+        else ""
+    )
+
+    links: list[str] = []
+    taskdir = task.get("taskdir")
+    if taskdir:
+        taskdir_path = Path(str(taskdir))
+        links.append(f'<a href="file://{html_escape(str(taskdir_path))}">taskdir</a>')
+        worker_log = taskdir_path / "worker.log"
+        if worker_log.exists():
+            links.append(f'<a href="file://{html_escape(str(worker_log))}">worker.log</a>')
+        for report_name in ("report.md", "report.html"):
+            report_file = taskdir_path / report_name
+            if report_file.exists():
+                links.append(f'<a href="file://{html_escape(str(report_file))}">{report_name}</a>')
+    links_html = " &middot; ".join(links) if links else '<span class="muted">—</span>'
+
+    return f"""<tr>
+      <td class="mono">{key}</td>
+      <td><span class="chip" style="background:{color}">{html_escape(verdict)}</span></td>
+      <td>{attempts}{retried}</td>
+      <td class="mono">{elapsed}</td>
+      <td class="mono">{tokens_text}</td>
+      <td class="mono">rc={check_rc_text}<br>{check_cmd}{output_block}</td>
+      <td class="spec">{spec_preview}</td>
+      <td class="mono">{links_html}</td>
+    </tr>"""
+
+
+def render_artifact_index_html(entries: list[dict[str, Any]]) -> str:
+    """Multi-run index: one pane of glass across every run under this state_dir."""
+    rows = []
+    for entry in entries:
+        state_label = str(entry.get("state", "live"))
+        fail_n = entry.get("fail", 0) or 0
+        color = status_color(state_label if state_label in STATUS_COLORS else ("fail" if fail_n else "pass"))
+        run_name = html_escape(str(entry.get("run_name", "ringer")))
+        identity = html_escape(str(entry.get("identity", "unknown")))
+        elapsed = fmt_duration(entry.get("elapsed_s"))
+        pass_n = entry.get("pass", 0)
+        links: list[str] = []
+        artifact_path = entry.get("artifact_path")
+        if artifact_path:
+            links.append(f'<a href="file://{html_escape(str(artifact_path))}">live</a>')
+        if entry.get("report_ready") and entry.get("report_path"):
+            links.append(f'<a href="file://{html_escape(str(entry["report_path"]))}">report</a>')
+        links_html = " &middot; ".join(links) if links else '<span class="muted">—</span>'
+        rows.append(
+            f"""<tr>
+          <td><span class="chip" style="background:{color}">{html_escape(state_label)}</span></td>
+          <td class="mono">{run_name}</td>
+          <td class="mono">{identity}</td>
+          <td class="mono">{pass_n} pass / {fail_n} fail</td>
+          <td class="mono">{elapsed}</td>
+          <td class="mono">{links_html}</td>
+        </tr>"""
+        )
+    body = "".join(rows) if rows else '<tr><td colspan="6" class="muted">no runs recorded yet</td></tr>'
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ringer &middot; all runs</title>
+<meta http-equiv="refresh" content="5">
+<style>{ARTIFACT_BASE_CSS}</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>ringer &mdash; all runs</h1>
+  <p class="meta">One pane of glass across every run with state under this state_dir.</p>
+  <table>
+    <thead><tr><th>State</th><th>Run</th><th>Identity</th><th>Result</th><th>Elapsed</th><th>Artifacts</th></tr></thead>
+    <tbody>{body}</tbody>
+  </table>
+</div>
+</body>
+</html>
+"""
 
 
 class Dashboard:
@@ -881,6 +1351,8 @@ class RingerRunner:
             self.started_at,
             self.runtimes,
             self.lock,
+            max_parallel=manifest.max_parallel,
+            artifact=config.artifact,
         )
         self.dashboard = (
             Dashboard(
@@ -963,6 +1435,10 @@ class RingerRunner:
                         runtime.tokens = (runtime.tokens or 0) + worker.tokens
                 verify = await self.verifier.verify(runtime.task, runtime.taskdir)
                 verdict = verdict_for(worker, verify)
+                with self.lock:
+                    runtime.last_check_returncode = verify.check_returncode
+                    runtime.last_check_timed_out = verify.check_timed_out
+                    runtime.last_check_output = verify.raw_output_excerpt
                 duration_ms = int((time.monotonic() - attempt_started) * 1000)
                 self._log_attempt(runtime, current_spec, retrying, worker, verify, verdict, duration_ms)
                 if verdict == "PASS":
@@ -1641,6 +2117,12 @@ def dry_run(
             mode = f"HUD app {config.hud_app_path} when available, browser fallback"
         print(f"Dashboard opener: {mode}")
         print(f"Dashboard port base: {config.dashboard_port_base}")
+    print(f"Artifacts: {'on' if config.artifact.enabled else 'off'}")
+    if config.artifact.enabled:
+        run_id_preview = build_run_id(manifest.run_name)
+        print(f"  live status page: {config.artifact.artifact_path(run_id_preview, manifest.run_name)}")
+        print(f"  final report:     {config.artifact.report_path(run_id_preview, manifest.run_name)}")
+        print(f"  runs index:       {config.artifact.index_out}")
     print("Tasks:")
     for task in manifest.tasks:
         taskdir = (manifest.workdir / task.key).resolve()
@@ -1761,6 +2243,11 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--identity", help="orchestrator identity for HUD state and eval rows")
     run_parser.add_argument("--no-dashboard", action="store_true", help="disable live dashboard")
     run_parser.add_argument("--browser", action="store_true", help="open the dashboard in the browser instead of Ringside")
+    run_parser.add_argument(
+        "--no-artifact",
+        action="store_true",
+        help="disable zero-LLM HTML status/report artifacts (see [artifact] in config.toml)",
+    )
     run_parser.add_argument("--dry-run", action="store_true", help="print the plan without spawning codex")
 
     demo_parser = subparsers.add_parser("demo", help="generate and run a 3-task toy manifest in /tmp")
@@ -1769,6 +2256,11 @@ def build_parser() -> argparse.ArgumentParser:
     demo_parser.add_argument("--identity", help="orchestrator identity for HUD state and eval rows")
     demo_parser.add_argument("--no-dashboard", action="store_true", help="disable live dashboard")
     demo_parser.add_argument("--browser", action="store_true", help="open the dashboard in the browser instead of Ringside")
+    demo_parser.add_argument(
+        "--no-artifact",
+        action="store_true",
+        help="disable zero-LLM HTML status/report artifacts (see [artifact] in config.toml)",
+    )
     demo_parser.add_argument("--dry-run", action="store_true", help="print the demo plan without spawning codex")
     return parser
 
@@ -1793,6 +2285,8 @@ def main(argv: list[str] | None = None) -> int:
             identity_start_paths.append(manifest.source_path.parent)
         identity = resolve_identity(args.identity, config, identity_start_paths)
         dashboard_enabled = not args.no_dashboard
+        if getattr(args, "no_artifact", False) and config.artifact.enabled:
+            config = dataclass_replace(config, artifact=dataclass_replace(config.artifact, enabled=False))
         if args.dry_run:
             dry_run(
                 manifest,

@@ -74,3 +74,18 @@ token_regex = "tokens\\s+used\\s*:?\\s*([0-9][0-9,]*)"
 # sandbox_args = []
 # full_access_args = ["--allow-all"]
 # token_regex = "tokens\\s*:?\\s*([0-9][0-9,]*)"
+
+[artifact]
+# Zero-LLM, self-contained HTML artifacts rendered directly from state — no model calls, no
+# network. Three files per config, all pure stdlib templates:
+#   - `out`: the live status page, re-rendered on every ~1s state flush while a run is in
+#     progress (meta-refresh, no JS needed). Ringside can embed or open this.
+#   - `report_out`: the final report, rendered once when a run finishes — full task table,
+#     timings, attempts/retries, check output, links to each task's worker.log/report files.
+#   - `index_out`: a single multi-run index listing every run under state_dir (handy when
+#     several swarms run at once).
+# Templates support {run_id} and {run_name} substitution. Disable with --no-artifact.
+enabled = true
+out = "~/.ringer/artifacts/{run_id}.html"
+report_out = "~/.ringer/artifacts/{run_id}-report.html"
+index_out = "~/.ringer/artifacts/index.html"
