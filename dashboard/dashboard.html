@@ -18,6 +18,9 @@
       --green: #49e27d;
       --red: #ff5468;
       --gray: #778195;
+      /* Feature 5 (settings panel): user-customizable accent, defaults to --cyan. Only the
+         neutral "live" highlight is themeable — pass/fail keep fixed semantic colors. */
+      --accent: #28d7ff;
     }
     * { box-sizing: border-box; }
     html, body {
@@ -65,7 +68,7 @@
       box-shadow: 0 0 16px rgba(119,129,149,.7);
     }
     .top-dot.live {
-      background: var(--cyan);
+      background: var(--accent);
       animation: dotPulse 1.35s infinite;
     }
     .top-dot.pass { background: var(--green); box-shadow: 0 0 18px rgba(73,226,125,.72); }
@@ -137,7 +140,7 @@
       box-shadow: 0 0 16px rgba(119,129,149,.7);
     }
     .dot.live {
-      background: var(--cyan);
+      background: var(--accent);
       animation: dotPulse 1.35s infinite;
     }
     .dot.finished { background: var(--green); }
@@ -201,7 +204,7 @@
       background: rgba(255,255,255,.035);
       padding: 8px;
     }
-    .task.running, .task.retrying { border-left-color: var(--cyan); }
+    .task.running, .task.retrying { border-left-color: var(--accent); }
     .task.verifying { border-left-color: var(--amber); }
     .task.pass { border-left-color: var(--green); }
     .task.fail { border-left-color: var(--red); }
@@ -222,7 +225,7 @@
       font-weight: 900;
       text-transform: uppercase;
     }
-    .task.running .task-status, .task.retrying .task-status { background: var(--cyan); }
+    .task.running .task-status, .task.retrying .task-status { background: var(--accent); }
     .task.verifying .task-status { background: var(--amber); }
     .task.pass .task-status { background: var(--green); }
     .task.fail .task-status { background: var(--red); }
@@ -279,6 +282,146 @@
       .clock { grid-column: 2; }
       .tasks { grid-template-columns: 1fr; }
     }
+
+    /* ---- Feature 3 (selectable views) + Feature 5 (settings panel) ---- */
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 0 2px;
+      border-bottom: 1px solid var(--line);
+      position: relative;
+    }
+    .toolbar-group { display: flex; align-items: center; gap: 5px; }
+    .toolbar-group[hidden] { display: none; }
+    .toolbar-spacer { flex: 1 1 auto; }
+    .toolbar button, .toolbar select, .toolbar input[type="search"] {
+      background: rgba(255,255,255,.05);
+      border: 1px solid var(--line);
+      color: var(--text);
+      font: 700 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      border-radius: 6px;
+      padding: 5px 9px;
+    }
+    .toolbar button { cursor: pointer; }
+    .toolbar button:hover, .toolbar select:hover {
+      border-color: color-mix(in srgb, var(--accent) 60%, var(--line));
+    }
+    .toolbar button.active {
+      background: color-mix(in srgb, var(--accent) 26%, transparent);
+      border-color: var(--accent);
+      color: #eef8ff;
+    }
+    .toolbar input[type="search"] { min-width: 130px; font-weight: 500; }
+    .toolbar input[type="search"]::placeholder { color: var(--muted); }
+
+    .settings-panel {
+      position: absolute;
+      top: calc(100% + 8px);
+      right: 0;
+      z-index: 40;
+      width: 264px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      box-shadow: 0 18px 40px rgba(0,0,0,.5);
+      padding: 12px;
+      display: none;
+      flex-direction: column;
+      gap: 9px;
+    }
+    .settings-panel.open { display: flex; }
+    .settings-title {
+      font-size: 9.5px; text-transform: uppercase; letter-spacing: .07em;
+      color: var(--muted); margin: 3px 0 -3px;
+    }
+    .settings-title:first-child { margin-top: 0; }
+    .settings-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 11.5px; }
+    .settings-row label { color: var(--text); min-width: 0; }
+    .settings-panel input[type="color"] { width: 34px; height: 22px; padding: 0; border: none; background: none; cursor: pointer; }
+    .settings-panel select {
+      background: rgba(255,255,255,.05); color: var(--text); border: 1px solid var(--line);
+      border-radius: 5px; padding: 3px 6px; font-size: 11px;
+    }
+
+    /* run-level collapse (feature 3, driven by "Collapse all") */
+    .run.collapsed .tasks { display: none; }
+
+    /* density (feature 5) */
+    body.density-compact .tasks { gap: 5px; padding: 6px; }
+    body.density-compact .task { padding: 5px; gap: 3px 5px; }
+    body.density-compact .task-description,
+    body.density-compact .task-activity { font-size: 10px; }
+    body.density-compact .run-head { padding: 7px 10px 5px; }
+
+    /* column visibility (feature 5) */
+    body.hide-activity .task-activity { display: none !important; }
+    body.hide-children .children { display: none !important; }
+    body.hide-tokens .run-tokens { display: none !important; }
+
+    /* progress bars (feature 3): elapsed_s / timeout_s, hidden when no timeout is known */
+    .task-progress {
+      grid-column: 1 / -1;
+      height: 3px;
+      border-radius: 999px;
+      background: rgba(255,255,255,.08);
+      overflow: hidden;
+      margin-top: 1px;
+    }
+    .task-progress > span {
+      display: block;
+      height: 100%;
+      width: 0%;
+      background: var(--gray);
+      transition: width .3s ease;
+    }
+    .task.running .task-progress > span, .task.retrying .task-progress > span { background: var(--accent); }
+    .task.verifying .task-progress > span { background: var(--amber); }
+    .task.pass .task-progress > span { background: var(--green); }
+    .task.fail .task-progress > span { background: var(--red); }
+
+    /* task detail view (feature 1): click a task card to expand */
+    .task { cursor: pointer; }
+    .task-detail {
+      grid-column: 1 / -1;
+      display: none;
+      margin-top: 4px;
+      padding-top: 6px;
+      border-top: 1px dashed rgba(255,255,255,.14);
+      font-size: 10.5px;
+      color: #b8c4d6;
+    }
+    .task.expanded .task-detail { display: block; }
+    .task-detail-row { display: flex; gap: 6px; margin-bottom: 4px; }
+    .task-detail-row .label {
+      color: var(--muted); flex: 0 0 68px; text-transform: uppercase;
+      font-size: 9px; letter-spacing: .04em; padding-top: 1px;
+    }
+    .task-detail-row .value { min-width: 0; word-break: break-word; }
+    .task-detail pre {
+      margin: 0 0 6px; padding: 6px; max-height: 170px; overflow: auto;
+      background: rgba(0,0,0,.35); border: 1px solid rgba(255,255,255,.08);
+      border-radius: 5px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 10px; white-space: pre-wrap; word-break: break-word;
+    }
+
+    /* live artifact embed (feature 2) */
+    #app.artifact-mode { display: none; }
+    .artifact-view { display: none; flex-direction: column; gap: 8px; padding-top: 14px; }
+    .artifact-view.active { display: flex; }
+    .artifact-frame-wrap {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: #05070a;
+      min-height: 360px;
+      flex: 1 1 auto;
+    }
+    .artifact-frame-wrap iframe {
+      width: 100%; height: 100%; min-height: 360px; border: 0; display: block; background: #05070a;
+    }
+    .artifact-empty { padding: 26px; color: var(--muted); font-size: 12px; text-align: center; }
   </style>
 </head>
 <body>
@@ -291,7 +434,64 @@
       </div>
       <div id="clock" class="clock">00:00</div>
     </header>
+    <div class="toolbar" id="toolbar" data-no-drag>
+      <div class="toolbar-group" id="viewButtons">
+        <button type="button" data-view="grid" class="active">Grid</button>
+        <button type="button" data-view="artifact">Artifact</button>
+      </div>
+      <div class="toolbar-group">
+        <button type="button" id="collapseAllBtn">Collapse all</button>
+      </div>
+      <input type="search" id="agentFilter" placeholder="filter agents…">
+      <div class="toolbar-spacer"></div>
+      <div class="toolbar-group" id="windowSizeButtons">
+        <button type="button" data-size="mini">Mini</button>
+        <button type="button" data-size="medium" class="active">Medium</button>
+        <button type="button" data-size="large">Large</button>
+      </div>
+      <button type="button" id="settingsToggle" title="Settings">&#9881;</button>
+      <div class="settings-panel" id="settingsPanel" data-no-drag>
+        <div class="settings-title">Theme</div>
+        <div class="settings-row">
+          <label for="accentInput">Accent color</label>
+          <input type="color" id="accentInput" value="#28d7ff">
+        </div>
+        <div class="settings-title">Layout</div>
+        <div class="settings-row">
+          <label for="densitySelect">Density</label>
+          <select id="densitySelect">
+            <option value="comfortable">Comfortable</option>
+            <option value="compact">Compact</option>
+          </select>
+        </div>
+        <div class="settings-row">
+          <label for="defaultViewSelect">Default view</label>
+          <select id="defaultViewSelect">
+            <option value="grid">Grid</option>
+            <option value="artifact">Artifact</option>
+          </select>
+        </div>
+        <div class="settings-title">Show fields</div>
+        <div class="settings-row">
+          <label for="showActivity">Activity line</label>
+          <input type="checkbox" id="showActivity" checked>
+        </div>
+        <div class="settings-row">
+          <label for="showChildren">Child process count</label>
+          <input type="checkbox" id="showChildren" checked>
+        </div>
+        <div class="settings-row">
+          <label for="showTokens">Run token totals</label>
+          <input type="checkbox" id="showTokens" checked>
+        </div>
+      </div>
+    </div>
     <main id="app"><div class="empty">no ringers running</div></main>
+    <div class="artifact-view" id="artifactView">
+      <div class="artifact-frame-wrap" id="artifactFrameWrap">
+        <div class="artifact-empty">no live artifact available yet</div>
+      </div>
+    </div>
   </div>
   <script>
     const app = document.getElementById("app");
@@ -475,6 +675,21 @@
       };
     }
 
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function taskProgressRatio(task) {
+      const elapsed = numberOrZero(task.elapsed_s);
+      const timeout = numberOrZero(task.timeout_s);
+      if (timeout <= 0) return null;
+      return Math.max(0, Math.min(1, elapsed / timeout));
+    }
+
     function createTaskRecord(key) {
       const node = document.createElement("div");
       node.className = "task";
@@ -501,10 +716,28 @@
       const children = document.createElement("div");
       children.className = "children";
 
-      meta.append(elapsed, children);
-      node.append(name, status, description, activity, meta);
+      const progress = document.createElement("div");
+      progress.className = "task-progress";
+      const progressFill = document.createElement("span");
+      progress.appendChild(progressFill);
 
-      return {node, elements: {name, status, description, activity, elapsed, children}};
+      const detail = document.createElement("div");
+      detail.className = "task-detail";
+
+      meta.append(elapsed, children);
+      node.append(name, status, description, activity, meta, progress, detail);
+
+      // Feature 1: click a task card to expand a detail panel (full spec, check command +
+      // output, live worker.log tail, taskdir). Ignore clicks on any interactive child.
+      node.addEventListener("click", event => {
+        if (event.target.closest("a, button, input, select, textarea")) return;
+        node.classList.toggle("expanded");
+      });
+
+      return {
+        node,
+        elements: {name, status, description, activity, elapsed, children, progressFill, detail},
+      };
     }
 
     function updateTaskRecord(record, task) {
@@ -520,8 +753,9 @@
       const description = String(task.spec_short || task.spec || "").trim();
       const fullSpec = String(task.spec || task.spec_short || "").trim();
       const activity = taskActivityText(task, status, tail);
+      const expanded = record.node.classList.contains("expanded");
 
-      const taskClass = `task ${safeClass(status, "queued")}${activity ? " has-activity" : ""}`;
+      const taskClass = `task ${safeClass(status, "queued")}${activity ? " has-activity" : ""}${expanded ? " expanded" : ""}`;
       if (record.node.className !== taskClass) record.node.className = taskClass;
       setText(record.elements.name, name);
       setTitle(record.elements.name, title);
@@ -533,6 +767,57 @@
       setTitle(record.elements.activity, activity);
       setText(record.elements.elapsed, elapsed);
       setText(record.elements.children, children > 0 ? `p${children}` : "");
+
+      const ratio = taskProgressRatio(task);
+      record.elements.progressFill.style.width = ratio === null ? "0%" : `${Math.round(ratio * 100)}%`;
+      record.elements.progressFill.parentElement.style.visibility = ratio === null ? "hidden" : "visible";
+
+      updateTaskDetail(record, task, fullSpec);
+    }
+
+    function updateTaskDetail(record, task, fullSpec) {
+      const attempts = numberOrZero(task.attempts);
+      const logTail = Array.isArray(task.log_tail_full) && task.log_tail_full.length
+        ? task.log_tail_full
+        : (Array.isArray(task.log_tail) ? task.log_tail : []);
+      const logText = logTail.map(line => String(line)).join("\n").trim();
+      const checkOutput = String(task.check_output_tail || "").trim();
+      const verdictSuffix = task.verdict ? ` (${task.verdict})` : "";
+
+      const rows = [];
+      rows.push(
+        `<div class="task-detail-row"><span class="label">Engine</span><span class="value">${escapeHtml(task.engine || "—")}</span></div>`
+      );
+      rows.push(
+        `<div class="task-detail-row"><span class="label">Attempts</span><span class="value">${attempts}${escapeHtml(verdictSuffix)}</span></div>`
+      );
+      if (task.check) {
+        rows.push(
+          `<div class="task-detail-row"><span class="label">Check</span><span class="value">${escapeHtml(task.check)}</span></div>`
+        );
+      }
+      if (task.taskdir) {
+        rows.push(
+          `<div class="task-detail-row"><span class="label">Taskdir</span><span class="value">${escapeHtml(task.taskdir)}</span></div>`
+        );
+      }
+      if (fullSpec) {
+        rows.push(
+          `<div class="task-detail-row"><span class="label">Spec</span><span class="value">${escapeHtml(fullSpec)}</span></div>`
+        );
+      }
+      if (checkOutput) {
+        rows.push(
+          `<div class="task-detail-row"><span class="label">Check output</span></div><pre>${escapeHtml(checkOutput)}</pre>`
+        );
+      }
+      if (logText) {
+        rows.push(
+          `<div class="task-detail-row"><span class="label">Live tail</span></div><pre>${escapeHtml(logText)}</pre>`
+        );
+      }
+      const html = rows.join("");
+      if (record.elements.detail.innerHTML !== html) record.elements.detail.innerHTML = html;
     }
 
     function updateRunRecord(record, run) {
@@ -543,6 +828,7 @@
         : (run.state === "died" ? "died" : "");
 
       setStateClass(record.node, "run", run.state);
+      record.node.classList.toggle("collapsed", collapseAllActive);
       setStateClass(record.elements.dot, "dot", run.state);
       setText(record.elements.name, name);
       setTitle(record.elements.name, name);
@@ -662,10 +948,242 @@
       setText(clock, fmtElapsed(maxElapsed));
     }
 
+    // ---- Feature 3 (selectable views) / Feature 5 (settings panel) ----
+    const toolbar = document.getElementById("toolbar");
+    const viewButtons = document.getElementById("viewButtons");
+    const collapseAllBtn = document.getElementById("collapseAllBtn");
+    const agentFilterInput = document.getElementById("agentFilter");
+    const windowSizeButtons = document.getElementById("windowSizeButtons");
+    const settingsToggle = document.getElementById("settingsToggle");
+    const settingsPanel = document.getElementById("settingsPanel");
+    const accentInput = document.getElementById("accentInput");
+    const densitySelect = document.getElementById("densitySelect");
+    const defaultViewSelect = document.getElementById("defaultViewSelect");
+    const showActivityInput = document.getElementById("showActivity");
+    const showChildrenInput = document.getElementById("showChildren");
+    const showTokensInput = document.getElementById("showTokens");
+    const artifactView = document.getElementById("artifactView");
+    const artifactFrameWrap = document.getElementById("artifactFrameWrap");
+
+    let viewMode = "grid";
+    let collapseAllActive = false;
+    let agentFilterText = "";
+    let lastArtifactPath = null;
+
+    function tauriInvoke(command, args) {
+      const invokeFn = window.__TAURI__?.core?.invoke;
+      if (!invokeFn) return Promise.reject(new Error("tauri unavailable"));
+      return invokeFn(command, args);
+    }
+
+    // ---- Settings persistence (feature 5): plain JSON file via Tauri commands, so the same
+    // file can later be read by a Tier 0 HTML artifact for a matching theme. Falls back to
+    // in-memory defaults (no persistence) when not running inside Ringside/Tauri. ----
+    const DEFAULT_SETTINGS = {
+      version: 1,
+      theme: {accent: "#28d7ff"},
+      density: "comfortable",
+      columns: {showActivity: true, showChildren: true, showTokens: true},
+      layout: {defaultView: "grid"},
+    };
+    let settings = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
+    let settingsSaveTimer = null;
+
+    function mergeSettings(base, incoming) {
+      if (!incoming || typeof incoming !== "object" || Array.isArray(incoming)) {
+        return JSON.parse(JSON.stringify(base));
+      }
+      return {
+        version: 1,
+        theme: {...base.theme, ...(incoming.theme || {})},
+        density: incoming.density === "compact" ? "compact" : "comfortable",
+        columns: {...base.columns, ...(incoming.columns || {})},
+        layout: {...base.layout, ...(incoming.layout || {})},
+      };
+    }
+
+    function applySettingsToDom() {
+      document.documentElement.style.setProperty("--accent", settings.theme.accent || "#28d7ff");
+      document.body.classList.toggle("density-compact", settings.density === "compact");
+      document.body.classList.toggle("hide-activity", !settings.columns.showActivity);
+      document.body.classList.toggle("hide-children", !settings.columns.showChildren);
+      document.body.classList.toggle("hide-tokens", !settings.columns.showTokens);
+    }
+
+    function applySettingsToUI() {
+      if (accentInput) accentInput.value = settings.theme.accent || "#28d7ff";
+      if (densitySelect) densitySelect.value = settings.density;
+      if (defaultViewSelect) defaultViewSelect.value = settings.layout.defaultView || "grid";
+      if (showActivityInput) showActivityInput.checked = !!settings.columns.showActivity;
+      if (showChildrenInput) showChildrenInput.checked = !!settings.columns.showChildren;
+      if (showTokensInput) showTokensInput.checked = !!settings.columns.showTokens;
+    }
+
+    function saveSettingsDebounced() {
+      if (settingsSaveTimer) clearTimeout(settingsSaveTimer);
+      settingsSaveTimer = setTimeout(() => {
+        tauriInvoke("save_settings", {settings}).catch(() => {});
+      }, 350);
+    }
+
+    async function loadSettings() {
+      try {
+        const stored = await tauriInvoke("load_settings");
+        settings = mergeSettings(DEFAULT_SETTINGS, stored);
+      } catch (_err) {
+        settings = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
+      }
+      applySettingsToUI();
+      applySettingsToDom();
+      setViewMode(settings.layout.defaultView || "grid", {persist: false});
+    }
+
+    // ---- View mode (feature 3): Grid (normal task list) vs Artifact (embedded Tier 0 live
+    // status page rendered by ringer.py). Persisted as settings.layout.defaultView. ----
+    function setViewMode(mode, opts = {}) {
+      viewMode = mode === "artifact" ? "artifact" : "grid";
+      app.classList.toggle("artifact-mode", viewMode === "artifact");
+      artifactView.classList.toggle("active", viewMode === "artifact");
+      for (const btn of viewButtons.querySelectorAll("button[data-view]")) {
+        btn.classList.toggle("active", btn.dataset.view === viewMode);
+      }
+      if (viewMode === "artifact") refreshArtifactView();
+      if (opts.persist !== false) {
+        settings.layout.defaultView = viewMode;
+        saveSettingsDebounced();
+      }
+    }
+
+    viewButtons?.addEventListener("click", event => {
+      const btn = event.target.closest("button[data-view]");
+      if (!btn) return;
+      setViewMode(btn.dataset.view);
+    });
+
+    collapseAllBtn?.addEventListener("click", () => {
+      collapseAllActive = !collapseAllActive;
+      collapseAllBtn.classList.toggle("active", collapseAllActive);
+      for (const [, record] of runNodes) {
+        record.node.classList.toggle("collapsed", collapseAllActive);
+      }
+    });
+
+    // "show only some agents": live substring filter across run name/identity and task keys.
+    function applyAgentFilter() {
+      for (const [, record] of runNodes) {
+        if (!agentFilterText) {
+          record.node.hidden = false;
+          for (const [, taskRecord] of record.tasks) taskRecord.node.hidden = false;
+          continue;
+        }
+        const runLabel = `${record.elements.name.textContent} ${record.elements.identity.textContent}`.toLowerCase();
+        const runMatches = runLabel.includes(agentFilterText);
+        let anyTaskMatches = false;
+        for (const [, taskRecord] of record.tasks) {
+          const taskMatches = runMatches || taskRecord.elements.name.textContent.toLowerCase().includes(agentFilterText);
+          if (taskMatches) anyTaskMatches = true;
+          taskRecord.node.hidden = !taskMatches;
+        }
+        record.node.hidden = !(runMatches || anyTaskMatches);
+      }
+    }
+
+    agentFilterInput?.addEventListener("input", () => {
+      agentFilterText = agentFilterInput.value.trim().toLowerCase();
+      applyAgentFilter();
+    });
+
+    // Window size presets (feature 3): Mini reuses the existing collapse-strip toggle; Medium
+    // and Large call the new resize_main_window Tauri command.
+    windowSizeButtons?.addEventListener("click", event => {
+      const btn = event.target.closest("button[data-size]");
+      if (!btn) return;
+      if (btn.dataset.size === "mini") {
+        tauriInvoke("toggle_collapse").catch(() => {});
+        return;
+      }
+      for (const other of windowSizeButtons.querySelectorAll("button[data-size]")) {
+        if (other.dataset.size !== "mini") other.classList.toggle("active", other === btn);
+      }
+      const presets = {medium: [360, 420], large: [860, 700]};
+      const preset = presets[btn.dataset.size];
+      if (preset) tauriInvoke("resize_main_window", {width: preset[0], height: preset[1]}).catch(() => {});
+    });
+
+    if (!window.__TAURI__) windowSizeButtons?.setAttribute("hidden", "");
+
+    settingsToggle?.addEventListener("click", event => {
+      event.stopPropagation();
+      settingsPanel?.classList.toggle("open");
+    });
+    document.addEventListener("click", event => {
+      if (settingsPanel && settingsPanel.classList.contains("open")
+        && !settingsPanel.contains(event.target) && event.target !== settingsToggle) {
+        settingsPanel.classList.remove("open");
+      }
+    });
+
+    accentInput?.addEventListener("input", () => {
+      settings.theme.accent = accentInput.value;
+      applySettingsToDom();
+      saveSettingsDebounced();
+    });
+    densitySelect?.addEventListener("change", () => {
+      settings.density = densitySelect.value === "compact" ? "compact" : "comfortable";
+      applySettingsToDom();
+      saveSettingsDebounced();
+    });
+    defaultViewSelect?.addEventListener("change", () => {
+      settings.layout.defaultView = defaultViewSelect.value === "artifact" ? "artifact" : "grid";
+      saveSettingsDebounced();
+    });
+    for (const [input, key] of [
+      [showActivityInput, "showActivity"],
+      [showChildrenInput, "showChildren"],
+      [showTokensInput, "showTokens"],
+    ]) {
+      input?.addEventListener("change", () => {
+        settings.columns[key] = input.checked;
+        applySettingsToDom();
+        saveSettingsDebounced();
+      });
+    }
+
+    // ---- Live artifact embed (feature 2): read the Tier 0 HTML ringer.py rendered to disk
+    // and show it in an iframe via srcdoc. Composes with the ringer-live-artifacts-plan.md
+    // design instead of duplicating any rendering logic in Ringside. ----
+    function refreshArtifactView() {
+      if (viewMode !== "artifact") return;
+      const target = currentRuns.find(run => run.state === "live" && run.artifact_path)
+        || currentRuns.find(run => run.artifact_path);
+      const path = target?.artifact_path || null;
+      if (!path) {
+        artifactFrameWrap.innerHTML = '<div class="artifact-empty">no live artifact available yet</div>';
+        lastArtifactPath = null;
+        return;
+      }
+      tauriInvoke("read_artifact_html", {path}).then(html => {
+        let frame = artifactFrameWrap.querySelector("iframe");
+        if (!frame) {
+          artifactFrameWrap.innerHTML = "";
+          frame = document.createElement("iframe");
+          artifactFrameWrap.appendChild(frame);
+        }
+        frame.srcdoc = html;
+        lastArtifactPath = path;
+      }).catch(() => {
+        artifactFrameWrap.innerHTML = '<div class="artifact-empty">could not read the live artifact (Ringside desktop app only)</div>';
+      });
+    }
+
+    setInterval(() => { if (viewMode === "artifact") refreshArtifactView(); }, 3000);
+
     function update(payload) {
       currentRuns = normalizePayload(payload);
       updateTopbar(currentRuns);
       syncRunNodes(currentRuns);
+      applyAgentFilter();
+      if (viewMode === "artifact") refreshArtifactView();
     }
 
     async function pollLocalState() {
@@ -678,6 +1196,7 @@
       }
     }
 
+    loadSettings();
     setInterval(() => update(currentRuns), 250);
     setInterval(pollLocalState, 1000);
     pollLocalState();
