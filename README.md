@@ -93,7 +93,15 @@ bin = "/usr/local/bin/mycli"
 args_template = ["run", "{spec}", "--dir", "{taskdir}"]
 ```
 
-Per-task `"engine": "mymodel"` routes work to it. `config.sample.toml` ships commented examples for Grok and OpenCode-style setups — the invariants (stdin closed, process-group kill, executed verification, raw logs) apply to every engine identically.
+Per-task `"engine": "mymodel"` routes work to it. `config.sample.toml` ships commented examples for Grok and OpenCode setups — the invariants (stdin closed, process-group kill, executed verification, raw logs) apply to every engine identically.
+
+### The cheap-intelligence lane: OpenCode + OpenRouter GLM-5.2
+
+Not every task in a swarm needs your most expensive model. `config.sample.toml` includes a ready-to-uncomment engine that runs [OpenCode](https://opencode.ai) headless against OpenRouter's `z-ai/glm-5.2` — roughly $0.74/M input and $2.33/M output (2026-07), about 20-30x cheaper output than frontier coding models. A complete write-code-and-pass-the-check task lands around a penny.
+
+OpenCode ships no OS sandbox, so the engine's `bin` points at an absolute path to `engines/opencode-sandboxed.sh` (ringer does not resolve engine bins relative to the repo): a macOS Seatbelt wrapper that leaves network and reads open but confines writes to the task dir, a per-run scratch dir (wired as the agent's `TMPDIR`/`XDG_CACHE_HOME`), and OpenCode's own state/config dirs. Its `--dangerously-skip-permissions` flag only silences OpenCode's interactive prompts; Seatbelt is the actual containment. Task paths reach the profile as `sandbox-exec -D` parameters rather than string interpolation, so a task dir with quotes or parens can't inject sandbox rules. `--no-sandbox` is wired as the engine's `full_access_args`, so ringer's `allow_full_access` gate still governs escapes. Non-macOS installs need their own sandbox (or full-access mode).
+
+Route with per-task `"engine": "opencode"`, and tune per task via `engine_args`: `["-m", "openrouter/<any-model>"]` swaps models, `["--variant", "low|high|max"]` sets reasoning effort. A sensible split: mechanical or tightly-specced tasks on the cheap lane, gnarly ones on your frontier engine — the executed check catches shortfalls either way, and `swarm_runs` rows tell you whether the cheap lane's pass rate holds.
 
 ## Ringside — mission control
 
