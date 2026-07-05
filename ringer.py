@@ -944,7 +944,10 @@ class StateWriter:
 
     def _write_status_artifact_safe(self, state: dict[str, Any]) -> None:
         try:
-            html = self.artifact_renderer.render_status_html(state)
+            if bool(state.get("finished")) or str(state.get("state")) == "finished":
+                html = self.artifact_renderer.render_final_report_html(state)
+            else:
+                html = self.artifact_renderer.render_status_html(state)
             atomic_write_text(self.artifact_path, html)
             atomic_write_text(self.live_path, html)
         except Exception as exc:
@@ -1636,11 +1639,49 @@ ARTIFACT_BASE_CSS = """
   .task-row,
   .run-row {
     display: grid;
-    grid-template-columns: minmax(0, 1.35fr) minmax(112px, .55fr) minmax(76px, .4fr) minmax(150px, .8fr);
     gap: 16px;
     align-items: center;
     padding: 12px 0;
     border-top: 1px solid color-mix(in srgb, var(--muted) 20%, transparent);
+  }
+  .task-row {
+    grid-template-columns: 16px minmax(0, 1.35fr) minmax(112px, .55fr) minmax(76px, .4fr) minmax(150px, .8fr);
+  }
+  .run-row {
+    grid-template-columns: minmax(0, 1.35fr) minmax(112px, .55fr) minmax(76px, .4fr) minmax(150px, .8fr);
+  }
+  .task-row::before {
+    content: "";
+    width: 14px;
+    height: 14px;
+    border-radius: 999px;
+    align-self: center;
+    justify-self: center;
+  }
+  .task-row.state-pass::before {
+    content: "\\2713";
+    display: grid;
+    place-items: center;
+    background: var(--pass);
+    color: var(--ground);
+    font-size: 10px;
+    font-weight: 900;
+    line-height: 1;
+  }
+  .task-row.state-running::before {
+    background: var(--running);
+  }
+  .task-row.state-waiting::before {
+    border: 2px solid var(--waiting);
+  }
+  .task-row.state-fail::before {
+    background: var(--fail);
+  }
+  .task-main {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 2px;
   }
   .task-name,
   .run-name {
@@ -1648,6 +1689,16 @@ ARTIFACT_BASE_CSS = """
     overflow: hidden;
     color: var(--ink);
     font-weight: 700;
+    line-height: 1.35;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .task-activity {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 500;
     line-height: 1.35;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1721,7 +1772,8 @@ ARTIFACT_BASE_CSS = """
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
   @media (prefers-reduced-motion: no-preference) {
-    .progress-segment.state-running {
+    .progress-segment.state-running,
+    .task-row.state-running::before {
       animation: ringer-state-pulse 1.35s ease-in-out infinite;
     }
     @keyframes ringer-state-pulse {
@@ -1734,6 +1786,9 @@ ARTIFACT_BASE_CSS = """
     .run-row {
       grid-template-columns: minmax(0, 1fr);
       gap: 6px;
+    }
+    .task-row::before {
+      display: none;
     }
     .task-links,
     .run-links {
@@ -2027,25 +2082,42 @@ def plain_transition_line(
 ) -> str | None:
     attempts = int(task.get("attempts") or 0)
     timed_out = bool(task.get("check_timed_out")) or status == "timeout"
+    check_excerpt = first_check_output_line(task)
     if status == "running" and previous_status in {None, "queued"}:
         return f"{task_key} started"
     if status == "retrying":
         if timed_out:
             return f"{task_key} timed out — trying again"
+        if check_excerpt:
+            return (
+                f'{task_key} did not pass its check — sending it back. '
+                f'The check reported: "{check_excerpt}"'
+            )
         return f"{task_key} did not finish cleanly — trying again"
     if status == "pass":
         if attempts > 1:
-            return f"{task_key} passed on the second try"
+            return f"{task_key} passed on the second try, {fmt_compact_duration(task.get('elapsed_s'))}"
         return f"{task_key} finished and checked, {fmt_compact_duration(task.get('elapsed_s'))}"
     if status == "fail":
         if timed_out:
             return f"{task_key} timed out"
+        if check_excerpt:
+            return f'{task_key} could not finish — its check reported: "{check_excerpt}"'
         if attempts > 1:
             return f"{task_key} failed after the second try"
         return f"{task_key} failed"
     if status == "timeout":
         return f"{task_key} timed out"
     return None
+
+
+def first_check_output_line(task: dict[str, Any]) -> str:
+    raw = task.get("check_output_tail") or task.get("check_output") or ""
+    for line in str(raw).splitlines():
+        clean = line.strip()
+        if clean:
+            return shorten(clean, 120)
+    return ""
 
 
 def task_state_bucket(status: str) -> str:
@@ -2225,6 +2297,12 @@ def render_task_item(
     bucket = task_state_bucket(status)
     state_word = html_escape(task_state_word(status))
     elapsed = html_escape(fmt_compact_duration(task.get("elapsed_s")))
+    activity = task_activity_line(task, bucket)
+    activity_html = (
+        f'<span class="task-activity" title="{html_escape(activity)}">{html_escape(activity)}</span>'
+        if activity
+        else ""
+    )
     links_html = render_task_links(
         task,
         state=state or {},
@@ -2233,11 +2311,18 @@ def render_task_item(
     )
 
     return f"""<li class="task-row state-{bucket}">
-      <span class="task-name" title="{key}">{key}</span>
+      <span class="task-main"><span class="task-name" title="{key}">{key}</span>{activity_html}</span>
       <span class="task-state">{state_word}</span>
       <span class="task-duration mono">{elapsed}</span>
       <span class="task-links">{links_html}</span>
     </li>"""
+
+
+def task_activity_line(task: dict[str, Any], bucket: str) -> str:
+    if bucket != "running":
+        return ""
+    activity = task.get("activity") or task.get("last_action") or task.get("last-action") or ""
+    return str(activity).strip()
 
 
 def render_task_links(

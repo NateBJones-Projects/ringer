@@ -675,6 +675,20 @@
       cursor: pointer;
       text-decoration: underline;
     }
+    .artifact-frame-state {
+      flex: 0 0 auto;
+      min-height: 24px;
+      padding: 6px 10px 5px;
+      border-bottom: 1px solid rgba(255,255,255,.08);
+      color: var(--muted);
+      background: rgba(5,8,12,.18);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 10px;
+      line-height: 1.2;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
     .artifact-frame-wrap {
       flex: 1 1 auto;
       min-height: 0;
@@ -834,6 +848,7 @@
             <button type="button" class="artifact-refresh" id="artifactRefreshBtn" title="Refresh artifact" aria-label="Refresh artifact">&#8635;</button>
           </div>
           <div class="artifact-version-bar" id="artifactVersionBar" hidden></div>
+          <div class="artifact-frame-state" id="artifactFrameState" data-no-drag>library not loaded</div>
           <div class="artifact-frame-wrap" id="artifactFrameWrap">
             <div class="artifact-empty">artifact library not loaded</div>
           </div>
@@ -869,6 +884,7 @@
     const artifactVersionSelect = document.getElementById("artifactVersionSelect");
     const artifactRefreshBtn = document.getElementById("artifactRefreshBtn");
     const artifactVersionBar = document.getElementById("artifactVersionBar");
+    const artifactFrameState = document.getElementById("artifactFrameState");
     const artifactFrameWrap = document.getElementById("artifactFrameWrap");
 
     const ARTIFACT_REFRESH_MS = 2000;
@@ -898,6 +914,7 @@
     let artifactRefreshTimer = null;
     let artifactRefreshInFlight = false;
     let artifactRefreshSeq = 0;
+    let localStatePollFailed = false;
 
     const DEFAULT_SETTINGS = {
       version: 1,
@@ -2005,6 +2022,12 @@
       return `${formatArtifactTime(version.finished_at)} · ${version.outcome} · ok ${version.tasks_pass} fail ${version.tasks_fail}`;
     }
 
+    function artifactFrameStateText(artifact) {
+      if (!artifact) return artifactLibraryError || (artifactLibraryLoaded ? "no artifacts recorded yet" : "library not loaded");
+      if (artifact.state === "live") return "live \u2014 updating";
+      return `finished ${formatArtifactAge(artifact.updated_at)}`;
+    }
+
     function syncArtifactLibraryView() {
       syncArtifactSelection();
       renderArtifactLibraryRows();
@@ -2040,6 +2063,7 @@
       artifactHeadDot.className = `artifact-head-dot ${artifact ? artifact.state : ""}`.trim();
       setText(artifactTitle, artifact ? artifact.name : "Live artifacts");
       setText(artifactMeta, artifact ? `${artifact.identity} · ${artifact.state} · ${formatArtifactAge(artifact.updated_at)}` : emptyMessage);
+      setText(artifactFrameState, artifactFrameStateText(artifact));
 
       if (!artifact) {
         artifactVersionSelect.innerHTML = "";
@@ -2144,11 +2168,16 @@
       return frame;
     }
 
+    function cacheBustHref(href, key) {
+      const separator = href.includes("?") ? "&" : "?";
+      return `${href}${separator}${key}=${Date.now()}`;
+    }
+
     function showArtifactFrameHref(path, href, opts = {}) {
       const frame = ensureArtifactFrame();
       if (opts.force || lastArtifactPath !== path || displayedArtifactSrc !== href) {
         frame.removeAttribute("srcdoc");
-        const src = opts.force ? `${href}${href.includes("?") ? "&" : "?"}ringside=${Date.now()}` : href;
+        const src = opts.force ? cacheBustHref(href, "ringside") : href;
         frame.setAttribute("src", src);
         displayedArtifactSrc = href;
         displayedArtifactHtml = null;
@@ -2166,6 +2195,59 @@
         displayedArtifactSrc = null;
       }
       lastArtifactPath = path;
+    }
+
+    async function artifactServerResponds(href) {
+      if (!href) return false;
+      try {
+        const response = await fetch(cacheBustHref(href, "ringside_probe"), {
+          method: "GET",
+          cache: "no-store",
+          mode: "no-cors",
+        });
+        return response.type === "opaque" || response.ok;
+      } catch (_err) {
+        return false;
+      }
+    }
+
+    function artifactNeedsSnapshot(target, liveHref) {
+      if (!target?.path) return false;
+      if (!target.live) return true;
+      if (artifactLibraryError || localStatePollFailed) return true;
+      if (target.artifact.state !== "live") return true;
+      return !liveHref;
+    }
+
+    function currentArtifactLiveHrefIs(path, href) {
+      const target = selectedArtifactTarget();
+      const currentHref = target?.live && target.artifact.state === "live" ? liveArtifactFrameHref(target.artifact) : "";
+      return target?.path === path && currentHref === href;
+    }
+
+    async function swapArtifactFrameToSnapshot(target, opts = {}) {
+      const path = target?.path || null;
+      if (!path) return false;
+      if (!opts.force && lastArtifactPath === path && displayedArtifactHtml !== null && displayedArtifactSrc === null) return true;
+      const requestSeq = ++artifactRefreshSeq;
+      const html = await readArtifactHtml(path);
+      const currentTarget = selectedArtifactTarget();
+      const currentLiveHref = currentTarget?.live && currentTarget.artifact.state === "live" ? liveArtifactFrameHref(currentTarget.artifact) : "";
+      if (requestSeq !== artifactRefreshSeq || viewMode !== "artifact" || currentTarget?.path !== path) return false;
+      if (!opts.force && !artifactNeedsSnapshot(currentTarget, currentLiveHref)) return false;
+      showArtifactHtml(path, html, {force: !!opts.force});
+      return true;
+    }
+
+    function swapArtifactFrameToSnapshotForStateChange() {
+      if (viewMode !== "artifact") return false;
+      const target = selectedArtifactTarget();
+      const liveHref = target?.live && target.artifact.state === "live" ? liveArtifactFrameHref(target.artifact) : "";
+      if (!artifactNeedsSnapshot(target, liveHref)) return false;
+      swapArtifactFrameToSnapshot(target).catch(() => {
+        if (viewMode === "artifact") showArtifactEmpty("could not read artifact");
+      });
+      return true;
     }
 
     function startArtifactRefreshTimer() {
@@ -2195,16 +2277,18 @@
           return;
         }
         const liveHref = target.live && target.artifact.state === "live" ? liveArtifactFrameHref(target.artifact) : "";
-        if (liveHref) {
+        if (artifactNeedsSnapshot(target, liveHref)) {
+          await swapArtifactFrameToSnapshot(target, {force: !!opts.force});
+          return;
+        }
+        const requestSeq = ++artifactRefreshSeq;
+        const serverLive = await artifactServerResponds(liveHref);
+        if (requestSeq !== artifactRefreshSeq || viewMode !== "artifact" || !currentArtifactLiveHrefIs(path, liveHref)) return;
+        if (serverLive) {
           showArtifactFrameHref(path, liveHref, {force: !!opts.force});
           return;
         }
-        const shouldPoll = target.live && target.artifact.state === "live";
-        if (!shouldPoll && !opts.force && lastArtifactPath === path && displayedArtifactHtml !== null) return;
-        const requestSeq = ++artifactRefreshSeq;
-        const html = await readArtifactHtml(path);
-        if (requestSeq !== artifactRefreshSeq || viewMode !== "artifact" || selectedArtifactTarget()?.path !== path) return;
-        showArtifactHtml(path, html, {force: !!opts.force});
+        await swapArtifactFrameToSnapshot(target, {force: !!opts.force});
       } catch (_err) {
         if (viewMode === "artifact") showArtifactEmpty("could not read artifact");
       } finally {
@@ -2218,16 +2302,27 @@
       syncRunNodes(currentRuns);
       applyAgentFilter();
       syncArtifactLibraryView();
-      if (viewMode === "artifact" && !opts.tick) refreshArtifactView();
+      if (viewMode === "artifact" && !opts.tick && !swapArtifactFrameToSnapshotForStateChange()) refreshArtifactView();
     }
 
     async function pollLocalState() {
       try {
         const response = await fetch(`/state.json?t=${Date.now()}`, {cache: "no-store"});
-        if (!response.ok) return;
+        if (!response.ok) {
+          if (!IS_TAURI) {
+            localStatePollFailed = true;
+            swapArtifactFrameToSnapshotForStateChange();
+          }
+          return;
+        }
         const state = await response.json();
+        localStatePollFailed = false;
         update(Array.isArray(state) ? state : [state]);
       } catch (_err) {
+        if (!IS_TAURI) {
+          localStatePollFailed = true;
+          swapArtifactFrameToSnapshotForStateChange();
+        }
       }
     }
 
