@@ -74,9 +74,11 @@ token_regex = "tokens\\s+used\\s*:?\\s*([0-9][0-9,]*)"
 # OpenCode + OpenRouter — the cheap-intelligence lane. A working example using
 # GLM-5.2 (z-ai/glm-5.2, roughly $0.74/M input, $2.33/M output as of 2026-07).
 # OpenCode has no OS sandbox, so `bin` points at engines/opencode-sandboxed.sh
-# (macOS Seatbelt: network + reads open, writes confined to the task dir, temp,
-# and OpenCode state dirs). Auth: put your OpenRouter key in
-# ~/.local/share/opencode/auth.json ({"openrouter": {"type": "api", "key": "..."}}).
+# (macOS Seatbelt: network + reads open, writes confined to the task dir, a
+# per-run scratch dir, and OpenCode's state/config dirs). Auth: put your
+# OpenRouter key where your OpenCode version expects it — commonly
+# ~/.local/share/opencode/auth.json ({"openrouter": {"type": "api", "key": "..."}});
+# confirm the path with your installed CLI.
 # Per-task engine_args can swap models ("-m", "openrouter/<model>") or set
 # reasoning effort ("--variant", "low|high|max"). Uncomment and set an absolute
 # path for `bin` to enable.
