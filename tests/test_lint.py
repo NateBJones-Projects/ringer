@@ -120,15 +120,30 @@ class LintManifestTests(unittest.TestCase):
     def test_w6_write_collision(self) -> None:
         manifest = self.manifest(
             [
-                self.task("one", expect_files=["shared.txt"]),
-                self.task("two", expect_files=["shared.txt"]),
+                self.task("one", expect_files=["/tmp/shared-deliverable.txt"]),
+                self.task("two", expect_files=["/tmp/shared-deliverable.txt"]),
             ],
             worktrees=False,
         )
         self.assertHasFinding(
             lint_manifest(manifest),
-            "manifest: write collision on shared.txt: listed by one, two.",
+            "manifest: write collision on /tmp/shared-deliverable.txt: listed by one, two.",
         )
+
+    def test_w6_relative_paths_do_not_collide(self) -> None:
+        # Relative expect_files resolve inside each task's own directory —
+        # many tasks emitting report.md/extraction.json is the NORMAL swarm
+        # shape, not a collision (first field use caught this false positive).
+        manifest = self.manifest(
+            [
+                self.task("one", expect_files=["report.md"]),
+                self.task("two", expect_files=["report.md"]),
+                self.task("three", expect_files=["report.md"]),
+            ],
+            worktrees=False,
+            max_parallel=3,
+        )
+        self.assertEqual([], lint_manifest(manifest))
 
     def test_w7_underspecified_spec(self) -> None:
         manifest = self.manifest([self.task(spec="Do it.")])

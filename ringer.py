@@ -485,9 +485,13 @@ def lint_manifest(manifest: Manifest) -> list[str]:
         findings.append("manifest: tasks will run serially; set max_parallel.")
 
     if not manifest.worktrees:
+        # Relative expect_files resolve inside each task's own directory and
+        # cannot collide; only a shared absolute path is a real collision.
         paths_to_tasks: dict[str, list[str]] = {}
         for task in manifest.tasks:
             for path in task.expect_files:
+                if not Path(path).expanduser().is_absolute():
+                    continue
                 paths_to_tasks.setdefault(path, []).append(task.key)
         for path, task_keys in paths_to_tasks.items():
             if len(task_keys) >= 2:
