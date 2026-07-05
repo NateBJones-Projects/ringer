@@ -71,13 +71,34 @@ token_regex = "tokens\\s+used\\s*:?\\s*([0-9][0-9,]*)"
 # full_access_args = ["--dangerous"]
 # token_regex = "tokens\\s*:?\\s*([0-9][0-9,]*)"
 
-# Example: OpenCode. Adjust for your local opencode version.
+# OpenCode + OpenRouter — the cheap-intelligence lane. A working example using
+# GLM-5.2 (z-ai/glm-5.2, roughly $0.74/M input, $2.33/M output as of 2026-07).
+# OpenCode has no OS sandbox, so `bin` points at engines/opencode-sandboxed.sh
+# (macOS Seatbelt: network + reads open, writes confined to the task dir, temp,
+# and OpenCode state dirs). Auth: put your OpenRouter key in
+# ~/.local/share/opencode/auth.json ({"openrouter": {"type": "api", "key": "..."}}).
+# Per-task engine_args can swap models ("-m", "openrouter/<model>") or set
+# reasoning effort ("--variant", "low|high|max"). Uncomment and set an absolute
+# path for `bin` to enable.
 # [engines.opencode]
-# bin = "opencode"
-# args_template = ["run", "--cwd", "{taskdir}", "{spec}"]
+# bin = "/absolute/path/to/ringer/engines/opencode-sandboxed.sh"
+# args_template = [
+#   "{taskdir}",
+#   "{access_args}",
+#   "run",
+#   "-m",
+#   "openrouter/z-ai/glm-5.2",
+#   "--dangerously-skip-permissions",
+#   "--format",
+#   "json",
+#   "{engine_args}",
+#   "--dir",
+#   "{taskdir}",
+#   "{spec}",
+# ]
 # sandbox_args = []
-# full_access_args = ["--allow-all"]
-# token_regex = "tokens\\s*:?\\s*([0-9][0-9,]*)"
+# full_access_args = ["--no-sandbox"]
+# token_regex = '"tokens":\{"total":([0-9]+)'
 
 [artifact]
 # Zero-LLM, self-contained HTML artifacts rendered directly from state — no model calls, no
