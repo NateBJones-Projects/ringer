@@ -16,8 +16,8 @@ session isolation — so you start from working shape instead of a blank file.
 ## How to use
 
 1. Copy a template and replace every `{{PLACEHOLDER}}` — the placeholder text
-   describes what belongs there. Placeholders make the file non-runnable on
-   purpose; nothing half-filled can execute.
+   describes what belongs there. Placeholders make unfilled manifests obvious
+   and non-functional.
 2. Each template ships **one exemplar task** (two for research-with-proof).
    Duplicate the task object per surface / fix / persona / matrix cell and
    give each a unique `key`.

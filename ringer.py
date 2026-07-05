@@ -337,13 +337,20 @@ class TaskSpec:
 
     @classmethod
     def from_obj(cls, obj: dict[str, Any]) -> "TaskSpec":
-        key = str(obj.get("key", "")).strip()
-        spec = str(obj.get("spec", ""))
-        check = str(obj.get("check", ""))
+        key_raw = obj.get("key", "")
+        if not isinstance(key_raw, str):
+            raise ValueError("task key must be a string")
+        key = key_raw.strip()
         if not key:
             raise ValueError("task key is required")
+        spec = obj.get("spec", "")
+        if not isinstance(spec, str):
+            raise ValueError(f"task {key}: spec must be a string")
         if not spec:
             raise ValueError(f"task {key}: spec is required")
+        check = obj.get("check", "")
+        if not isinstance(check, str):
+            raise ValueError(f"task {key}: check must be a string")
         if not check:
             raise ValueError(f"task {key}: check is required")
         expect_files = obj.get("expect_files", [])
@@ -504,10 +511,52 @@ def lint_manifest(manifest: Manifest) -> list[str]:
 
 
 def check_cannot_fail(check: str) -> bool:
-    stripped = check.strip()
+    stripped = strip_shell_comments(check).strip()
     if stripped in {"true", ":", "exit 0"}:
         return True
     return consists_only_of_echo_commands(stripped)
+
+
+def strip_shell_comments(command: str) -> str:
+    result: list[str] = []
+    in_single = False
+    in_double = False
+    escaped = False
+    i = 0
+    while i < len(command):
+        char = command[i]
+        if escaped:
+            result.append(char)
+            escaped = False
+            i += 1
+            continue
+        if char == "\\" and not in_single:
+            result.append(char)
+            escaped = True
+            i += 1
+            continue
+        if char == "'" and not in_double:
+            in_single = not in_single
+            result.append(char)
+            i += 1
+            continue
+        if char == '"' and not in_single:
+            in_double = not in_double
+            result.append(char)
+            i += 1
+            continue
+        if (
+            char == "#"
+            and not in_single
+            and not in_double
+            and (not result or result[-1].isspace())
+        ):
+            while i < len(command) and command[i] != "\n":
+                i += 1
+            continue
+        result.append(char)
+        i += 1
+    return "".join(result)
 
 
 def consists_only_of_echo_commands(command: str) -> bool:
@@ -527,15 +576,57 @@ def consists_only_of_echo_commands(command: str) -> bool:
 
 
 def check_may_fail_silently(check: str) -> bool:
-    if "diff -q" in check:
-        return True
-    stripped = check.strip()
+    stripped = strip_shell_comments(check).strip()
+    if has_quiet_diff_probe(stripped):
+        return not has_failure_output_branch(stripped)
     if not stripped or "||" in stripped:
         return False
     if re.search(r"(?:;|\n|\|)", stripped):
         return False
     parts = [part.strip() for part in stripped.split("&&") if part.strip()]
-    return bool(parts) and all(is_file_existence_test(part) for part in parts)
+    return bool(parts) and all(is_silent_probe(part) for part in parts)
+
+
+def has_quiet_diff_probe(command: str) -> bool:
+    return any(has_command_prefix(part, ("diff", "-q")) for part in command_parts(command))
+
+
+def has_failure_output_branch(command: str) -> bool:
+    if "||" not in command:
+        return False
+    branch = command.split("||", 1)[1]
+    return any(
+        has_command_prefix(part, (prefix,))
+        for part in command_parts(branch)
+        for prefix in ("echo", "printf", "cat", "diff", "ls")
+    )
+
+
+def command_parts(command: str) -> list[str]:
+    return [part.strip(" \t{}()") for part in re.split(r"(?:&&|\|\||;|\n)+", command) if part.strip()]
+
+
+def has_command_prefix(command: str, prefix: tuple[str, ...]) -> bool:
+    try:
+        tokens = shlex.split(strip_common_redirections(command))
+    except ValueError:
+        return False
+    return len(tokens) >= len(prefix) and tuple(tokens[: len(prefix)]) == prefix
+
+
+def is_silent_probe(command: str) -> bool:
+    return is_file_existence_test(command) or is_quiet_grep(command)
+
+
+def is_quiet_grep(command: str) -> bool:
+    command = strip_common_redirections(command.strip())
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False
+    return bool(tokens) and tokens[0] == "grep" and any(
+        token == "-q" or (token.startswith("-") and "q" in token[1:]) for token in tokens[1:]
+    )
 
 
 def is_file_existence_test(command: str) -> bool:
@@ -566,10 +657,20 @@ def instructs_git_commit(spec: str) -> bool:
         index = lower.find("git commit", start)
         if index == -1:
             return False
-        prefix = lower[max(0, index - 24) : index]
-        if not re.search(r"(?:do\s+not|don't|never|no)\s+(?:run\s+)?$", prefix):
+        prefix = lower[max(0, index - 48) : index]
+        if not is_negated_git_commit(prefix):
             return True
         start = index + len("git commit")
+
+
+def is_negated_git_commit(prefix: str) -> bool:
+    separators = r"[\s`'\"()\[\]{}:;,.!?-]*"
+    return bool(
+        re.search(
+            rf"(?:do\s+not|don't|never|no){separators}(?:run{separators})?$",
+            prefix,
+        )
+    )
 
 
 @dataclass
@@ -2182,7 +2283,7 @@ class EvalLogger:
 class Verifier:
     async def verify(self, task: TaskSpec, taskdir: Path) -> VerifyResult:
         missing_files = tuple(
-            rel for rel in task.expect_files if not self._is_nonempty_file(taskdir / rel)
+            rel for rel in task.expect_files if not self._is_nonempty_file(self._expect_file_path(taskdir, rel))
         )
         check_returncode, check_timed_out, output = await self._run_check(task.check, taskdir)
         ok = not missing_files and not check_timed_out and check_returncode == 0
@@ -2211,6 +2312,12 @@ class Verifier:
             return path.is_file() and path.stat().st_size > 0
         except OSError:
             return False
+
+    @staticmethod
+    def _expect_file_path(taskdir: Path, path: str) -> Path:
+        candidate = Path(path).expanduser()
+        # Keep runtime verification aligned with lint's treatment of "~" paths.
+        return candidate if candidate.is_absolute() else taskdir / candidate
 
     @staticmethod
     async def _run_check(command: str, cwd: Path) -> tuple[int | None, bool, str]:

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import asyncio
+import os
 import sys
 import tempfile
 import unittest
@@ -9,7 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from ringer import Manifest, lint_manifest  # noqa: E402
+from ringer import Manifest, TaskSpec, Verifier, lint_manifest  # noqa: E402
 
 
 LONG_SPEC = (
@@ -62,11 +64,44 @@ class LintManifestTests(unittest.TestCase):
     def assertHasFinding(self, findings: list[str], expected: str) -> None:
         self.assertIn(expected, findings, f"expected lint finding not found: {expected}\nfindings: {findings}")
 
+    def test_task_fields_must_be_strings(self) -> None:
+        with self.assertRaisesRegex(ValueError, r"task one: check must be a string"):
+            self.manifest([self.task(check=["cmd1", "cmd2"])])  # type: ignore[arg-type]
+
+        with self.assertRaisesRegex(ValueError, r"task one: spec must be a string"):
+            self.manifest([self.task(spec=["write it"])])  # type: ignore[arg-type]
+
+        task = self.task()
+        task["key"] = 123
+        with self.assertRaisesRegex(ValueError, r"task key must be a string"):
+            self.manifest([task])
+
     def test_w1_unverifiable_check(self) -> None:
         manifest = self.manifest([self.task(check="echo ok && echo done")])
         self.assertHasFinding(
             lint_manifest(manifest),
             "one: check cannot fail, so the task cannot be verified.",
+        )
+
+        commented_manifest = self.manifest([self.task(check="true # worker left the placeholder check")])
+        self.assertHasFinding(
+            lint_manifest(commented_manifest),
+            "one: check cannot fail, so the task cannot be verified.",
+        )
+
+        quoted_hash_manifest = self.manifest(
+            [
+                self.task(
+                    check=(
+                        "test -s '#artifact' || "
+                        "{ echo 'FAIL: #artifact missing'; exit 1; }"
+                    )
+                )
+            ]
+        )
+        self.assertNotIn(
+            "one: check cannot fail, so the task cannot be verified.",
+            lint_manifest(quoted_hash_manifest),
         )
 
     def test_w2_silent_check(self) -> None:
@@ -79,6 +114,26 @@ class LintManifestTests(unittest.TestCase):
         diff_manifest = self.manifest([self.task(check="diff -q expected.txt actual.txt")])
         self.assertHasFinding(
             lint_manifest(diff_manifest),
+            "one: check may fail without printing why; retry prompt and eval log depend on failure output.",
+        )
+
+        diff_with_output = self.manifest(
+            [self.task(check="diff -q a b || { echo FAIL; diff a b; exit 1; }")]
+        )
+        self.assertNotIn(
+            "one: check may fail without printing why; retry prompt and eval log depend on failure output.",
+            lint_manifest(diff_with_output),
+        )
+
+        grep_manifest = self.manifest([self.task(check="grep -q x file")])
+        self.assertHasFinding(
+            lint_manifest(grep_manifest),
+            "one: check may fail without printing why; retry prompt and eval log depend on failure output.",
+        )
+
+        probe_chain_manifest = self.manifest([self.task(check="grep -q x file && test -s output.txt")])
+        self.assertHasFinding(
+            lint_manifest(probe_chain_manifest),
             "one: check may fail without printing why; retry prompt and eval log depend on failure output.",
         )
 
@@ -101,6 +156,16 @@ class LintManifestTests(unittest.TestCase):
         self.assertHasFinding(
             lint_manifest(manifest),
             "one: worker commits die with the worktree; have the worker leave changes uncommitted and export the diff in the check.",
+        )
+
+        negated_spec = LONG_SPEC + " Do NOT run `git commit`; leave the worktree uncommitted."
+        negated_manifest = self.manifest(
+            [self.task(spec=negated_spec, expect_files=[])],
+            worktrees=True,
+        )
+        self.assertNotIn(
+            "one: worker commits die with the worktree; have the worker leave changes uncommitted and export the diff in the check.",
+            lint_manifest(negated_manifest),
         )
 
     def test_w5_serial_fan_out(self) -> None:
@@ -144,6 +209,31 @@ class LintManifestTests(unittest.TestCase):
             max_parallel=3,
         )
         self.assertEqual([], lint_manifest(manifest))
+
+    def test_verifier_expands_user_expect_files(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            taskdir = Path(root) / "task"
+            home = Path(root) / "home"
+            taskdir.mkdir()
+            home.mkdir()
+            (home / "report.md").write_text("done\n", encoding="utf-8")
+            previous_home = os.environ.get("HOME")
+            os.environ["HOME"] = str(home)
+            try:
+                task = TaskSpec(
+                    key="one",
+                    spec=LONG_SPEC,
+                    check="true",
+                    expect_files=("~/report.md",),
+                )
+                result = asyncio.run(Verifier().verify(task, taskdir))
+            finally:
+                if previous_home is None:
+                    os.environ.pop("HOME", None)
+                else:
+                    os.environ["HOME"] = previous_home
+        self.assertTrue(result.ok, result.raw_output_excerpt)
+        self.assertEqual((), result.missing_files)
 
     def test_w7_underspecified_spec(self) -> None:
         manifest = self.manifest([self.task(spec="Do it.")])
