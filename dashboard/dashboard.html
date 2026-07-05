@@ -308,6 +308,10 @@
     .toolbar button:hover, .toolbar select:hover {
       border-color: color-mix(in srgb, var(--accent) 60%, var(--line));
     }
+    .toolbar button:disabled {
+      cursor: not-allowed;
+      opacity: .48;
+    }
     .toolbar button.active {
       background: color-mix(in srgb, var(--accent) 26%, transparent);
       border-color: var(--accent);
@@ -969,11 +973,36 @@
     let collapseAllActive = false;
     let agentFilterText = "";
     let lastArtifactPath = null;
+    let displayedArtifactHtml = null;
+    let artifactRefreshTimer = null;
+    let artifactRefreshInFlight = false;
+    let artifactRefreshSeq = 0;
+    const ARTIFACT_REFRESH_MS = 2000;
+    const TAURI_INVOKE = window.__TAURI__?.core?.invoke;
+    const IS_TAURI = Boolean(TAURI_INVOKE);
 
     function tauriInvoke(command, args) {
-      const invokeFn = window.__TAURI__?.core?.invoke;
-      if (!invokeFn) return Promise.reject(new Error("tauri unavailable"));
-      return invokeFn(command, args);
+      if (!TAURI_INVOKE) return Promise.reject(new Error("tauri unavailable"));
+      return TAURI_INVOKE(command, args);
+    }
+
+    function normalizeViewMode(mode) {
+      return mode === "artifact" && IS_TAURI ? "artifact" : "grid";
+    }
+
+    function configureArtifactModeAvailability() {
+      if (IS_TAURI) return;
+      const artifactButton = viewButtons?.querySelector('button[data-view="artifact"]');
+      if (artifactButton) {
+        artifactButton.disabled = true;
+        artifactButton.title = "Ringside app only";
+        artifactButton.setAttribute("aria-disabled", "true");
+      }
+      const artifactOption = defaultViewSelect?.querySelector('option[value="artifact"]');
+      if (artifactOption) {
+        artifactOption.disabled = true;
+        artifactOption.title = "Ringside app only";
+      }
     }
 
     // ---- Settings persistence (feature 5): plain JSON file via Tauri commands, so the same
@@ -1013,7 +1042,7 @@
     function applySettingsToUI() {
       if (accentInput) accentInput.value = settings.theme.accent || "#28d7ff";
       if (densitySelect) densitySelect.value = settings.density;
-      if (defaultViewSelect) defaultViewSelect.value = settings.layout.defaultView || "grid";
+      if (defaultViewSelect) defaultViewSelect.value = normalizeViewMode(settings.layout.defaultView);
       if (showActivityInput) showActivityInput.checked = !!settings.columns.showActivity;
       if (showChildrenInput) showChildrenInput.checked = !!settings.columns.showChildren;
       if (showTokensInput) showTokensInput.checked = !!settings.columns.showTokens;
@@ -1033,6 +1062,7 @@
       } catch (_err) {
         settings = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
       }
+      settings.layout.defaultView = normalizeViewMode(settings.layout.defaultView);
       applySettingsToUI();
       applySettingsToDom();
       setViewMode(settings.layout.defaultView || "grid", {persist: false});
@@ -1041,13 +1071,18 @@
     // ---- View mode (feature 3): Grid (normal task list) vs Artifact (embedded Tier 0 live
     // status page rendered by ringer.py). Persisted as settings.layout.defaultView. ----
     function setViewMode(mode, opts = {}) {
-      viewMode = mode === "artifact" ? "artifact" : "grid";
+      viewMode = normalizeViewMode(mode);
       app.classList.toggle("artifact-mode", viewMode === "artifact");
       artifactView.classList.toggle("active", viewMode === "artifact");
       for (const btn of viewButtons.querySelectorAll("button[data-view]")) {
         btn.classList.toggle("active", btn.dataset.view === viewMode);
       }
-      if (viewMode === "artifact") refreshArtifactView();
+      if (viewMode === "artifact") {
+        refreshArtifactView();
+        startArtifactRefreshTimer();
+      } else {
+        stopArtifactRefreshTimer();
+      }
       if (opts.persist !== false) {
         settings.layout.defaultView = viewMode;
         saveSettingsDebounced();
@@ -1110,7 +1145,7 @@
       if (preset) tauriInvoke("resize_main_window", {width: preset[0], height: preset[1]}).catch(() => {});
     });
 
-    if (!window.__TAURI__) windowSizeButtons?.setAttribute("hidden", "");
+    if (!IS_TAURI) windowSizeButtons?.setAttribute("hidden", "");
 
     settingsToggle?.addEventListener("click", event => {
       event.stopPropagation();
@@ -1134,7 +1169,8 @@
       saveSettingsDebounced();
     });
     defaultViewSelect?.addEventListener("change", () => {
-      settings.layout.defaultView = defaultViewSelect.value === "artifact" ? "artifact" : "grid";
+      settings.layout.defaultView = normalizeViewMode(defaultViewSelect.value);
+      defaultViewSelect.value = settings.layout.defaultView;
       saveSettingsDebounced();
     });
     for (const [input, key] of [
@@ -1152,38 +1188,80 @@
     // ---- Live artifact embed (feature 2): read the Tier 0 HTML ringer.py rendered to disk
     // and show it in an iframe via srcdoc. Composes with the ringer-live-artifacts-plan.md
     // design instead of duplicating any rendering logic in Ringside. ----
-    function refreshArtifactView() {
-      if (viewMode !== "artifact") return;
+    function selectedArtifactPath() {
       const target = currentRuns.find(run => run.state === "live" && run.artifact_path)
         || currentRuns.find(run => run.artifact_path);
-      const path = target?.artifact_path || null;
-      if (!path) {
-        artifactFrameWrap.innerHTML = '<div class="artifact-empty">no live artifact available yet</div>';
-        lastArtifactPath = null;
-        return;
-      }
-      tauriInvoke("read_artifact_html", {path}).then(html => {
-        let frame = artifactFrameWrap.querySelector("iframe");
-        if (!frame) {
-          artifactFrameWrap.innerHTML = "";
-          frame = document.createElement("iframe");
-          artifactFrameWrap.appendChild(frame);
-        }
-        frame.srcdoc = html;
-        lastArtifactPath = path;
-      }).catch(() => {
-        artifactFrameWrap.innerHTML = '<div class="artifact-empty">could not read the live artifact (Ringside desktop app only)</div>';
-      });
+      return target?.artifact_path || null;
     }
 
-    setInterval(() => { if (viewMode === "artifact") refreshArtifactView(); }, 3000);
+    function showArtifactEmpty(message) {
+      const existing = artifactFrameWrap.querySelector(".artifact-empty");
+      if (existing && existing.textContent === message) return;
+      artifactFrameWrap.innerHTML = "";
+      const empty = document.createElement("div");
+      empty.className = "artifact-empty";
+      empty.textContent = message;
+      artifactFrameWrap.appendChild(empty);
+      lastArtifactPath = null;
+      displayedArtifactHtml = null;
+    }
+
+    function showArtifactHtml(path, html) {
+      let frame = artifactFrameWrap.querySelector("iframe");
+      if (!frame) {
+        artifactFrameWrap.innerHTML = "";
+        frame = document.createElement("iframe");
+        artifactFrameWrap.appendChild(frame);
+      }
+      if (displayedArtifactHtml !== html) {
+        frame.srcdoc = html;
+        displayedArtifactHtml = html;
+      }
+      lastArtifactPath = path;
+    }
+
+    function startArtifactRefreshTimer() {
+      if (artifactRefreshTimer) return;
+      artifactRefreshTimer = setInterval(refreshArtifactView, ARTIFACT_REFRESH_MS);
+    }
+
+    function stopArtifactRefreshTimer() {
+      if (artifactRefreshTimer) {
+        clearInterval(artifactRefreshTimer);
+        artifactRefreshTimer = null;
+      }
+      artifactRefreshSeq++;
+    }
+
+    function refreshArtifactView() {
+      if (viewMode !== "artifact" || !IS_TAURI) return;
+      const path = selectedArtifactPath();
+      if (!path) {
+        artifactRefreshSeq++;
+        showArtifactEmpty("no live artifact available yet");
+        return;
+      }
+      if (artifactRefreshInFlight) {
+        return;
+      }
+      const requestSeq = ++artifactRefreshSeq;
+      artifactRefreshInFlight = true;
+      tauriInvoke("read_artifact_html", {path}).then(html => {
+        if (requestSeq !== artifactRefreshSeq || viewMode !== "artifact" || selectedArtifactPath() !== path) return;
+        showArtifactHtml(path, html);
+      }).catch(() => {
+        if (requestSeq !== artifactRefreshSeq || viewMode !== "artifact" || selectedArtifactPath() !== path) return;
+        showArtifactEmpty("could not read the live artifact (Ringside desktop app only)");
+      }).finally(() => {
+        artifactRefreshInFlight = false;
+      });
+    }
 
     function update(payload) {
       currentRuns = normalizePayload(payload);
       updateTopbar(currentRuns);
       syncRunNodes(currentRuns);
       applyAgentFilter();
-      if (viewMode === "artifact") refreshArtifactView();
     }
 
     async function pollLocalState() {
@@ -1196,13 +1274,14 @@
       }
     }
 
+    configureArtifactModeAvailability();
     loadSettings();
     setInterval(() => update(currentRuns), 250);
     setInterval(pollLocalState, 1000);
     pollLocalState();
 
     (function loadTauriHudBridge() {
-      if (!window.__TAURI__) return;
+      if (!IS_TAURI) return;
       const script = document.createElement("script");
       script.src = "hud.js";
       script.defer = true;

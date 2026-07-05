@@ -24,7 +24,7 @@ import threading
 import time
 import tomllib
 import urllib.parse
-from dataclasses import dataclass, replace as dataclass_replace
+from dataclasses import dataclass, field, replace as dataclass_replace
 from datetime import datetime, timezone
 from html import escape as html_escape
 from http import HTTPStatus
@@ -46,6 +46,7 @@ DEFAULT_DASHBOARD_PORT_BASE = 8787
 DEFAULT_TOKEN_REGEX = r"tokens\s+used\s*:?\s*([0-9][0-9,]*)"
 ACTIVITY_TAIL_BYTES = 2048
 ACTIVITY_TEXT_LIMIT = 80
+TASK_REPORT_FILENAMES = ("report.md", "report.html")
 SHEPHERD_MODEL = f"none ({TOOL_NAME}.py)"
 VERIFY_METHOD = "executed-check"
 DASHBOARD_HTML_PATH = Path(__file__).resolve().parent / "dashboard" / "dashboard.html"
@@ -453,6 +454,7 @@ class TaskRuntime:
     task: TaskSpec
     taskdir: Path
     log_path: Path
+    report_paths: dict[str, Path] = field(default_factory=dict)
     status: str = "queued"
     spec_short: str = ""
     attempts: int = 0
@@ -642,6 +644,9 @@ class StateWriter:
                         "timeout_s": runtime.task.timeout_s,
                         "taskdir": str(runtime.taskdir),
                         "log_path": str(runtime.log_path),
+                        "report_paths": {
+                            name: str(path) for name, path in runtime.report_paths.items()
+                        },
                         "activity": worker_activity(runtime.log_path, log_tail),
                         "elapsed_s": round(runtime.elapsed_s(now), 1),
                         "tokens": runtime.tokens,
@@ -737,9 +742,28 @@ class StateWriter:
 
 def atomic_write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
+    fd: int | None = None
+    tmp_path: Path | None = None
+    try:
+        fd, tmp_name = tempfile.mkstemp(
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+        )
+        tmp_path = Path(tmp_name)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fd = None
+            fh.write(text)
+            fh.flush()
+        os.replace(tmp_path, path)
+        tmp_path = None
+    finally:
+        if fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+        if tmp_path is not None:
+            with contextlib.suppress(OSError):
+                tmp_path.unlink()
 
 
 def scan_run_states(state_dir: Path) -> list[dict[str, Any]]:
@@ -1017,17 +1041,30 @@ def render_report_row(task: dict[str, Any]) -> str:
     )
 
     links: list[str] = []
+    taskdir_path: Path | None = None
     taskdir = task.get("taskdir")
     if taskdir:
         taskdir_path = Path(str(taskdir))
-        links.append(f'<a href="file://{html_escape(str(taskdir_path))}">taskdir</a>')
-        worker_log = Path(str(task.get("log_path") or taskdir_path / "worker.log"))
-        if worker_log.exists():
-            links.append(f'<a href="file://{html_escape(str(worker_log))}">worker.log</a>')
-        for report_name in ("report.md", "report.html"):
+        if taskdir_path.exists():
+            links.append(f'<a href="file://{html_escape(str(taskdir_path))}">taskdir</a>')
+
+    log_path = task.get("log_path")
+    worker_log = Path(str(log_path)) if log_path else None
+    if worker_log is None and taskdir_path is not None:
+        worker_log = taskdir_path / "worker.log"
+    if worker_log is not None and worker_log.exists():
+        links.append(f'<a href="file://{html_escape(str(worker_log))}">worker.log</a>')
+
+    report_paths = task.get("report_paths") or {}
+    if not isinstance(report_paths, dict):
+        report_paths = {}
+    for report_name in TASK_REPORT_FILENAMES:
+        report_value = report_paths.get(report_name)
+        report_file = Path(str(report_value)) if report_value else None
+        if report_file is None and taskdir_path is not None:
             report_file = taskdir_path / report_name
-            if report_file.exists():
-                links.append(f'<a href="file://{html_escape(str(report_file))}">{report_name}</a>')
+        if report_file is not None and report_file.exists():
+            links.append(f'<a href="file://{html_escape(str(report_file))}">{report_name}</a>')
     links_html = " &middot; ".join(links) if links else '<span class="muted">—</span>'
 
     return f"""<tr>
@@ -1492,6 +1529,7 @@ class RingerRunner:
     async def _cleanup_worktree_on_pass(self, runtime: TaskRuntime) -> None:
         if not (self.manifest.worktrees and self.manifest.repo is not None):
             return
+        self._snapshot_worktree_reports(runtime)
         proc = await asyncio.create_subprocess_exec(
             "git",
             "-C",
@@ -1508,6 +1546,28 @@ class RingerRunner:
         if proc.returncode != 0:
             message = stdout.decode("utf-8", errors="replace")
             append_text(runtime.log_path, f"[ringer.py] git worktree remove failed:\n{message}\n")
+
+    def _snapshot_worktree_reports(self, runtime: TaskRuntime) -> None:
+        copied: dict[str, Path] = {}
+        report_dir = (runtime.log_path.parent / f"{runtime.log_path.stem}.reports").resolve()
+        for report_name in TASK_REPORT_FILENAMES:
+            source = runtime.taskdir / report_name
+            if not source.exists():
+                continue
+            target = report_dir / report_name
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, target)
+            except OSError as exc:
+                append_text(
+                    runtime.log_path,
+                    f"[ringer.py] report snapshot failed for {report_name}: {exc}\n",
+                )
+                continue
+            copied[report_name] = target
+        if copied:
+            with self.lock:
+                runtime.report_paths.update(copied)
 
     async def _record_prepare_error(self, runtime: TaskRuntime, error: str) -> None:
         with self.lock:
