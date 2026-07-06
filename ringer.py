@@ -3672,9 +3672,306 @@ def artifact_content_type(path: Path) -> str:
     return "application/octet-stream"
 
 
+def inject_models_tab_into_ringside_html(html: str) -> str:
+    if 'id="models-panel"' in html or 'id="artifacts-panel"' not in html:
+        return html
+    tabs = """
+    <nav class="tabs" id="ringside-tabs" aria-label="Ringside views">
+      <button type="button" class="tab" id="runs-tab" aria-selected="true">Runs</button>
+      <button type="button" class="tab" id="models-tab" aria-selected="false">Models</button>
+    </nav>
+"""
+    panel = """
+      <section id="models-panel" class="panel models-panel" hidden>
+        <div id="models-status" class="models-status mono">models not loaded</div>
+        <div id="models-table-wrap" class="models-table-wrap">
+          <div class="empty">No model results yet. Run './ringer.py models' for the local scoreboard docs.</div>
+        </div>
+      </section>
+"""
+    style = """
+    .models-panel {
+      min-height: calc(100vh - 83px);
+      padding: 0 clamp(12px, 2vw, 22px) clamp(20px, 3vw, 30px);
+    }
+    .models-status {
+      padding: 10px 0;
+      color: var(--muted);
+      font-size: 12px;
+      border-bottom: 1px solid var(--hairline);
+    }
+    .models-status.error { color: var(--fail); }
+    .models-table-wrap { overflow: auto; }
+    .models-table {
+      width: 100%;
+      min-width: 860px;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    .models-table th,
+    .models-table td {
+      padding: 11px 10px;
+      border-bottom: 1px solid var(--hairline);
+      vertical-align: middle;
+      text-align: left;
+    }
+    .models-table th {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+    .models-table .numeric { text-align: right; }
+    .model-row { cursor: pointer; }
+    .model-row:hover,
+    .model-row.expanded { background: var(--surface); }
+    .model-name-cell { display: grid; gap: 1px; min-width: 220px; }
+    .model-display { color: var(--ink); font-weight: 700; }
+    .model-slug,
+    .models-meta {
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .tier-badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding: 2px 7px;
+      border: 1px solid var(--hairline);
+      border-radius: 5px;
+      color: var(--ink);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .tier-badge.proven {
+      border-color: color-mix(in srgb, var(--pass) 48%, var(--hairline));
+      color: var(--pass);
+    }
+    .tier-badge.probation {
+      border-color: color-mix(in srgb, var(--accent) 48%, var(--hairline));
+      color: var(--accent);
+    }
+    .model-breakdown td {
+      padding: 0;
+      background: color-mix(in srgb, var(--surface) 72%, transparent);
+    }
+    .breakdown-grid {
+      display: grid;
+      grid-template-columns: minmax(120px, 1fr) repeat(5, minmax(70px, auto));
+      gap: 0;
+      padding: 8px 10px 10px 46px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .breakdown-grid > div {
+      padding: 5px 8px;
+      border-bottom: 1px solid var(--hairline);
+      min-width: 0;
+    }
+    .breakdown-head {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+    @media (max-width: 760px) {
+      .breakdown-grid {
+        grid-template-columns: minmax(110px, 1fr) repeat(2, minmax(64px, auto));
+        padding-left: 10px;
+      }
+      .breakdown-grid .optional { display: none; }
+    }
+"""
+    script = r"""
+    function installModelsView() {
+      const MODELS_REFRESH_MS = 30000;
+      const VIEW_KEY = "ringside-view";
+      const runsPanel = document.getElementById("artifacts-panel");
+      const modelsPanel = document.getElementById("models-panel");
+      const runsTab = document.getElementById("runs-tab");
+      const modelsTab = document.getElementById("models-tab");
+      const status = document.getElementById("models-status");
+      const wrap = document.getElementById("models-table-wrap");
+      if (!runsPanel || !modelsPanel || !runsTab || !modelsTab || !status || !wrap) return;
+      let payload = null;
+      let expandedModel = null;
+      let lastFetch = 0;
+      let inFlight = false;
+      let activeView = "runs";
+
+      function html(value) {
+        return String(value ?? "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+      }
+
+      function numberOrZeroLocal(value) {
+        const number = Number(value);
+        return Number.isFinite(number) ? number : 0;
+      }
+
+      function percent(value) {
+        const number = Number(value);
+        return Number.isFinite(number) ? `${Math.round(number * 100)}%` : "0%";
+      }
+
+      function modelDate(value) {
+        const text = String(value || "").trim();
+        if (!text) return "unknown";
+        const match = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if (match) {
+          const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+          return date.toLocaleDateString("en-US", {month: "long", day: "numeric", year: "numeric"});
+        }
+        const stamp = Date.parse(text);
+        return Number.isFinite(stamp)
+          ? new Date(stamp).toLocaleDateString("en-US", {month: "long", day: "numeric", year: "numeric"})
+          : text;
+      }
+
+      function safeClass(value) {
+        return String(value || "unknown").toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "unknown";
+      }
+
+      function groupsFor(model) {
+        const groups = Array.isArray(payload?.groups) ? payload.groups : [];
+        return groups.filter(group => String(group?.model || "") === model);
+      }
+
+      function breakdown(model) {
+        const groups = groupsFor(model);
+        if (!groups.length) return '<div class="empty">No per-task breakdown recorded for this model.</div>';
+        const cells = [
+          '<div class="breakdown-head">Task type</div>',
+          '<div class="breakdown-head">Tasks</div>',
+          '<div class="breakdown-head">First</div>',
+          '<div class="breakdown-head optional">Pass</div>',
+          '<div class="breakdown-head optional">Attempts</div>',
+          '<div class="breakdown-head optional">Last used</div>',
+        ];
+        groups.forEach(group => {
+          cells.push(
+            `<div>${html(group.task_type || "(untyped)")}</div>`,
+            `<div>${numberOrZeroLocal(group.tasks).toLocaleString()}</div>`,
+            `<div>${html(percent(group.first_try_pass_rate))}</div>`,
+            `<div class="optional">${html(percent(group.pass_rate))}</div>`,
+            `<div class="optional">${numberOrZeroLocal(group.attempts).toLocaleString()}</div>`,
+            `<div class="optional">${html(modelDate(group.last_seen))}</div>`,
+          );
+        });
+        return `<div class="breakdown-grid mono">${cells.join("")}</div>`;
+      }
+
+      function renderModels() {
+        const rows = Array.isArray(payload?.rollup) ? payload.rollup : [];
+        const error = String(payload?.error || "").trim();
+        status.classList.toggle("error", Boolean(error));
+        status.textContent = error ? `models unavailable: ${error}` : `updated ${modelDate(payload?.generated_at)}`;
+        if (!rows.length) {
+          wrap.innerHTML = '<div class="empty">No model results yet. Run \'./ringer.py models\' for the local scoreboard docs.</div>';
+          return;
+        }
+        const body = [];
+        rows.forEach((row, index) => {
+          const model = String(row.model || "");
+          const expanded = expandedModel === model;
+          const tierClass = safeClass(row.tier);
+          body.push(
+            `<tr class="model-row${expanded ? " expanded" : ""}" data-model="${html(model)}" tabindex="0">`,
+            `<td class="numeric">${index + 1}</td>`,
+            '<td><span class="model-name-cell">',
+            `<span class="model-display">${html(row.model_display || row.model || "unknown")}</span>`,
+            `<span class="model-slug mono">${html(row.model || "unknown")}</span>`,
+            '</span></td>',
+            `<td>${html(row.harness || "unknown")}</td>`,
+            `<td>${html(row.access || "unknown")}</td>`,
+            `<td><span class="tier-badge ${html(tierClass)}">${html(row.tier || "unknown")}</span></td>`,
+            `<td class="numeric">${numberOrZeroLocal(row.tasks).toLocaleString()}</td>`,
+            `<td class="numeric">${html(percent(row.first_try_pass_rate))}</td>`,
+            `<td class="numeric">${html(percent(row.pass_rate))}</td>`,
+            `<td>${html(modelDate(row.last_seen))}</td>`,
+            '</tr>',
+          );
+          if (expanded) body.push(`<tr class="model-breakdown"><td colspan="9">${breakdown(model)}</td></tr>`);
+        });
+        wrap.innerHTML = [
+          '<table class="models-table">',
+          '<thead><tr>',
+          '<th class="numeric">Rank</th><th>Model</th><th>Harness</th><th>API/Plan</th><th>Tier</th>',
+          '<th class="numeric">Tasks</th><th class="numeric">First-try %</th><th class="numeric">Pass %</th><th>Last used</th>',
+          '</tr></thead>',
+          `<tbody>${body.join("")}</tbody>`,
+          '</table>',
+        ].join("");
+      }
+
+      async function fetchModels(force) {
+        const now = Date.now();
+        if (inFlight || (!force && lastFetch && now - lastFetch < MODELS_REFRESH_MS)) return;
+        inFlight = true;
+        status.textContent = payload ? "refreshing models..." : "loading models...";
+        try {
+          const response = await fetch(`/api/models?t=${Date.now()}`, {cache: "no-store"});
+          payload = await response.json();
+          lastFetch = Date.now();
+        } catch (error) {
+          payload = {generated_at: new Date().toISOString(), groups: [], rollup: [], error: error?.message || "models unavailable"};
+        } finally {
+          inFlight = false;
+          renderModels();
+        }
+      }
+
+      function selectView(view, persist = true) {
+        activeView = view === "models" ? "models" : "runs";
+        runsPanel.hidden = activeView === "models";
+        modelsPanel.hidden = activeView !== "models";
+        runsTab.setAttribute("aria-selected", String(activeView === "runs"));
+        modelsTab.setAttribute("aria-selected", String(activeView === "models"));
+        if (persist) localStorage.setItem(VIEW_KEY, activeView);
+        if (activeView === "models") fetchModels(true);
+      }
+
+      runsTab.addEventListener("click", () => selectView("runs"));
+      modelsTab.addEventListener("click", () => selectView("models"));
+      wrap.addEventListener("click", event => {
+        const row = event.target.closest(".model-row");
+        if (!row) return;
+        const model = row.getAttribute("data-model") || "";
+        expandedModel = expandedModel === model ? null : model;
+        renderModels();
+      });
+      wrap.addEventListener("keydown", event => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        const row = event.target.closest(".model-row");
+        if (!row) return;
+        event.preventDefault();
+        const model = row.getAttribute("data-model") || "";
+        expandedModel = expandedModel === model ? null : model;
+        renderModels();
+      });
+      setInterval(() => {
+        if (activeView === "models") fetchModels(false);
+      }, MODELS_REFRESH_MS);
+      selectView(localStorage.getItem(VIEW_KEY) === "models" ? "models" : "runs", false);
+    }
+
+"""
+    html = html.replace("    main {\n", style + "    main {\n", 1)
+    html = html.replace("    <main>\n", tabs + "\n    <main>\n", 1)
+    html = html.replace("    </main>\n", panel + "    </main>\n", 1)
+    html = html.replace("    tickClock();\n", script + "    installModelsView();\n    tickClock();\n", 1)
+    return html
+
+
 def read_ringside_html() -> str:
     try:
-        return RINGSIDE_HTML_PATH.read_text(encoding="utf-8")
+        return inject_models_tab_into_ringside_html(RINGSIDE_HTML_PATH.read_text(encoding="utf-8"))
     except OSError:
         return """<!doctype html>
 <html lang="en">
@@ -3845,11 +4142,14 @@ class PersistentHudServer:
         self.httpd: ThreadingHTTPServer | None = None
         self.thread: threading.Thread | None = None
         self.port: int | None = None
+        self.model_log_path: Path | None = None
+        self.model_db_path: Path | None = None
 
     def start(self) -> int:
         state_dir = self.state_dir
         artifact_root = artifacts_dir(state_dir)
         preferred_port = self.preferred_port
+        server_ref = self
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:  # noqa: N802
@@ -3871,6 +4171,21 @@ class PersistentHudServer:
                             "active": read_active_runs_file(),
                         },
                     )
+                    return
+                if path == "/api/models":
+                    try:
+                        payload = build_models_api_payload(
+                            log_path=server_ref.model_log_path or (state_dir / "runs.jsonl"),
+                            db_path=server_ref.model_db_path,
+                        )
+                    except Exception as exc:
+                        payload = {
+                            "generated_at": utc_now_iso(),
+                            "groups": [],
+                            "rollup": [],
+                            "error": str(exc) or exc.__class__.__name__,
+                        }
+                    send_json_response(self, payload)
                     return
                 if path.startswith("/api/open-folder"):
                     query = urllib.parse.urlparse(path).query
@@ -3953,6 +4268,9 @@ class PersistentHudServer:
                 webbrowser.open(url)
         print(f"Ringside: {url}", flush=True)
         return self.port
+
+    def start_background(self) -> int:
+        return self.start()
 
     def stop(self) -> None:
         if self.httpd is not None:
@@ -6090,6 +6408,60 @@ def print_model_log_table(path: Path, rows_read: int, skipped: int, groups: list
     print("Judgment layer: docs/MODEL-NOTES.md")
 
 
+def build_models_api_payload(
+    *,
+    log_path: Path,
+    db_path: Path | None = None,
+    catalog_path: Path | None = None,
+    registry_path: Path | None = None,
+) -> dict[str, Any]:
+    log_path = log_path.expanduser().resolve()
+    db_path = (db_path or default_read_model_db_path()).expanduser().resolve()
+    catalog_path = (catalog_path or default_catalog_path()).expanduser().resolve()
+    registry_path = (registry_path or default_model_registry_path()).expanduser().resolve()
+    using_db = True
+    catalog_models: list[dict[str, Any]] = []
+    try:
+        sync_read_model_db(
+            db_path,
+            log_path,
+            catalog_path=catalog_path,
+            registry_path=registry_path,
+        )
+        rows, identity_registry = db_attempt_rows(db_path)
+        catalog_models = db_catalog_models(db_path)
+    except Exception:
+        using_db = False
+        rows, _skipped = read_model_log_rows(log_path)
+        identity_registry = load_model_identity_registry(registry_path)
+    if not using_db:
+        with contextlib.suppress(Exception):
+            catalog_models = load_catalog_snapshot(catalog_path)
+    groups = enrich_model_groups_with_identity(
+        aggregate_model_log_rows(rows),
+        rows,
+        identity_registry,
+        include_task_type=True,
+    )
+    rollup = enrich_model_groups_with_identity(
+        aggregate_model_scoreboard_rows(rows),
+        rows,
+        identity_registry,
+        include_task_type=False,
+    )
+    catalog_by_id = catalog_models_by_id(catalog_models)
+    ordered_rollup: list[dict[str, Any]] = []
+    for row in order_model_scoreboard_rows(rollup, catalog_by_id):
+        item = dict(row)
+        item.setdefault("task_type", "(all)")
+        ordered_rollup.append(item)
+    return {
+        "generated_at": utc_now_iso(),
+        "groups": groups,
+        "rollup": ordered_rollup,
+    }
+
+
 def run_models_command(config: AppConfig, args: argparse.Namespace) -> int:
     log_path = (args.log or config.eval.jsonl_path).expanduser().resolve()
     since = validate_since_date(args.since)
@@ -7569,6 +7941,7 @@ def run_persistent_hud(config: AppConfig, *, port: int | None, open_viewer: bool
         preferred_port=chosen_port,
         open_viewer=open_viewer,
     )
+    server.model_log_path = config.eval.jsonl_path
     server.start()
     try:
         while True:

@@ -717,6 +717,143 @@
       font-size: 12px;
       text-align: center;
     }
+    #app.models-mode { display: none; }
+    .models-view {
+      flex: 1 1 auto;
+      min-height: 0;
+      display: none;
+      flex-direction: column;
+      overflow: auto;
+      background: var(--panel);
+    }
+    .models-view.active { display: flex; }
+    .models-state {
+      flex: 0 0 auto;
+      min-height: 28px;
+      padding: 7px 10px;
+      border-bottom: 1px solid rgba(255,255,255,.08);
+      color: var(--muted);
+      background: rgba(5,8,12,.18);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 10px;
+      line-height: 1.2;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .models-state.error { color: #ffb7c0; }
+    .models-table-wrap {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow: auto;
+    }
+    .models-table {
+      width: 100%;
+      min-width: 860px;
+      border-collapse: collapse;
+      font-size: 11px;
+    }
+    .models-table th,
+    .models-table td {
+      padding: 8px 10px;
+      border-bottom: 1px solid rgba(255,255,255,.07);
+      vertical-align: middle;
+      text-align: left;
+    }
+    .models-table th {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      background: #0d141f;
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 9.5px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+    .models-table td.numeric,
+    .models-table th.numeric { text-align: right; }
+    .model-row {
+      cursor: pointer;
+      transition: background .18s ease;
+    }
+    .model-row:hover,
+    .model-row.expanded { background: rgba(255,255,255,.045); }
+    .model-name-cell {
+      min-width: 220px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .model-display {
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 850;
+    }
+    .model-slug,
+    .models-meta {
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 10px;
+      line-height: 1.25;
+    }
+    .tier-badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 20px;
+      padding: 3px 6px;
+      border: 1px solid rgba(255,255,255,.13);
+      border-radius: 5px;
+      color: #d8e5f6;
+      background: rgba(255,255,255,.05);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 9.5px;
+      font-weight: 900;
+      text-transform: uppercase;
+    }
+    .tier-badge.proven {
+      border-color: rgba(73,226,125,.42);
+      color: #bff8d0;
+      background: rgba(73,226,125,.12);
+    }
+    .tier-badge.probation {
+      border-color: rgba(255,190,69,.42);
+      color: #ffe1a3;
+      background: rgba(255,190,69,.11);
+    }
+    .model-breakdown td {
+      padding: 0;
+      background: rgba(5,8,12,.30);
+    }
+    .breakdown-grid {
+      display: grid;
+      grid-template-columns: minmax(120px, 1fr) repeat(5, minmax(70px, auto));
+      gap: 0;
+      padding: 8px 10px 10px 48px;
+      color: #cbd6e8;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 10px;
+    }
+    .breakdown-grid > div {
+      padding: 5px 8px;
+      border-bottom: 1px solid rgba(255,255,255,.055);
+      min-width: 0;
+    }
+    .breakdown-head {
+      color: var(--muted);
+      font-size: 9px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+    .models-empty {
+      min-height: 220px;
+      display: grid;
+      place-items: center;
+      padding: 26px;
+      color: rgba(230,240,255,.72);
+      font-size: 13px;
+      text-align: center;
+    }
     .run.collapsed .tasks { display: none; }
     body.density-compact .toolbar { padding-top: 6px; padding-bottom: 6px; }
     body.density-compact .tasks { gap: 6px; padding: 7px; }
@@ -772,6 +909,11 @@
         flex: 1 1 180px;
         max-width: none;
       }
+      .breakdown-grid {
+        grid-template-columns: minmax(110px, 1fr) repeat(2, minmax(64px, auto));
+        padding-left: 10px;
+      }
+      .breakdown-grid .optional { display: none; }
     }
   </style>
 </head>
@@ -791,6 +933,7 @@
       <div class="toolbar-group" id="viewButtons">
         <button type="button" data-view="grid" class="active">Grid</button>
         <button type="button" data-view="artifact">Artifact</button>
+        <button type="button" data-view="models">Models</button>
       </div>
       <div class="toolbar-group">
         <button type="button" id="collapseAllBtn">Collapse all</button>
@@ -817,6 +960,7 @@
           <select id="defaultViewSelect">
             <option value="grid">Grid</option>
             <option value="artifact">Artifact</option>
+            <option value="models">Models</option>
           </select>
         </div>
         <div class="settings-title">Show fields</div>
@@ -858,6 +1002,12 @@
         </div>
       </div>
     </div>
+    <div class="models-view" id="modelsView" data-no-drag>
+      <div class="models-state" id="modelsState">models not loaded</div>
+      <div class="models-table-wrap" id="modelsTableWrap">
+        <div class="models-empty">No model results yet. Run './ringer.py models' for the local scoreboard docs.</div>
+      </div>
+    </div>
   </div>
   <script>
     const app = document.getElementById("app");
@@ -889,9 +1039,13 @@
     const artifactVersionBar = document.getElementById("artifactVersionBar");
     const artifactFrameState = document.getElementById("artifactFrameState");
     const artifactFrameWrap = document.getElementById("artifactFrameWrap");
+    const modelsView = document.getElementById("modelsView");
+    const modelsState = document.getElementById("modelsState");
+    const modelsTableWrap = document.getElementById("modelsTableWrap");
 
     const ARTIFACT_REFRESH_MS = 2000;
     const WORKER_LOG_POLL_MS = 1000;
+    const MODELS_REFRESH_MS = 30000;
     const TAURI_INVOKE = window.__TAURI__?.core?.invoke;
     const TAURI_CONVERT_FILE_SRC = window.__TAURI__?.core?.convertFileSrc;
     const IS_TAURI = Boolean(TAURI_INVOKE);
@@ -919,6 +1073,11 @@
     let artifactRefreshTimer = null;
     let artifactRefreshInFlight = false;
     let artifactRefreshSeq = 0;
+    let modelsRefreshTimer = null;
+    let modelsRefreshInFlight = false;
+    let modelsLastFetchMs = 0;
+    let modelsPayload = null;
+    let expandedModelKey = null;
     let localStatePollFailed = false;
 
     const DEFAULT_SETTINGS = {
@@ -1653,15 +1812,176 @@
       return TAURI_INVOKE(command, args);
     }
 
+    function formatModelPercent(value) {
+      const number = Number(value);
+      if (!Number.isFinite(number)) return "0%";
+      return `${Math.round(number * 100)}%`;
+    }
+
+    function formatModelDate(value) {
+      const text = String(value || "").trim();
+      if (!text) return "unknown";
+      const match = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (match) {
+        const localDate = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+        return localDate.toLocaleDateString("en-US", {month: "long", day: "numeric", year: "numeric"});
+      }
+      const date = new Date(text);
+      if (Number.isNaN(date.getTime())) return text;
+      return date.toLocaleDateString("en-US", {month: "long", day: "numeric", year: "numeric"});
+    }
+
+    function modelKey(row) {
+      return String(row?.model || "");
+    }
+
+    function modelGroupsFor(row) {
+      const key = modelKey(row);
+      const groups = Array.isArray(modelsPayload?.groups) ? modelsPayload.groups : [];
+      return groups.filter(group => String(group?.model || "") === key);
+    }
+
+    function renderModelsEmpty(message) {
+      if (!modelsTableWrap) return;
+      modelsTableWrap.innerHTML = `<div class="models-empty">${escapeHtml(message)}</div>`;
+    }
+
+    function renderModelBreakdown(row) {
+      const groups = modelGroupsFor(row);
+      if (groups.length === 0) {
+        return '<div class="models-empty">No per-task breakdown recorded for this model.</div>';
+      }
+      const cells = [
+        '<div class="breakdown-head">Task type</div>',
+        '<div class="breakdown-head">Tasks</div>',
+        '<div class="breakdown-head">First</div>',
+        '<div class="breakdown-head optional">Pass</div>',
+        '<div class="breakdown-head optional">Attempts</div>',
+        '<div class="breakdown-head optional">Last used</div>',
+      ];
+      groups.forEach(group => {
+        cells.push(
+          `<div>${escapeHtml(group.task_type || "(untyped)")}</div>`,
+          `<div>${numberOrZero(group.tasks).toLocaleString()}</div>`,
+          `<div>${escapeHtml(formatModelPercent(group.first_try_pass_rate))}</div>`,
+          `<div class="optional">${escapeHtml(formatModelPercent(group.pass_rate))}</div>`,
+          `<div class="optional">${numberOrZero(group.attempts).toLocaleString()}</div>`,
+          `<div class="optional">${escapeHtml(formatModelDate(group.last_seen))}</div>`,
+        );
+      });
+      return `<div class="breakdown-grid">${cells.join("")}</div>`;
+    }
+
+    function renderModelsTable() {
+      const rows = Array.isArray(modelsPayload?.rollup) ? modelsPayload.rollup : [];
+      const error = String(modelsPayload?.error || "").trim();
+      if (modelsState) {
+        modelsState.classList.toggle("error", Boolean(error));
+        setText(modelsState, error ? `models unavailable: ${error}` : `updated ${formatModelDate(modelsPayload?.generated_at)}`);
+      }
+      if (rows.length === 0) {
+        renderModelsEmpty("No model results yet. Run './ringer.py models' for the local scoreboard docs.");
+        return;
+      }
+      const body = [];
+      rows.forEach((row, index) => {
+        const key = modelKey(row);
+        const expanded = expandedModelKey === key;
+        const display = String(row.model_display || row.model || "unknown");
+        const slug = String(row.model || "unknown");
+        const tier = safeClass(row.tier, "unknown");
+        body.push(
+          `<tr class="model-row${expanded ? " expanded" : ""}" data-model="${escapeHtml(key)}" tabindex="0">`,
+          `<td class="numeric">${index + 1}</td>`,
+          '<td>',
+          '<div class="model-name-cell">',
+          `<span class="model-display">${escapeHtml(display)}</span>`,
+          `<span class="model-slug">${escapeHtml(slug)}</span>`,
+          '</div>',
+          '</td>',
+          `<td>${escapeHtml(row.harness || "unknown")}</td>`,
+          `<td>${escapeHtml(row.access || "unknown")}</td>`,
+          `<td><span class="tier-badge ${escapeHtml(tier)}">${escapeHtml(row.tier || "unknown")}</span></td>`,
+          `<td class="numeric">${numberOrZero(row.tasks).toLocaleString()}</td>`,
+          `<td class="numeric">${escapeHtml(formatModelPercent(row.first_try_pass_rate))}</td>`,
+          `<td class="numeric">${escapeHtml(formatModelPercent(row.pass_rate))}</td>`,
+          `<td>${escapeHtml(formatModelDate(row.last_seen))}</td>`,
+          '</tr>',
+        );
+        if (expanded) {
+          body.push(
+            '<tr class="model-breakdown">',
+            `<td colspan="9">${renderModelBreakdown(row)}</td>`,
+            '</tr>',
+          );
+        }
+      });
+      modelsTableWrap.innerHTML = [
+        '<table class="models-table">',
+        '<thead><tr>',
+        '<th class="numeric">Rank</th>',
+        '<th>Model</th>',
+        '<th>Harness</th>',
+        '<th>API/Plan</th>',
+        '<th>Tier</th>',
+        '<th class="numeric">Tasks</th>',
+        '<th class="numeric">First-try %</th>',
+        '<th class="numeric">Pass %</th>',
+        '<th>Last used</th>',
+        '</tr></thead>',
+        `<tbody>${body.join("")}</tbody>`,
+        '</table>',
+      ].join("");
+    }
+
+    async function refreshModelsView(opts = {}) {
+      if (modelsRefreshInFlight) return;
+      const now = Date.now();
+      if (!opts.force && modelsLastFetchMs && now - modelsLastFetchMs < MODELS_REFRESH_MS) return;
+      modelsRefreshInFlight = true;
+      setText(modelsState, modelsPayload ? "refreshing models..." : "loading models...");
+      try {
+        const response = await fetch(`/api/models?t=${Date.now()}`, {cache: "no-store"});
+        modelsPayload = await response.json();
+        modelsLastFetchMs = Date.now();
+      } catch (err) {
+        modelsPayload = {
+          generated_at: new Date().toISOString(),
+          groups: [],
+          rollup: [],
+          error: err?.message || "models unavailable",
+        };
+      } finally {
+        modelsRefreshInFlight = false;
+        renderModelsTable();
+      }
+    }
+
+    function startModelsRefreshTimer() {
+      stopModelsRefreshTimer();
+      modelsRefreshTimer = setInterval(() => {
+        if (viewMode === "models") refreshModelsView();
+      }, MODELS_REFRESH_MS);
+    }
+
+    function stopModelsRefreshTimer() {
+      if (modelsRefreshTimer) clearInterval(modelsRefreshTimer);
+      modelsRefreshTimer = null;
+    }
+
     function normalizeViewMode(mode) {
-      return mode === "artifact" ? "artifact" : "grid";
+      return mode === "artifact" || mode === "models" ? mode : "grid";
     }
 
     function configureArtifactModeAvailability() {
       const artifactButton = viewButtons?.querySelector('button[data-view="artifact"]');
       if (artifactButton) artifactButton.title = "Live artifacts";
+      const modelsButton = viewButtons?.querySelector('button[data-view="models"]');
+      if (modelsButton) modelsButton.title = "Model scoreboard";
       const artifactOption = defaultViewSelect?.querySelector('option[value="artifact"]');
       if (artifactOption) artifactOption.title = "Live artifacts";
+      const modelsOption = defaultViewSelect?.querySelector('option[value="models"]');
+      if (modelsOption) modelsOption.title = "Model scoreboard";
     }
 
     function mergeSettings(base, incoming) {
@@ -1717,7 +2037,9 @@
     function setViewMode(mode, opts = {}) {
       viewMode = normalizeViewMode(mode);
       app.classList.toggle("artifact-mode", viewMode === "artifact");
+      app.classList.toggle("models-mode", viewMode === "models");
       artifactView.classList.toggle("active", viewMode === "artifact");
+      modelsView.classList.toggle("active", viewMode === "models");
       for (const btn of viewButtons.querySelectorAll("button[data-view]")) {
         btn.classList.toggle("active", btn.dataset.view === viewMode);
       }
@@ -1727,6 +2049,12 @@
         startArtifactRefreshTimer();
       } else {
         stopArtifactRefreshTimer();
+      }
+      if (viewMode === "models") {
+        refreshModelsView({force: true});
+        startModelsRefreshTimer();
+      } else {
+        stopModelsRefreshTimer();
       }
       if (opts.persist !== false) {
         settings.layout.defaultView = viewMode;
@@ -1738,6 +2066,24 @@
       const btn = event.target.closest("button[data-view]");
       if (!btn) return;
       setViewMode(btn.dataset.view);
+    });
+
+    modelsTableWrap?.addEventListener("click", event => {
+      const row = event.target.closest(".model-row");
+      if (!row) return;
+      const key = row.getAttribute("data-model") || "";
+      expandedModelKey = expandedModelKey === key ? null : key;
+      renderModelsTable();
+    });
+
+    modelsTableWrap?.addEventListener("keydown", event => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      const row = event.target.closest(".model-row");
+      if (!row) return;
+      event.preventDefault();
+      const key = row.getAttribute("data-model") || "";
+      expandedModelKey = expandedModelKey === key ? null : key;
+      renderModelsTable();
     });
 
     collapseAllBtn?.addEventListener("click", () => {
