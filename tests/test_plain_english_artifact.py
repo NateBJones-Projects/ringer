@@ -117,41 +117,30 @@ class PlainEnglishArtifactTests(unittest.TestCase):
         self.assertIn("<span aria-label=\"D-waiting: waiting\"></span>", rounds.group(1))
         self.assertIn("1 finished · 1 working · 1 failed · 1 waiting", html)
 
-    def test_status_change_adds_timestamped_update(self) -> None:
-        render_status_html(self.state([self.task("A-mock-engine", "queued")]), renderer=self.renderer)
+    def test_status_change_updates_the_worker_state_word(self) -> None:
+        queued_html = render_status_html(
+            self.state([self.task("A-mock-engine", "queued")]), renderer=self.renderer
+        )
+        self.assertIn('<span class="state waiting">waiting</span>', queued_html)
 
         html = render_status_html(
             self.state([self.task("A-mock-engine", "running", attempts=1)]),
             renderer=self.renderer,
         )
+        self.assertIn('<span class="state working">working</span>', html)
 
-        self.assertRegex(html, r'<time class="mono">\d{2}:\d{2}:\d{2}</time><div>A-mock-engine started</div>')
-
-    def test_retry_and_second_try_updates(self) -> None:
-        render_status_html(
-            self.state([self.task("C-nudge-hooks", "running", attempts=1, elapsed_s=10)]),
-            renderer=self.renderer,
-        )
+    def test_retry_and_second_try_state_words(self) -> None:
         retry_html = render_status_html(
             self.state([self.task("C-nudge-hooks", "retrying", attempts=1, elapsed_s=20)]),
             renderer=self.renderer,
         )
-
-        self.assertIn(
-            "C-nudge-hooks did not finish cleanly — trying again",
-            retry_html,
-        )
+        self.assertIn('<span class="state retry">sent back — redoing</span>', retry_html)
 
         pass_html = render_status_html(
             self.state([self.task("C-nudge-hooks", "pass", attempts=2, elapsed_s=35)]),
             renderer=self.renderer,
         )
-
-        self.assertIn("C-nudge-hooks passed on the second try", pass_html)
-        self.assertIn(
-            "C-nudge-hooks did not finish cleanly — trying again",
-            pass_html,
-        )
+        self.assertIn('<span class="state pass">finished &amp; checked</span>', pass_html)
 
     def test_full_live_and_final_pages_do_not_use_banned_language(self) -> None:
         tasks = [

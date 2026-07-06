@@ -58,6 +58,16 @@ WORKER_LOG_TAIL_BYTES = 64 * 1024
 TASK_REPORT_FILENAMES = ("report.md", "report.html")
 TEXT_DELIVERABLE_SUFFIXES = {".md", ".txt", ".log"}
 IMAGE_DELIVERABLE_SUFFIXES = {".avif", ".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp"}
+# When a task declares no expect_files, these are the file types worth
+# rescuing from the top of its task directory so the work still shows up
+# on the results page instead of silently staying invisible. Logs are
+# excluded — the worker log is linked separately, it is not a deliverable.
+FALLBACK_HARVEST_SUFFIXES = (
+    (TEXT_DELIVERABLE_SUFFIXES - {".log"})
+    | IMAGE_DELIVERABLE_SUFFIXES
+    | {".html", ".htm", ".json", ".csv", ".pdf"}
+)
+FALLBACK_HARVEST_MAX_FILES = 8
 SHEPHERD_MODEL = f"none ({TOOL_NAME}.py)"
 VERIFY_METHOD = "executed-check"
 CSP_META_TAG = (
@@ -89,6 +99,10 @@ class EngineConfig:
     full_access_args: tuple[str, ...]
     sandbox_args: tuple[str, ...]
     token_regex: str | None = DEFAULT_TOKEN_REGEX
+    # Fills the {model} placeholder in args_template when a task does not set
+    # its own "model" — this is what makes a harness engine (OpenCode) model
+    # agnostic instead of hard-coding one model into the command line.
+    model_default: str = ""
 
     @property
     def process_name(self) -> str:
@@ -342,6 +356,9 @@ def load_engines(raw: Any) -> dict[str, EngineConfig]:
                 re.compile(token_regex, flags=re.IGNORECASE)
             except re.error as exc:
                 raise ValueError(f"engines.{clean_name}.token_regex is invalid: {exc}") from exc
+        model_default = str(
+            section.get("model_default", base.model_default if base else "")
+        ).strip()
         engines[clean_name] = EngineConfig(
             name=clean_name,
             bin=bin_path,
@@ -349,6 +366,7 @@ def load_engines(raw: Any) -> dict[str, EngineConfig]:
             full_access_args=full_access_args,
             sandbox_args=sandbox_args,
             token_regex=token_regex,
+            model_default=model_default,
         )
     return engines
 
@@ -364,6 +382,9 @@ class TaskSpec:
     full_access: bool = False
     engine_args: tuple[str, ...] = ()
     verified: str = ""
+    # Which model a harness engine should run for this task (fills the
+    # engine's {model} placeholder); empty means the engine's model_default.
+    model: str = ""
 
     @classmethod
     def from_obj(cls, obj: dict[str, Any]) -> "TaskSpec":
@@ -398,6 +419,9 @@ class TaskSpec:
         verified = obj.get("verified", "")
         if not isinstance(verified, str):
             raise ValueError(f"task {key}: verified must be a string (plain-English description of what the check proves)")
+        model = obj.get("model", "")
+        if not isinstance(model, str):
+            raise ValueError(f"task {key}: model must be a string (e.g. 'openrouter/z-ai/glm-5.2')")
         return cls(
             key=key,
             spec=spec,
@@ -408,6 +432,7 @@ class TaskSpec:
             full_access=bool(obj.get("full_access", False)),
             engine_args=tuple(engine_args),
             verified=verified.strip(),
+            model=model.strip(),
         )
 
 
@@ -522,6 +547,16 @@ def lint_manifest(manifest: Manifest) -> list[str]:
             findings.append(
                 f"{task.key}: spec is probably underspecified; workers are stateless and cannot ask questions."
             )
+        if spec_is_file_pointer(task.spec):
+            findings.append(
+                f"{task.key}: spec is a pointer to an instruction file; anyone watching Ringside "
+                "sees no real brief and the retry prompt loses context — put the instructions in the spec itself."
+            )
+        if not task.expect_files and not manifest.worktrees:
+            findings.append(
+                f"{task.key}: no expect_files; the results page will guess deliverables from the "
+                "task folder — declare them so the reader sees exactly the right work."
+            )
         if not task.verified:
             findings.append(
                 f"{task.key}: no 'verified' description; a reader of the results page sees "
@@ -547,6 +582,28 @@ def lint_manifest(manifest: Manifest) -> list[str]:
                 )
 
     return findings
+
+
+FILE_POINTER_SPEC_RE = re.compile(
+    r"\b(read|open|follow|see)\b[^\n.]{0,100}?/[\w~][\w./~-]*",
+    re.IGNORECASE,
+)
+
+
+def spec_is_file_pointer(spec: str) -> bool:
+    """True when the spec's substance lives in some other file.
+
+    'Read /path/to/instructions.md and do what it says' hides the brief from
+    everyone watching the run and starves the retry prompt. Long specs that
+    merely reference files for CONTEXT are fine — the heuristic only fires
+    when the spec is short enough that the pointer must be the whole plan.
+    """
+    text = spec.strip()
+    if re.search(r"do (exactly )?what (it|the file|that file) says", text, re.IGNORECASE):
+        return True
+    if len(text) >= 600:
+        return False
+    return bool(FILE_POINTER_SPEC_RE.search(text))
 
 
 def check_cannot_fail(check: str) -> bool:
@@ -910,6 +967,7 @@ class StateWriter:
                         "status": runtime.status,
                         "verdict": runtime.final_verdict,
                         "engine": runtime.task.engine,
+                        "model": runtime.task.model or (engine.model_default if engine else ""),
                         "spec": runtime.task.spec,
                         "spec_short": runtime.spec_short,
                         "verified": runtime.task.verified,
@@ -1723,16 +1781,69 @@ ARTIFACT_BASE_CSS = """
   .work.is-primary .work-list {
     gap: 12px;
   }
-  .work.is-primary .work-item {
-    align-items: center;
-    padding: 16px;
+  .work.is-primary .work-link {
+    font-size: clamp(17px, 2.6vw, 22px);
+  }
+  .work-group .worker {
+    border-bottom: none;
+    padding-bottom: 6px;
+  }
+  .work-group-body {
+    padding: 0 0 14px 30px;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .work-group:last-child .work-group-body { border-bottom: none; }
+  .work-group-body .work-item:last-of-type { border-bottom: none; }
+  .work-group-body .empty-note { margin: 4px 0 8px; }
+  .work-group-body .verified {
+    display: block;
+    margin-top: 6px;
+    color: var(--muted);
+    font-size: 13px;
+    overflow-wrap: break-word;
+  }
+  .work-group-body .proof {
+    margin-top: 4px;
+    font-size: 12px;
+  }
+  .work-group-body .proof summary {
+    cursor: pointer;
+    color: var(--accent);
+  }
+  .work-group-body .proof pre {
+    margin: 6px 0 0;
+    padding: 10px 12px;
+    max-height: 200px;
+    overflow: auto;
+    border-left: 2px solid var(--hairline);
+    background: var(--surface);
+    color: var(--muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11.5px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .work-group-body .links {
+    display: block;
+    margin-top: 8px;
+    font-size: 13px;
+  }
+  .work-group-body .links a {
+    color: var(--accent);
+    text-decoration: none;
+  }
+  .work-group-body .links a:hover,
+  .work-group-body .links a:focus-visible {
+    text-decoration: underline;
+  }
+  .work.is-primary .work-group {
+    padding: 12px 16px 2px;
     border: 1px solid var(--hairline);
     border-radius: 8px;
     background: var(--surface);
   }
-  .work.is-primary .work-link {
-    font-size: clamp(17px, 2.6vw, 22px);
-  }
+  .work.is-primary .work-group-body { border-bottom: none; }
   section h2 {
     margin: 0 0 4px;
     padding-bottom: 8px;
@@ -2493,52 +2604,133 @@ def render_work_section(
     force_wrappers: bool = False,
     primary: bool = False,
 ) -> str:
-    items = collect_state_deliverables(state)
-    name_counts: dict[str, int] = {}
-    for entry in items:
-        name_counts[entry["name"]] = name_counts.get(entry["name"], 0) + 1
-    for entry in items:
-        entry["shared_name"] = name_counts.get(entry["name"], 0) > 1
+    # One section carries the whole story: each worker, what it delivered,
+    # how the delivery was checked, and where the raw log lives. The old
+    # separate "The workers" strip and "What's happening" timeline repeated
+    # this information; per-worker live detail belongs to Ringside's agent
+    # accordion, not the artifact.
+    tasks = state_tasks(state)
     section_class = "work is-primary" if primary else "work"
-    if not items:
-        body = '<p class="empty-note">Nothing delivered yet — the workers are still on it.</p>'
+    if not tasks:
+        body = '<p class="empty-note">No tasks.</p>'
     else:
-        rows = [
-            render_work_item(
-                item,
+        groups = "".join(
+            render_work_group(
+                task,
                 state=state,
                 renderer=renderer,
                 page_path=page_path,
                 force_wrappers=force_wrappers,
             )
-            for item in items
-        ]
-        body = f'<div class="work-list">{"".join(rows)}</div>'
+            for task in tasks
+        )
+        body = f'<div class="work-list">{groups}</div>'
     return f"""<section class="{section_class}" aria-labelledby="the-work-heading">
     <h2 id="the-work-heading">The work</h2>
     {body}
   </section>"""
 
 
-def render_work_item(
-    item: dict[str, Any],
+def render_work_group(
+    task: dict[str, Any],
     *,
     state: dict[str, Any],
     renderer: ArtifactRenderer | None,
     page_path: Path | None,
     force_wrappers: bool = False,
 ) -> str:
-    task_key = str(item.get("task_key", "task"))
+    task_key = str(task.get("key", "task"))
+    key = html_escape(task_key)
+    status = str(task.get("status", "queued"))
+    bucket = task_state_bucket(status)
+    css_bucket = "working" if bucket == "working" else bucket
+    state_word = html_escape(task_state_word(status))
+    elapsed = html_escape(fmt_compact_duration(task.get("elapsed_s")))
+
+    activity = task_activity_line(task, bucket)
+    activity_html = (
+        f'<span class="activity" title="{html_escape(activity)}">{html_escape(activity)}</span>'
+        if activity
+        else ""
+    )
+
+    deliverables = [item for item in (task.get("deliverables") or []) if isinstance(item, dict)]
+    rows = [
+        render_work_item(
+            item,
+            task_key=task_key,
+            state=state,
+            renderer=renderer,
+            page_path=page_path,
+            force_wrappers=force_wrappers,
+        )
+        for item in deliverables
+    ]
+    if rows:
+        items_html = "".join(rows)
+    elif bucket == "pass":
+        items_html = '<p class="empty-note">Finished and checked — this worker filed nothing to the shelf.</p>'
+    elif bucket == "fail":
+        items_html = '<p class="empty-note">Failed its check — nothing was delivered.</p>'
+    elif bucket in {"working", "retry"}:
+        items_html = '<p class="empty-note">Nothing delivered yet — still on it.</p>'
+    else:
+        items_html = '<p class="empty-note">Waiting its turn.</p>'
+
+    # Close the trust loop where the results live: say in plain English what
+    # the check proved, and keep the raw evidence one click away. The proof
+    # stands on its own — a failed task shows why it failed even when no
+    # 'verified' sentence was written.
+    verified_html = ""
+    if bucket in {"pass", "fail"}:
+        verified_text = str(task.get("verified") or "").strip()
+        proof_tail = str(task.get("check_output_tail") or "").strip()
+        if verified_text:
+            how_label = "How it was checked" if bucket == "pass" else "What the check demanded"
+            verified_html += f'<span class="verified">{how_label}: {html_escape(verified_text)}</span>'
+        if proof_tail:
+            proof_label = "See the proof" if bucket == "pass" else "See why it failed"
+            verified_html += (
+                f'<details class="proof"><summary>{proof_label}</summary>'
+                f"<pre>{html_escape(shorten(proof_tail, 1200))}</pre></details>"
+            )
+
+    links_html = render_task_links(
+        task,
+        state=state,
+        renderer=renderer,
+        force_wrappers=force_wrappers,
+        page_path=page_path,
+    )
+
+    return f"""<div class="work-group">
+      <div class="worker">
+        <span class="glyph {css_bucket}" aria-hidden="true"></span>
+        <span class="name" title="{key}">{key}</span>
+        <span class="state {css_bucket}">{state_word}</span>
+        <span class="time mono">{elapsed}</span>
+        {activity_html}
+      </div>
+      <div class="work-group-body">
+        {items_html}
+        {verified_html}
+        <span class="links">{links_html}</span>
+      </div>
+    </div>"""
+
+
+def render_work_item(
+    item: dict[str, Any],
+    *,
+    task_key: str,
+    state: dict[str, Any],
+    renderer: ArtifactRenderer | None,
+    page_path: Path | None,
+    force_wrappers: bool = False,
+) -> str:
     name = str(item.get("name", "")).strip() or "work"
     source_path = Path(str(item.get("path", "")))
     label, kind = work_label_and_kind(name)
-    # When several tasks deliver a file with the same name (four personas each
-    # writing reaction.md), the filename stops identifying anything — lead
-    # with the task's name instead.
-    if item.get("shared_name"):
-        pretty_task = task_key.replace("-", " ").replace("_", " ").strip()
-        pretty_task = pretty_task[:1].upper() + pretty_task[1:]
-        label = f"{pretty_task} — {Path(name).stem.replace('-', ' ').replace('_', ' ')}"
     href = work_item_href(
         source_path,
         state=state,
@@ -2559,7 +2751,7 @@ def render_work_item(
       {thumb}
       <div class="work-main">
         <a class="work-link" href="{html_escape(href)}">{html_escape(label)}</a>
-        <div class="work-kind">{html_escape(kind)} <span class="work-task muted">{html_escape(task_key)}</span></div>
+        <div class="work-kind">{html_escape(kind)}</div>
       </div>
     </div>"""
 
@@ -2644,24 +2836,6 @@ def image_data_uri(path: Path) -> str:
     return f"data:{mime};base64,{encoded}"
 
 
-def render_status_updates(updates: list[dict[str, str]], *, omitted: int = 0) -> str:
-    if not updates:
-        return '<p class="muted">No updates yet.</p>'
-    items = []
-    for update in updates:
-        stamp = html_escape(str(update.get("time", "")))
-        line = html_escape(str(update.get("line", "")))
-        catch = str(update.get("catch", "")).strip()
-        catch_html = (
-            f'<p class="catch"><b>Caught:</b> {html_escape(catch)}</p>'
-            if catch
-            else ""
-        )
-        items.append(f'<div class="tl-row"><time class="mono">{stamp}</time><div>{line}{catch_html}</div></div>')
-    note = '<p class="omitted-note">earlier updates omitted</p>' if omitted else ""
-    return "".join(items) + note
-
-
 def render_corner_header(state: dict[str, Any], *, live: bool) -> str:
     run_name = html_escape(str(state.get("run_name", "ringer")))
     identity = html_escape(str(state.get("identity", "unknown")))
@@ -2696,8 +2870,6 @@ def render_status_html(
     tasks = state_tasks(state)
     counts = task_status_counts(state)
     briefing = live_briefing_html(state)
-    updates = renderer.transition_feed(state, limit=50) if renderer else []
-    omitted = renderer.omitted_transition_count(50) if renderer else 0
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -2713,11 +2885,6 @@ def render_status_html(
   <h1 id="right-now-heading" class="briefing">{briefing}</h1>
   {render_progress_bar(tasks, counts)}
   {render_work_section(state, renderer=renderer, page_path=page_path, force_wrappers=force_wrappers)}
-  <section class="timeline" aria-labelledby="status-updates-heading">
-    <h2 id="status-updates-heading">What's happening</h2>
-    {render_status_updates(updates, omitted=omitted)}
-  </section>
-  {render_task_strip(tasks, state=state, renderer=renderer, force_wrappers=force_wrappers, page_path=page_path)}
   <footer>
     <span class="mono">Updated {html_escape(local_time_label())}</span>
     <span>·</span>
@@ -2741,8 +2908,6 @@ def render_final_report_html(
     tasks = state_tasks(state)
     counts = task_status_counts(state)
     briefing = final_briefing_html(state)
-    updates = renderer.transition_feed(state, limit=50) if renderer else []
-    omitted = renderer.omitted_transition_count(50) if renderer else 0
 
     return f"""<!doctype html>
 <html lang="en">
@@ -2756,12 +2921,8 @@ def render_final_report_html(
 <div class="page">
   {render_corner_header(state, live=False)}
   <h1 id="what-happened-heading" class="briefing">What happened — {briefing}</h1>
+  {render_progress_bar(tasks, counts)}
   {render_work_section(state, renderer=renderer, page_path=page_path, force_wrappers=force_wrappers, primary=True)}
-  <details class="timeline">
-    <summary><h2 id="status-updates-heading">What happened along the way</h2></summary>
-    {render_status_updates(updates, omitted=omitted)}
-  </details>
-  {render_task_strip(tasks, state=state, renderer=renderer, force_wrappers=force_wrappers, page_path=page_path)}
   <footer>
     <span class="mono">Finished {html_escape(local_time_label())}</span>
   </footer>
@@ -2769,82 +2930,6 @@ def render_final_report_html(
 </body>
 </html>
 """
-
-
-def render_task_strip(
-    tasks: list[dict[str, Any]],
-    *,
-    state: dict[str, Any],
-    renderer: ArtifactRenderer | None = None,
-    force_wrappers: bool = False,
-    page_path: Path | None = None,
-) -> str:
-    rows = "".join(
-        render_task_item(task, state=state, renderer=renderer, force_wrappers=force_wrappers, page_path=page_path)
-        for task in tasks
-    )
-    if not rows:
-        rows = '<p class="empty-note">No tasks.</p>'
-    return f"""<section class="workers" aria-labelledby="tasks-heading">
-    <h2 id="tasks-heading">The workers</h2>
-    {rows}
-  </section>"""
-
-
-def render_task_item(
-    task: dict[str, Any],
-    *,
-    state: dict[str, Any] | None = None,
-    renderer: ArtifactRenderer | None = None,
-    force_wrappers: bool = False,
-    page_path: Path | None = None,
-) -> str:
-    status = str(task.get("status", "queued"))
-    key = html_escape(str(task.get("key", "")))
-    bucket = task_state_bucket(status)
-    css_bucket = "working" if bucket == "working" else bucket
-    state_word = html_escape(task_state_word(status))
-    elapsed = html_escape(fmt_compact_duration(task.get("elapsed_s")))
-    activity = task_activity_line(task, bucket)
-    activity_html = (
-        f'<span class="activity" title="{html_escape(activity)}">{html_escape(activity)}</span>'
-        if activity
-        else ""
-    )
-    links_html = render_task_links(
-        task,
-        state=state or {},
-        renderer=renderer,
-        force_wrappers=force_wrappers,
-        page_path=page_path,
-    )
-
-    # Close the trust loop for finished work: say in plain English what the
-    # check proved, and keep the raw evidence one click away.
-    verified_html = ""
-    verified_text = str(task.get("verified") or "").strip()
-    if verified_text and bucket in {"pass", "fail"}:
-        proof_tail = str(task.get("check_output_tail") or "").strip()
-        proof_html = (
-            f'<details class="proof"><summary>See the proof</summary>'
-            f"<pre>{html_escape(shorten(proof_tail, 1200))}</pre></details>"
-            if proof_tail
-            else ""
-        )
-        verified_html = (
-            f'<span class="verified">How it was checked: {html_escape(verified_text)}</span>'
-            f"{proof_html}"
-        )
-
-    return f"""<div class="worker">
-      <span class="glyph {css_bucket}" aria-hidden="true"></span>
-      <span class="name" title="{key}">{key}</span>
-      <span class="state {css_bucket}">{state_word}</span>
-      <span class="time mono">{elapsed}</span>
-      {activity_html}
-      {verified_html}
-      <span class="links">{links_html}</span>
-    </div>"""
 
 
 def task_activity_line(task: dict[str, Any], bucket: str) -> str:
@@ -3695,7 +3780,30 @@ class RingerRunner:
             self.run_id,
             runtime.task.key,
         )
-        for expect_path in runtime.task.expect_files:
+        expect_files: tuple[str, ...] = runtime.task.expect_files
+        worktree_task = self.manifest.worktrees and self.manifest.repo is not None
+        if not expect_files and not worktree_task:
+            # (In worktrees mode the taskdir root is a whole repo checkout —
+            # guessing there would harvest README.md and friends, not work.)
+            # No declared deliverables: rescue what the worker left at the
+            # top of its task directory, or the run's real output (a review,
+            # a report) never reaches the results page. Declaring
+            # expect_files remains the way to control exactly what is shown.
+            candidates = sorted(
+                path.name
+                for path in runtime.taskdir.glob("*")
+                if path.is_file()
+                and not path.name.startswith(".")
+                and path.suffix.lower() in FALLBACK_HARVEST_SUFFIXES
+            )
+            if len(candidates) > FALLBACK_HARVEST_MAX_FILES:
+                notes.append(
+                    f"Only the first {FALLBACK_HARVEST_MAX_FILES} of {len(candidates)} files were "
+                    "collected automatically; declare expect_files to choose exactly what is kept."
+                )
+                candidates = candidates[:FALLBACK_HARVEST_MAX_FILES]
+            expect_files = tuple(candidates)
+        for expect_path in expect_files:
             source = Verifier._expect_file_path(runtime.taskdir, expect_path)
             try:
                 stat = source.stat()
@@ -3837,6 +3945,7 @@ class RingerRunner:
             spec=spec,
             full_access=runtime.task.full_access,
             engine_args=runtime.task.engine_args,
+            model=runtime.task.model,
         )
         append_text(
             log_path,
@@ -4113,8 +4222,10 @@ def build_worker_command(
     spec: str,
     full_access: bool,
     engine_args: tuple[str, ...] = (),
+    model: str = "",
 ) -> list[str]:
     access_args = engine.full_access_args if full_access else engine.sandbox_args
+    resolved_model = model or engine.model_default
     command = [engine.bin]
     for item in engine.args_template:
         if item == "{access_args}":
@@ -4129,7 +4240,11 @@ def build_worker_command(
         if item == "{full_access_args}":
             command.extend(engine.full_access_args)
             continue
-        command.append(item.replace("{taskdir}", str(taskdir)).replace("{spec}", spec))
+        command.append(
+            item.replace("{taskdir}", str(taskdir))
+            .replace("{spec}", spec)
+            .replace("{model}", resolved_model)
+        )
     return command
 
 
@@ -4137,6 +4252,19 @@ def validate_manifest_engines(manifest: Manifest, config: AppConfig) -> None:
     missing = sorted({task.engine for task in manifest.tasks if task.engine not in config.engines})
     if missing:
         raise ValueError(f"unknown worker engine(s): {', '.join(missing)}")
+    for task in manifest.tasks:
+        engine = config.engines[task.engine]
+        takes_model = any("{model}" in item for item in engine.args_template)
+        if takes_model and not (task.model or engine.model_default):
+            raise ValueError(
+                f"task {task.key}: engine {engine.name} needs a model — set the task's "
+                f"\"model\" field or engines.{engine.name}.model_default in config.toml"
+            )
+        if task.model and not takes_model:
+            raise ValueError(
+                f"task {task.key}: \"model\" is set but engine {engine.name} has no "
+                "{model} placeholder in its args_template, so it would be silently ignored"
+            )
 
 
 def read_dashboard_html() -> str:
@@ -4442,6 +4570,7 @@ def dry_run(
                 spec=task.spec,
                 full_access=task.full_access,
                 engine_args=task.engine_args,
+                model=task.model,
             )
             if engine is not None
             else []

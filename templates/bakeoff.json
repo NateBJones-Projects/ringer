@@ -7,7 +7,9 @@
       "key": "{{MODEL_KEY}}--{{SCENARIO_KEY}}",
       "spec": "You are running one cell of a model bakeoff for {{PRODUCT}}: the SAME scenario is run against each candidate model, and every cell is graded against the same contract, so results are comparable. SCENARIO: {{SCENARIO — the persona or task, identical wording across all cells of this scenario row}}. HOW TO RUN: drive the real product with the candidate model pinned, e.g.: {{HARNESS_COMMAND_WITH_MODEL — e.g. PRODUCT_MODEL='{{CANDIDATE_MODEL}}' node harness.mjs send \"<message>\" --session '{{WORKDIR}}/{{MODEL_KEY}}--{{SCENARIO_KEY}}'}}. Run the scenario faithfully; do not adapt your behavior to the model. If the harness reports a hard failure, record it in evaluator-notes.md and stop — a model that fails the harness is a result, not an error. AFTER the run, write evaluator-notes.md in the session directory grading the output against the shared contract, citing evidence per criterion: {{OUTPUT_CONTRACT — same numbered criteria for every cell}}. End with a LINE: 'VERDICT: <score or pass/fail per criterion>' so the orchestrator can tabulate the matrix.",
       "check": "test -s '{{WORKDIR}}/{{MODEL_KEY}}--{{SCENARIO_KEY}}/evaluator-notes.md' && grep -q '^VERDICT:' '{{WORKDIR}}/{{MODEL_KEY}}--{{SCENARIO_KEY}}/evaluator-notes.md' && {{SESSION_VALIDATOR — a command that validates the session actually ran against the real product/model and prints which criterion failed, e.g. node harness.mjs validate '{{WORKDIR}}/{{MODEL_KEY}}--{{SCENARIO_KEY}}'}} || { echo 'FAIL: evaluator-notes.md missing, has no VERDICT line, or session validation failed'; exit 1; }",
-      "expect_files": [],
+      "expect_files": [
+        "evaluator-notes.md"
+      ],
       "timeout_s": 1800,
       "verified": "the graded notes end in a verdict line and the session validator confirmed the model actually ran the scenario"
     }

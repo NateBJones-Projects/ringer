@@ -81,25 +81,28 @@ token_regex = "tokens\\s+used\\s*:?\\s*([0-9][0-9,]*)"
 # sandbox_args = []
 # full_access_args = []
 
-# OpenCode + OpenRouter — the cheap-intelligence lane. A working example using
-# GLM-5.2 (z-ai/glm-5.2, roughly $0.74/M input, $2.33/M output as of 2026-07).
+# OpenCode + OpenRouter — the universal model harness. One engine block runs
+# ANY OpenRouter-served model: the {model} placeholder is filled per task from
+# the manifest's "model" field, falling back to model_default below. Example
+# default: GLM-5.2 (z-ai/glm-5.2, roughly $0.74/M input, $2.33/M output as of
+# 2026-07) — the cheap-intelligence lane.
 # OpenCode has no OS sandbox, so `bin` points at engines/opencode-sandboxed.sh
 # (macOS Seatbelt: network + reads open, writes confined to the task dir, a
 # per-run scratch dir, and OpenCode's state/config dirs). Auth: put your
 # OpenRouter key where your OpenCode version expects it — commonly
 # ~/.local/share/opencode/auth.json ({"openrouter": {"type": "api", "key": "..."}});
 # confirm the path with your installed CLI.
-# Per-task engine_args can swap models ("-m", "openrouter/<model>") or set
-# reasoning effort ("--variant", "low|high|max"). Uncomment and set an absolute
-# path for `bin` to enable.
+# Per-task engine_args can set reasoning effort ("--variant", "low|high|max").
+# Uncomment and set an absolute path for `bin` to enable.
 # [engines.opencode]
 # bin = "/absolute/path/to/ringer/engines/opencode-sandboxed.sh"
+# model_default = "openrouter/z-ai/glm-5.2"
 # args_template = [
 #   "{taskdir}",
 #   "{access_args}",
 #   "run",
 #   "-m",
-#   "openrouter/z-ai/glm-5.2",
+#   "{model}",
 #   "--dangerously-skip-permissions",
 #   "--format",
 #   "json",

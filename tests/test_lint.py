@@ -243,6 +243,51 @@ class LintManifestTests(unittest.TestCase):
             "one: spec is probably underspecified; workers are stateless and cannot ask questions.",
         )
 
+    def test_w8_file_pointer_spec(self) -> None:
+        findings = lint_manifest(
+            self.manifest(
+                [self.task(spec="Read the instructions at /tmp/brief.md and do exactly what it says in there.")]
+            )
+        )
+        self.assertTrue(
+            any("pointer to an instruction file" in item for item in findings),
+            f"expected pointer-spec finding, got: {findings}",
+        )
+
+        # A long spec that references files as source material is fine.
+        long_spec = (
+            "You are a read-only reviewer. Study the code bundle at /tmp/bundle.txt as your "
+            "source material, then write ./review.md with sections VERDICT, BLOCKERS, and "
+            "EVIDENCE. For every blocker cite file and line from the bundle. Do not modify "
+            "any file other than ./review.md. The review must judge correctness, security, "
+            "and migration safety, and each claim needs a quoted line of code as evidence. "
+            "If a concern cannot be verified from the bundle alone, list it under an "
+            "UNCERTAIN heading instead of asserting it. Keep the verdict to one sentence. "
+            "Write plainly; the reader is a busy maintainer deciding whether to merge today."
+        )
+        findings = lint_manifest(self.manifest([self.task(spec=long_spec, expect_files=["review.md"])]))
+        self.assertFalse(
+            any("pointer to an instruction file" in item for item in findings),
+            f"long contextual spec should not be flagged: {findings}",
+        )
+
+    def test_w9_missing_expect_files(self) -> None:
+        findings = lint_manifest(self.manifest([self.task(expect_files=[])]))
+        self.assertTrue(
+            any("no expect_files" in item for item in findings),
+            f"expected missing-expect_files finding, got: {findings}",
+        )
+
+        # Worktrees mode legitimately exports deliverables outside the
+        # taskdir (patch export), so the finding must not fire there.
+        findings = lint_manifest(
+            self.manifest([self.task(expect_files=[])], worktrees=True)
+        )
+        self.assertFalse(
+            any("no expect_files" in item for item in findings),
+            f"worktrees manifest should not be flagged for expect_files: {findings}",
+        )
+
     def test_compliant_manifest_is_clean(self) -> None:
         manifest = self.manifest(
             [

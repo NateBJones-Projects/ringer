@@ -63,7 +63,7 @@ class DesignReferenceTests(unittest.TestCase):
         self.assertEqual(expected_dark_override, token_values(css_block(ARTIFACT_BASE_CSS, ':root[data-theme="dark"]')))
         self.assertEqual(expected_light_override, token_values(css_block(ARTIFACT_BASE_CSS, ':root[data-theme="light"]')))
 
-    def test_live_page_uses_reference_structure_and_catch_callout(self) -> None:
+    def test_live_page_uses_reference_structure(self) -> None:
         render_status_html(
             self.state([self.task("contract-a", "running", attempts=1)]),
             renderer=self.renderer,
@@ -83,8 +83,8 @@ class DesignReferenceTests(unittest.TestCase):
         self.assertIn('<header class="corner">', html)
         self.assertIn('class="live-dot is-live"', html)
         self.assertIn('<div class="rounds"', html)
-        self.assertIn('<p class="catch"><b>Caught:</b> FAIL: quoted text not found</p>', html)
-        self.assertIn('<section class="workers"', html)
+        self.assertIn('<section class="work"', html)
+        self.assertIn('<div class="work-group">', html)
         self.assertIn('<div class="worker">', html)
         self.assertIn('<span class="state retry">sent back — redoing</span>', html)
         self.assertIn('<span class="activity" title="Reading section 4">Reading section 4</span>', html)

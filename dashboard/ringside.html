@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Ringside</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6' fill='%2335d0ff'/%3E%3C/svg%3E">
   <style>
     :root {
       color-scheme: dark;
@@ -336,6 +337,48 @@
       overflow-wrap: break-word;
     }
     .catch b { color: var(--fail); font-weight: 650; }
+    .stream .brief {
+      margin: 0 0 10px;
+      border-left: 2px solid var(--hairline);
+      background: var(--surface);
+    }
+    .stream .brief summary {
+      cursor: pointer;
+      padding: 8px 12px;
+      font-size: 12.5px;
+      font-weight: 650;
+      color: var(--muted);
+      list-style: none;
+    }
+    .stream .brief summary::-webkit-details-marker { display: none; }
+    .stream .brief summary::before { content: "▸ "; }
+    .stream .brief[open] summary::before { content: "▾ "; }
+    .stream .brief pre {
+      max-height: 32vh;
+      border-left: none;
+      border-top: 1px solid var(--hairline);
+    }
+    .stream .brief .brief-check {
+      margin: 0;
+      padding: 8px 12px;
+      border-top: 1px solid var(--hairline);
+      font-size: 11.5px;
+      color: var(--muted);
+      overflow-wrap: anywhere;
+    }
+    .stream .verdict {
+      margin: 10px 0 0;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .stream .verdict .how { margin: 0 0 6px; }
+    .stream .verdict .how b { color: var(--pass); font-weight: 650; }
+    .stream .verdict details summary {
+      cursor: pointer;
+      font-size: 12.5px;
+      color: var(--muted);
+    }
+    .stream .verdict pre { max-height: 28vh; margin-top: 6px; }
 
     .artifact-layout {
       min-height: calc(100vh - 83px);
@@ -691,6 +734,99 @@
       scroller.scrollTop = pageY;
     }
 
+    // ── Flicker-free rendering ────────────────────────────────────────────
+    // Every poll used to rebuild whole subtrees (and reset the artifact
+    // iframe's srcdoc), which reads as a blink even when nothing changed.
+    // Instead, build the new tree and PATCH the live DOM: touch only nodes
+    // whose content actually differs, keyed by data-key so reordering moves
+    // real nodes instead of rewriting them in place under stale listeners.
+    function morphNode(have, want) {
+      if (have.nodeType === Node.ELEMENT_NODE) {
+        for (const name of [...have.getAttributeNames()]) {
+          // open/closed on a disclosure is the reader's choice; server HTML
+          // always ships it closed, so never sync it back shut.
+          if (name === "open" && have.tagName === "DETAILS") continue;
+          if (!want.hasAttribute(name)) have.removeAttribute(name);
+        }
+        for (const name of want.getAttributeNames()) {
+          if (name === "open" && have.tagName === "DETAILS") continue;
+          const value = want.getAttribute(name);
+          if (have.getAttribute(name) !== value) have.setAttribute(name, value);
+        }
+      }
+      morphChildren(have, want);
+    }
+
+    function morphChildren(have, want) {
+      const oldByKey = new Map();
+      const oldKids = [...have.childNodes];
+      for (const child of oldKids) {
+        const key = child.nodeType === Node.ELEMENT_NODE ? child.getAttribute("data-key") : null;
+        if (key) oldByKey.set(key, child);
+      }
+      let positional = 0;
+      const desired = [...want.childNodes].map(wanted => {
+        const key = wanted.nodeType === Node.ELEMENT_NODE ? wanted.getAttribute("data-key") : null;
+        let existing = null;
+        if (key) {
+          existing = oldByKey.get(key) || null;
+        } else {
+          while (positional < oldKids.length) {
+            const candidate = oldKids[positional];
+            positional += 1;
+            const candidateKey = candidate.nodeType === Node.ELEMENT_NODE ? candidate.getAttribute("data-key") : null;
+            if (candidateKey) continue;
+            existing = candidate;
+            break;
+          }
+        }
+        const compatible = existing
+          && existing.nodeType === wanted.nodeType
+          && (existing.nodeType !== Node.ELEMENT_NODE || existing.tagName === wanted.tagName);
+        if (!compatible) return wanted;
+        if (existing.nodeType === Node.TEXT_NODE || existing.nodeType === Node.COMMENT_NODE) {
+          if (existing.nodeValue !== wanted.nodeValue) existing.nodeValue = wanted.nodeValue;
+        } else if (existing.nodeType === Node.ELEMENT_NODE) {
+          morphNode(existing, wanted);
+        }
+        return existing;
+      });
+      // Re-place only nodes that are out of position; untouched nodes keep
+      // focus, scroll, and hover exactly as they were.
+      let index = 0;
+      for (const node of desired) {
+        const current = have.childNodes[index];
+        if (current !== node) have.insertBefore(node, current || null);
+        index += 1;
+      }
+      while (have.childNodes.length > desired.length) have.lastChild.remove();
+    }
+
+    function syncSelect(select, desired, value) {
+      while (select.options.length > desired.length) select.remove(select.options.length - 1);
+      desired.forEach((want, index) => {
+        let option = select.options[index];
+        if (!option) {
+          option = document.createElement("option");
+          select.add(option);
+        }
+        if (option.value !== want.value) option.value = want.value;
+        if (option.textContent !== want.text) option.textContent = want.text;
+      });
+      if (value !== undefined && select.value !== value) select.value = value;
+    }
+
+    function sizeFrame(frame) {
+      try {
+        const doc = frame.contentDocument;
+        if (!doc || !doc.documentElement) return;
+        // Morphing syncs attributes from server HTML, which never carries
+        // this inline style — re-assert it so the pane owns all scrolling.
+        doc.documentElement.style.overflowY = "hidden";
+        frame.style.height = Math.max(120, doc.documentElement.scrollHeight) + "px";
+      } catch (_e) {}
+    }
+
     function renderTop() {
       const anyLive = state.runs.some(run => run.state === "live");
       els.topDot.classList.toggle("live", anyLive);
@@ -698,14 +834,14 @@
     }
 
     function renderLive() {
-      const fragment = document.createDocumentFragment();
+      const staging = document.createElement("div");
       if (!state.runs.length) {
         const empty = document.createElement("div");
         empty.className = "empty";
         empty.textContent = "Nothing has run yet. Start something with: ./ringer.py run manifest.json";
-        fragment.appendChild(empty);
+        staging.appendChild(empty);
         state.rendering = true;
-        preserveScroll(() => { els.runs.replaceChildren(fragment); });
+        preserveScroll(() => { morphChildren(els.runs, staging); });
         state.rendering = false;
         syncLogPolling();
         return;
@@ -719,11 +855,12 @@
         const note = document.createElement("p");
         note.className = "empty-note";
         note.textContent = "No agent activity recorded for this artifact yet.";
-        fragment.appendChild(note);
+        staging.appendChild(note);
       }
       visibleRuns.forEach((run, runIndex) => {
         const section = document.createElement("details");
         section.className = `run ${run.state}`;
+        section.dataset.key = run.__id;
         const preferred = state.runOpen[run.__id];
         section.open = preferred !== undefined ? preferred : (run.state === "live" || runIndex === 0);
         section.addEventListener("toggle", () => {
@@ -791,6 +928,7 @@
           const isExpanded = state.expanded && state.expanded.runId === run.__id && state.expanded.taskKey === key;
           const row = document.createElement("button");
           row.className = "worker";
+          row.dataset.key = `worker:${key}`;
           row.type = "button";
           row.setAttribute("aria-expanded", String(Boolean(isExpanded)));
           row.addEventListener("click", () => toggleWorker(run, task, taskIndex));
@@ -821,12 +959,12 @@
           if (isExpanded) workers.appendChild(renderStream(run, task, taskIndex));
         });
         section.appendChild(workers);
-        fragment.appendChild(section);
+        staging.appendChild(section);
         if (runIndex < state.runs.length - 1) section.setAttribute("aria-label", run.run_name);
       });
 
       state.rendering = true;
-      preserveScroll(() => { els.runs.replaceChildren(fragment); });
+      preserveScroll(() => { morphChildren(els.runs, staging); });
       state.rendering = false;
       syncLogPolling();
     }
@@ -835,16 +973,45 @@
       const panel = document.createElement("div");
       panel.className = "stream";
       panel.dataset.stream = "true";
+      panel.dataset.key = `stream:${taskKey(task, taskIndex)}`;
+
+      // The brief: the exact prompt this model was handed, plus the pass
+      // test that will judge its work. Watchers should never have to guess
+      // what an agent was asked to do.
+      const brief = document.createElement("details");
+      brief.className = "brief";
+      const briefSummary = document.createElement("summary");
+      briefSummary.textContent = "What it was asked to do";
+      brief.appendChild(briefSummary);
+      const briefPre = document.createElement("pre");
+      briefPre.textContent = String(task.spec || "").trim() || "No brief was recorded for this worker.";
+      brief.appendChild(briefPre);
+      const check = String(task.check || "").trim();
+      if (check) {
+        const checkLine = document.createElement("p");
+        checkLine.className = "brief-check mono";
+        checkLine.textContent = `Pass test: ${check}`;
+        brief.appendChild(checkLine);
+      }
+      panel.appendChild(brief);
+
       const head = document.createElement("div");
       head.className = "stream-head mono";
       const title = document.createElement("span");
       title.textContent = "Live work stream";
+      const engineTag = document.createElement("span");
+      const model = String(task.model || "").trim();
+      const engineName = String(task.engine || "").trim();
+      engineTag.textContent = model ? `${engineName || "engine"} · ${model}` : engineName;
       const meta = document.createElement("span");
-      meta.textContent = taskIsRunning(task) ? "polling every 1s" : "final snapshot";
-      head.append(title, meta);
+      const attempts = numberOrZero(task.attempts);
+      const attemptNote = attempts > 1 ? `attempt ${attempts} · ` : "";
+      meta.textContent = attemptNote + (taskIsRunning(task) ? "polling every 1s" : "final snapshot");
+      head.append(title, engineTag, meta);
       panel.appendChild(head);
 
       const pre = document.createElement("pre");
+      pre.className = "stream-log";
       pre.tabIndex = 0;
       pre.textContent = state.expanded?.logText || "No log output yet.";
       pre.addEventListener("scroll", () => {
@@ -862,6 +1029,37 @@
         bold.textContent = "Log stream unavailable:";
         error.append(bold, document.createTextNode(` ${state.expanded.error}`));
         panel.appendChild(error);
+      }
+
+      // Once the check has run, close the trust loop right here: what the
+      // check proved, and the raw output it printed while proving it.
+      const kind = taskKind(task);
+      if (kind === "pass" || kind === "fail") {
+        const verified = String(task.verified || "").trim();
+        const proofTail = String(task.check_output_tail || "").trim();
+        if (verified || proofTail) {
+          const verdict = document.createElement("div");
+          verdict.className = "verdict";
+          if (verified) {
+            const how = document.createElement("p");
+            how.className = "how";
+            const label = document.createElement("b");
+            label.textContent = kind === "pass" ? "How it was checked:" : "What the check demanded:";
+            how.append(label, document.createTextNode(` ${verified}`));
+            verdict.appendChild(how);
+          }
+          if (proofTail) {
+            const proof = document.createElement("details");
+            const proofSummary = document.createElement("summary");
+            proofSummary.textContent = kind === "pass" ? "See the proof" : "See why it failed";
+            proof.appendChild(proofSummary);
+            const proofPre = document.createElement("pre");
+            proofPre.textContent = proofTail;
+            proof.appendChild(proofPre);
+            verdict.appendChild(proof);
+          }
+          panel.appendChild(verdict);
+        }
       }
       requestAnimationFrame(() => {
         if (state.expanded?.pinned !== false) {
@@ -933,7 +1131,7 @@
     }
 
     function updateStreamText(text) {
-      const pre = els.runs.querySelector(".stream pre");
+      const pre = els.runs.querySelector(".stream pre.stream-log");
       if (!pre) return;
       const shouldPin = state.expanded?.pinned !== false || pre.scrollHeight - pre.scrollTop - pre.clientHeight < 28;
       const scrollTop = pre.scrollTop;
@@ -1108,32 +1306,27 @@
 
     function renderArtifacts() {
       syncArtifactSelection();
-      const options = document.createDocumentFragment();
+      let options;
       if (!state.artifacts.length) {
-        const option = document.createElement("option");
-        option.value = "";
-        option.textContent = state.libraryError ? "Ringside reconnecting…" : "No artifacts yet";
-        options.appendChild(option);
+        options = [{value: "", text: state.libraryError ? "Ringside reconnecting…" : "No artifacts yet"}];
       } else {
-        state.artifacts.forEach(artifact => {
-          const option = document.createElement("option");
-          option.value = artifact.name;
+        options = state.artifacts.map(artifact => {
           const marker = artifact.state === "live" ? "● " : "";
-          option.textContent = `${marker}${artifact.name} — ${artifact.state === "live" ? "live" : artifact.state} · updated ${relativeAgo(artifact.updated_at)}`;
-          option.selected = artifact.name === state.artifactName;
-          options.appendChild(option);
+          return {
+            value: artifact.name,
+            text: `${marker}${artifact.name} — ${artifact.state === "live" ? "live" : artifact.state} · updated ${relativeAgo(artifact.updated_at)}`
+          };
         });
       }
-      els.artifactPicker.replaceChildren(options);
+      syncSelect(els.artifactPicker, options, state.artifacts.length ? state.artifactName : "");
       els.artifactPicker.disabled = !state.artifacts.length;
     }
 
     function renderArtifactControls() {
       const artifact = selectedArtifact();
-      const target = selectedArtifactTarget();
       if (!artifact) {
         els.artifactStatus.textContent = state.libraryError ? "reconnecting…" : "No artifact selected.";
-        els.artifactVersion.replaceChildren();
+        syncSelect(els.artifactVersion, []);
         els.artifactVersion.disabled = true;
         return;
       }
@@ -1141,26 +1334,24 @@
       els.artifactStatus.textContent = artifact.state === "live"
         ? "live — updating"
         : `finished ${relativeAgo(artifact.updated_at)}`;
-      const options = document.createDocumentFragment();
-      const current = document.createElement("option");
-      current.value = "live";
-      current.textContent = artifact.state === "live"
-        ? "Now — live, updating"
-        : `Now — finished ${relativeAgo(artifact.updated_at)}`;
-      options.appendChild(current);
+      const options = [{
+        value: "live",
+        text: artifact.state === "live"
+          ? "Now — live, updating"
+          : `Now — finished ${relativeAgo(artifact.updated_at)}`
+      }];
       const total = artifact.versions.length;
       artifact.versions.forEach((version, index) => {
-        const option = document.createElement("option");
-        option.value = version.key;
         const outcome = version.tasks_fail > 0
           ? `${version.tasks_pass} passed, ${version.tasks_fail} failed`
           : `all ${version.tasks_pass} passed`;
-        option.textContent = `Round ${total - index} — ${outcome} · ${formatVersionTime(version.finished_at)}`;
-        options.appendChild(option);
+        options.push({
+          value: version.key,
+          text: `Round ${total - index} — ${outcome} · ${formatVersionTime(version.finished_at)}`
+        });
       });
-      els.artifactVersion.replaceChildren(options);
+      syncSelect(els.artifactVersion, options, state.artifactVersion);
       els.artifactVersion.disabled = false;
-      els.artifactVersion.value = state.artifactVersion;
     }
 
     function formatVersionTime(value) {
@@ -1209,6 +1400,19 @@
         if (state.frameKey === target.key && state.frameContent === html) return;
         let frame = els.frameWrap.querySelector("iframe");
         const sameDoc = frame && state.frameKey === target.key;
+        if (sameDoc && frame.contentDocument?.documentElement) {
+          // Same artifact, new content: patch the live document in place.
+          // Resetting srcdoc tears the whole page down — that teardown IS
+          // the blink, and it also loses the reader's place and any open
+          // disclosure. Morph touches only what changed.
+          try {
+            const next = new DOMParser().parseFromString(html, "text/html");
+            morphNode(frame.contentDocument.documentElement, next.documentElement);
+            sizeFrame(frame);
+            state.frameContent = html;
+            return;
+          } catch (_e) { /* fall through to a full reload */ }
+        }
         const keepScroll = sameDoc ? (window.scrollY || 0) : 0;
         if (!frame || !sameDoc) {
           frame = document.createElement("iframe");
@@ -1218,7 +1422,7 @@
         frame.addEventListener("load", () => {
           try {
             const doc = frame.contentDocument;
-            frame.style.height = Math.max(120, doc.documentElement.scrollHeight) + "px";
+            sizeFrame(frame);
             doc.documentElement.style.overflowY = "hidden";
             if (keepScroll) window.scrollTo(0, keepScroll);
           } catch (_e) {}
@@ -1254,10 +1458,11 @@
       const strip = document.getElementById("machine-strip");
       if (!strip) return;
       const runs = [...state.runs].sort((a, b) => parseTime(a.started_at) - parseTime(b.started_at)).slice(-10);
-      const frag = document.createDocumentFragment();
+      const staging = document.createElement("div");
       runs.forEach(run => {
         const seg = document.createElement("button");
         seg.type = "button";
+        seg.dataset.key = run.__id;
         seg.className = run.state === "live" ? "live" : (run.fail > 0 || run.state === "died" ? "fail" : "pass");
         seg.title = `${run.run_name} — ${run.state === "live" ? "live" : run.state} (${run.identity})`;
         seg.setAttribute("aria-label", seg.title);
@@ -1273,10 +1478,10 @@
           renderLive();
           loadArtifactFrame(true);
         });
-        frag.appendChild(seg);
+        staging.appendChild(seg);
       });
       state.rendering = true;
-      strip.replaceChildren(frag);
+      morphChildren(strip, staging);
       state.rendering = false;
     }
 
@@ -1292,6 +1497,7 @@
       }
       renderTop();
       renderArtifacts();
+      renderArtifactControls();
       loadArtifactFrame(false);
     }
     els.artifactVersion.addEventListener("change", () => {

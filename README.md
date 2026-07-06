@@ -88,8 +88,10 @@ Each task gets its own directory, its own worker, its own log, and its own verdi
 | `check` | Shell command run after the worker exits; exit 0 = PASS |
 | `expect_files` | Files that must exist and be non-empty before the check runs |
 | `engine` | Which configured engine runs this task (default `codex`) |
+| `model` | Which model a harness engine runs for this task — fills the engine's `{model}` placeholder (e.g. `"openrouter/moonshotai/kimi-k2.7"`); empty uses the engine's `model_default` |
 | `timeout_s` | Per-task kill timer (default 900) |
 | `engine_args` | Extra CLI flags for this task's worker, spliced in at the engine's `{engine_args}` placeholder — e.g. `["-c", "model_reasoning_effort=low"]` so the orchestrator picks reasoning depth per task |
+| `verified` | One plain-English sentence saying what the check proves — shown on the results page next to "finished & checked" |
 | `full_access` | Worker runs unsandboxed — required for workers that spawn their own sub-workers; must also be enabled in config |
 | `worktrees` (run-level) | Give each task an isolated git worktree of `repo` so parallel workers can't collide |
 
@@ -138,13 +140,13 @@ args_template = ["run", "{spec}", "--dir", "{taskdir}"]
 
 Per-task `"engine": "mymodel"` routes work to it. `config.sample.toml` ships commented examples for Grok and OpenCode setups — the invariants (stdin closed, process-group kill, executed verification, raw logs) apply to every engine identically.
 
-### The cheap-intelligence lane: OpenCode + OpenRouter GLM-5.2
+### The universal harness: OpenCode + OpenRouter
 
-Not every task in a swarm needs your most expensive model. `config.sample.toml` includes a ready-to-uncomment engine that runs [OpenCode](https://opencode.ai) headless against OpenRouter's `z-ai/glm-5.2` — roughly $0.74/M input and $2.33/M output (2026-07), about 20-30x cheaper output than frontier coding models. A complete write-code-and-pass-the-check task lands around a penny.
+Unless a model ships its own first-class harness (Codex does), OpenCode is the harness that runs it — one engine block covers every OpenRouter-served model. `config.sample.toml` includes a ready-to-uncomment engine whose `{model}` placeholder is filled per task from the manifest's `"model"` field, with `model_default` as the fallback. The shipped default is OpenRouter's `z-ai/glm-5.2` — roughly $0.74/M input and $2.33/M output (2026-07), about 20-30x cheaper output than frontier coding models; a complete write-code-and-pass-the-check task lands around a penny.
 
 OpenCode ships no OS sandbox, so the engine's `bin` points at an absolute path to `engines/opencode-sandboxed.sh` (ringer does not resolve engine bins relative to the repo): a macOS Seatbelt wrapper that leaves network and reads open but confines writes to the task dir, a per-run scratch dir (wired as the agent's `TMPDIR`/`XDG_CACHE_HOME`), and OpenCode's own state/config dirs. Its `--dangerously-skip-permissions` flag only silences OpenCode's interactive prompts; Seatbelt is the actual containment. Task paths reach the profile as `sandbox-exec -D` parameters rather than string interpolation, so a task dir with quotes or parens can't inject sandbox rules. `--no-sandbox` is wired as the engine's `full_access_args`, so ringer's `allow_full_access` gate still governs escapes. Non-macOS installs need their own sandbox (or full-access mode).
 
-Route with per-task `"engine": "opencode"`, and tune per task via `engine_args`: `["-m", "openrouter/<any-model>"]` swaps models, `["--variant", "low|high|max"]` sets reasoning effort. A sensible split: mechanical or tightly-specced tasks on the cheap lane, gnarly ones on your frontier engine — the executed check catches shortfalls either way, and `swarm_runs` rows tell you whether the cheap lane's pass rate holds.
+Route with per-task `"engine": "opencode"`, pick the model with per-task `"model": "openrouter/<any-model>"`, and set reasoning effort via `engine_args`: `["--variant", "low|high|max"]`. A sensible split: mechanical or tightly-specced tasks on the cheap lane, gnarly ones on your frontier engine — the executed check catches shortfalls either way, and `swarm_runs` rows tell you whether the cheap lane's pass rate holds.
 
 ## Ringside — mission control
 

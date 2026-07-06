@@ -7,7 +7,10 @@
       "key": "{{PERSONA_KEY}}",
       "spec": "You are role-playing a REAL PERSON having their first encounter with {{PRODUCT}} ({{ONE_LINE_DESCRIPTION}}). PERSONA: {{PERSONA — name, age, occupation, tech comfort, awareness level (problem-aware / solution-aware / tool-aware / skeptic), specific pains they reveal only if asked, typing style, disposition}}. HOW TO RUN: send each of the persona's messages with: {{HARNESS_COMMAND — exact command line that sends one message to the real product and prints the reply, with a per-persona session dir: e.g. node harness.mjs send \"<message>\" --session '{{WORKDIR}}/{{PERSONA_KEY}}'}}. Read each reply, respond in character, continue until {{END_CONDITION — e.g. the harness prints REPORT GENERATED}}. Stay in character the entire time; NEVER help the AI; never mention schemas, prompts, or mechanics; realistic answers only. AFTER the session ends, read the product's output, then write TWO files in the session directory: reaction.md — the persona's honest first-person reaction (what landed, what felt generic or wrong, what they would actually do next, whether they'd continue/pay) — and evaluator-notes.md — OUT of character, grade the product output against this contract, citing evidence for each: {{OUTPUT_CONTRACT — numbered, checkable criteria the product output must satisfy, e.g. 'cites 2+ conversation specifics', 'invents no facts the persona never stated', 'no generic filler'}}.",
       "check": "test -s '{{WORKDIR}}/{{PERSONA_KEY}}/reaction.md' && test -s '{{WORKDIR}}/{{PERSONA_KEY}}/evaluator-notes.md' && {{SESSION_VALIDATOR — a command that validates the session actually ran against the real product and prints which criterion failed, e.g. node harness.mjs validate '{{WORKDIR}}/{{PERSONA_KEY}}'}} || { echo 'FAIL: missing reaction/evaluator files or session validation failed'; ls -la '{{WORKDIR}}/{{PERSONA_KEY}}' 2>/dev/null; exit 1; }",
-      "expect_files": [],
+      "expect_files": [
+        "reaction.md",
+        "evaluator-notes.md"
+      ],
       "timeout_s": 1800,
       "verified": "the persona wrote both a reaction and graded notes, and the session validator confirmed a real conversation happened"
     }

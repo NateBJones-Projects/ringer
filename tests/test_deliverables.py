@@ -198,6 +198,44 @@ class DeliverableTests(unittest.TestCase):
         self.assertIn("huge.bin", runtime.deliverable_notes[0])
         self.assertIn("20 MB", runtime.deliverable_notes[0])
 
+    def test_harvest_falls_back_to_taskdir_when_no_expect_files(self) -> None:
+        task = TaskSpec(
+            key="task-one",
+            spec="Create the requested outputs.",
+            check="true",
+            engine="mock",
+            expect_files=(),
+        )
+        runner, runtime = self.runtime_for(task)
+        (runtime.taskdir / "review.md").write_text("# Verdict\nfine\n", encoding="utf-8")
+        (runtime.taskdir / "site.html").write_text("<h1>hi</h1>\n", encoding="utf-8")
+        (runtime.taskdir / ".hidden.md").write_text("nope\n", encoding="utf-8")
+        (runtime.taskdir / "junk.tmp").write_text("nope\n", encoding="utf-8")
+        (runtime.taskdir / "sub").mkdir()
+        (runtime.taskdir / "sub" / "nested.md").write_text("nope\n", encoding="utf-8")
+
+        runner._harvest_deliverables_on_pass(runtime)
+
+        names = sorted(item["name"] for item in runtime.deliverables)
+        self.assertEqual(["review.md", "site.html"], names)
+
+    def test_harvest_fallback_skipped_in_worktrees_mode(self) -> None:
+        task = TaskSpec(
+            key="task-one",
+            spec="Create the requested outputs.",
+            check="true",
+            engine="mock",
+            expect_files=(),
+        )
+        runner, runtime = self.runtime_for(task, worktrees=True)
+        # A worktree taskdir root is a repo checkout — repo files must not
+        # be mistaken for deliverables.
+        (runtime.taskdir / "README.md").write_text("# repo\n", encoding="utf-8")
+
+        runner._harvest_deliverables_on_pass(runtime)
+
+        self.assertEqual([], runtime.deliverables)
+
     def test_runner_harvests_when_task_passes(self) -> None:
         check_code = "from pathlib import Path; raise SystemExit(0 if Path('site-final.html').is_file() else 1)"
         task = TaskSpec(
@@ -337,11 +375,14 @@ class DeliverableTests(unittest.TestCase):
 
         html = render_final_report_html(state, renderer=renderer, page_path=self.artifacts_dir / "run-123.html")
 
-        self.assertIn("Nothing delivered yet — the workers are still on it.", html)
-        self.assertLess(html.index('id="what-happened-heading"'), html.index('id="the-work-heading"'))
-        self.assertLess(html.index('id="the-work-heading"'), html.index('id="status-updates-heading"'))
-        self.assertLess(html.index('id="status-updates-heading"'), html.index('id="tasks-heading"'))
-        self.assertNotIn('<div class="rounds"', html)
+        # A passing task with nothing on the shelf says so on its own group;
+        # the page is briefing → rounds → the work, and the old separate
+        # timeline/workers sections are gone.
+        self.assertIn("Finished and checked — this worker filed nothing to the shelf.", html)
+        self.assertLess(html.index('id="what-happened-heading"'), html.index('<div class="rounds"'))
+        self.assertLess(html.index('<div class="rounds"'), html.index('id="the-work-heading"'))
+        self.assertNotIn('id="status-updates-heading"', html)
+        self.assertNotIn('id="tasks-heading"', html)
 
     def test_library_version_entry_carries_deliverables(self) -> None:
         state = self.harvested_state()

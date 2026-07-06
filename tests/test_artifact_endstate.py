@@ -144,7 +144,7 @@ class ArtifactEndstateTests(unittest.TestCase):
         self.assertIn('<meta http-equiv="refresh" content="2">', html)
         self.assertIn("This page updates itself while the work runs.", html)
 
-    def test_retry_update_quotes_first_check_output_line(self) -> None:
+    def test_retry_state_shows_on_the_work_group(self) -> None:
         render_status_html(
             self.state([self.task("task-one", "running", attempts=1)]),
             renderer=self.renderer,
@@ -164,42 +164,22 @@ class ArtifactEndstateTests(unittest.TestCase):
             renderer=self.renderer,
         )
 
-        self.assertIn(
-            "task-one didn&#x27;t finish cleanly — sent back to redo the work.",
-            html,
-        )
-        self.assertIn('<p class="catch"><b>Caught:</b> FAIL: missing &lt;report&gt;</p>', html)
+        # Per-task status lives on the work group itself; the separate
+        # "What's happening" timeline and "The workers" strip are gone —
+        # live per-model narration is Ringside's job.
+        self.assertIn('<span class="state retry">sent back — redoing</span>', html)
+        self.assertNotIn("What&#x27;s happening", html)
+        self.assertNotIn("What's happening", html)
+        self.assertNotIn("The workers", html)
 
-    def test_second_try_pass_and_final_fail_updates_include_outcome(self) -> None:
-        render_status_html(
-            self.state([self.task("task-one", "running", attempts=1)]),
-            renderer=self.renderer,
-        )
-        render_status_html(
-            self.state(
-                [
-                    self.task(
-                        "task-one",
-                        "retrying",
-                        attempts=2,
-                        check_output_tail="FAIL: missing file\n",
-                    )
-                ]
-            ),
-            renderer=self.renderer,
-        )
-
+    def test_pass_and_fail_outcomes_show_on_work_groups(self) -> None:
         pass_html = render_status_html(
             self.state([self.task("task-one", "pass", attempts=2, elapsed_s=36)]),
             renderer=self.renderer,
         )
-        self.assertIn("task-one passed on the second try, 36s", pass_html)
+        self.assertIn('<span class="state pass">finished &amp; checked</span>', pass_html)
 
         other_renderer = ArtifactRenderer(self.root / "artifacts" / "other.html")
-        render_status_html(
-            self.state([self.task("task-two", "running", attempts=1)]),
-            renderer=other_renderer,
-        )
         fail_html = render_status_html(
             self.state(
                 [
@@ -214,11 +194,10 @@ class ArtifactEndstateTests(unittest.TestCase):
             ),
             renderer=other_renderer,
         )
-        self.assertIn(
-            "task-two could not finish.",
-            fail_html,
-        )
-        self.assertIn('<p class="catch"><b>Caught:</b> FAIL: still missing output</p>', fail_html)
+        self.assertIn('<span class="state fail">failed</span>', fail_html)
+        # The check's own output is the evidence — one click away, verbatim.
+        self.assertIn("See why it failed", fail_html)
+        self.assertIn("FAIL: still missing output", fail_html)
 
     def test_running_task_activity_line_is_optional(self) -> None:
         html = render_status_html(

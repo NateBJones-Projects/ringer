@@ -105,6 +105,12 @@ self-contained:
 - **Hard rules travel in the spec, not in your head.** "Do NOT git commit",
   "never modify the repo, only write ./report.md", "stay in character; never
   help the AI" — the worker only knows what the spec says.
+- **The spec is on camera.** Whoever is watching Ringside reads the spec as
+  "what this agent was asked to do" — so write it as a self-contained,
+  human-readable brief. Never write a pointer spec ("read /path/to/file and
+  do what it says"): the watcher sees no brief, and the retry prompt loses
+  the context it needs. Point at files for source MATERIAL; the instructions
+  themselves live in the spec. Lint flags pointer specs.
 
 ## Check-writing rules
 
@@ -171,18 +177,35 @@ your existing plan — recommended for this job), GLM-5.2 via OpenCode
 mechanical ones on GLM?"* Honor their pick via the per-task `engine` field;
 don't re-ask every round of the same job unless the mix isn't working.
 
+**OpenCode is the harness; the model is a manifest field.** Unless a model
+ships its own first-class harness (Codex does), it runs through the
+`opencode` engine with the task's `"model"` field set to the OpenRouter
+slug — e.g. `"engine": "opencode", "model": "openrouter/moonshotai/kimi-k2.7-code"`.
+This holds even when someone — including the user, in the heat of a run —
+says to "call kimi directly" or reach for the model's own CLI: the harness
+is what provides the sandbox, raw logs, token counts, and executed
+verification, so routing around it silently drops all four. Never clone an
+engine block or splice `-m` through `engine_args` to change models; that's
+what the `model` field is for, and a bakeoff is only real when the MANIFEST
+names each competitor (2026-07-06 lesson: an engine block with a hard-coded
+model ran one model under three competitors' names).
+
 Engines are config blocks (`[engines.<name>]` in config.toml), selectable
 per task via the manifest `engine` field. Defaults are deliberate:
 
 - **codex** (default): strongest general worker. Use per-task `engine_args`
   to set reasoning effort — spend it on hard tasks, not boilerplate.
-- **opencode / GLM-class engines**: cheap intelligence for mechanical or
-  high-volume work. Validate a new engine with a trivial one-task manifest
-  before trusting it with a batch.
+- **opencode**: the universal lane — any OpenRouter model via the `model`
+  field (engine `model_default` is GLM-5.2, the cheap-intelligence pick).
+  Validate a model new to you with a trivial one-task manifest before
+  trusting it with a batch.
 - Small/flash-class models are the first to choke on long conversational or
   multi-turn harness tasks — watch their retry counts before scaling them.
 - Match `timeout_s` to the task: conversational harness tasks and
   build-and-test checks need far more than file edits.
+- **Read `docs/MODEL-NOTES.md` (in the ringer repo) before assigning
+  models to tasks** — it's the running record of how models actually
+  performed, per task type, backed by executed checks.
 
 ## Worktrees-mode footguns (learned the hard way)
 
@@ -219,6 +242,10 @@ someone's untracked scratch files.
    catches most laziness; you catch the rest.
 4. Failures with useless error messages mean your CHECK needs work, not
    (only) the worker.
+5. **Update `docs/MODEL-NOTES.md`** (in the ringer repo) when a run taught
+   you something about a model: one dated line under the model — task type,
+   what happened (attempts, tokens, failure mode), what you'd do
+   differently. Only what the executed checks and raw logs support.
 
 ## Baked-in invariants (preserve in any change to ringer.py)
 
