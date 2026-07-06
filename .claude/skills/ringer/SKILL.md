@@ -36,11 +36,17 @@ description: >-
    the same problem is a loop, and loops are manifests.
 4. **Runs are watched, not hidden — and the screen comes up FIRST.** The
    moment this skill loads for real work, before you write a single spec,
-   put Ringside on the human's screen: `./ringer.py hud` (safe to run
-   anytime — if one is already up it just prints the port; runs also
-   auto-start it). The human should be watching the empty arena while you
-   plan the fight, not waiting in the dark. Never pass `--no-dashboard`
-   except in automated tests or when the user explicitly asks.
+   put Ringside on the human's screen: `./ringer.py hud` (idempotent — if
+   one is already up it says so and opens the page; runs also auto-start
+   it). Ringside is the PAGE at http://127.0.0.1:8700 — NEVER launch the
+   Ringside.app application (`open -a Ringside`); it is a parked prototype
+   with a stale frontend. And never go dark: if your prep (research,
+   check-writing, manifest drafting) will take more than ~30 seconds,
+   tell the human in one sentence what you're doing and roughly how long
+   before you start — they should be watching the empty arena and reading
+   your one-liner, not wondering if anything is happening. Never pass
+   `--no-dashboard` except in automated tests or when the user explicitly
+   asks.
 
 Ringer runs manifest tasks in parallel across cheap CLI workers (Codex,
 OpenCode/GLM, others via config) and verifies every task by **executing a

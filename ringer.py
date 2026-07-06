@@ -4728,9 +4728,16 @@ def ensure_hud_running(config: AppConfig, *, open_browser: bool) -> None:
 
 
 def run_persistent_hud(config: AppConfig, *, port: int | None, open_viewer: bool) -> int:
+    chosen_port = port if port is not None else config.hud_port
+    if hud_is_alive(chosen_port):
+        url = f"http://127.0.0.1:{chosen_port}"
+        print(f"Ringside is already running: {url}")
+        if open_viewer:
+            open_in_browser(url)
+        return 0
     server = PersistentHudServer(
         config.state_dir,
-        preferred_port=port if port is not None else config.hud_port,
+        preferred_port=chosen_port,
         open_viewer=open_viewer,
     )
     server.start()
