@@ -4143,6 +4143,7 @@ class PersistentHudServer:
         self.thread: threading.Thread | None = None
         self.port: int | None = None
         self.model_log_path: Path | None = None
+        self.default_model_log_path: Path = state_dir / "runs.jsonl"
         self.model_db_path: Path | None = None
 
     def start(self) -> int:
@@ -4176,6 +4177,7 @@ class PersistentHudServer:
                     try:
                         payload = build_models_api_payload(
                             log_path=server_ref.model_log_path or (state_dir / "runs.jsonl"),
+                            default_log_path=server_ref.default_model_log_path,
                             db_path=server_ref.model_db_path,
                         )
                     except Exception as exc:
@@ -4716,6 +4718,17 @@ def default_model_registry_path() -> Path:
 
 def default_read_model_db_path() -> Path:
     return ringer_home() / "ringer.db"
+
+
+def should_use_read_model_db(
+    *,
+    log_path: Path,
+    default_log_path: Path,
+    explicit_db: bool,
+) -> bool:
+    if explicit_db:
+        return True
+    return log_path.expanduser().resolve() == default_log_path.expanduser().resolve()
 
 
 @dataclass(frozen=True)
@@ -6411,27 +6424,38 @@ def print_model_log_table(path: Path, rows_read: int, skipped: int, groups: list
 def build_models_api_payload(
     *,
     log_path: Path,
+    default_log_path: Path | None = None,
     db_path: Path | None = None,
     catalog_path: Path | None = None,
     registry_path: Path | None = None,
 ) -> dict[str, Any]:
     log_path = log_path.expanduser().resolve()
-    db_path = (db_path or default_read_model_db_path()).expanduser().resolve()
+    default_log_path = (default_log_path or log_path).expanduser().resolve()
+    explicit_db = db_path is not None
+    resolved_db_path = (db_path or default_read_model_db_path()).expanduser().resolve()
     catalog_path = (catalog_path or default_catalog_path()).expanduser().resolve()
     registry_path = (registry_path or default_model_registry_path()).expanduser().resolve()
-    using_db = True
+    using_db = should_use_read_model_db(
+        log_path=log_path,
+        default_log_path=default_log_path,
+        explicit_db=explicit_db,
+    )
     catalog_models: list[dict[str, Any]] = []
-    try:
-        sync_read_model_db(
-            db_path,
-            log_path,
-            catalog_path=catalog_path,
-            registry_path=registry_path,
-        )
-        rows, identity_registry = db_attempt_rows(db_path)
-        catalog_models = db_catalog_models(db_path)
-    except Exception:
-        using_db = False
+    if using_db:
+        try:
+            sync_read_model_db(
+                resolved_db_path,
+                log_path,
+                catalog_path=catalog_path,
+                registry_path=registry_path,
+            )
+            rows, identity_registry = db_attempt_rows(resolved_db_path)
+            catalog_models = db_catalog_models(resolved_db_path)
+        except Exception:
+            using_db = False
+            rows, _skipped = read_model_log_rows(log_path)
+            identity_registry = load_model_identity_registry(registry_path)
+    else:
         rows, _skipped = read_model_log_rows(log_path)
         identity_registry = load_model_identity_registry(registry_path)
     if not using_db:
@@ -6463,27 +6487,38 @@ def build_models_api_payload(
 
 
 def run_models_command(config: AppConfig, args: argparse.Namespace) -> int:
-    log_path = (args.log or config.eval.jsonl_path).expanduser().resolve()
+    default_log_path = config.eval.jsonl_path.expanduser().resolve()
+    log_path = (args.log or default_log_path).expanduser().resolve()
     since = validate_since_date(args.since)
+    explicit_db = getattr(args, "db", None) is not None
     db_path = (getattr(args, "db", None) or default_read_model_db_path()).expanduser().resolve()
     catalog_path = (getattr(args, "catalog_file", None) or default_catalog_path()).expanduser().resolve()
     registry_path = (getattr(args, "registry", None) or default_model_registry_path()).expanduser().resolve()
-    using_db = True
+    using_db = should_use_read_model_db(
+        log_path=log_path,
+        default_log_path=default_log_path,
+        explicit_db=explicit_db,
+    )
     catalog_events: list[dict[str, Any]] | None = None
-    try:
-        sync_result = sync_read_model_db(
-            db_path,
-            log_path,
-            catalog_path=catalog_path,
-            registry_path=registry_path,
-        )
-        rows, identity_registry = db_attempt_rows(db_path, since=since, engine=args.engine)
-        skipped = sync_result.skipped
-        catalog_models_from_db = db_catalog_models(db_path)
-        catalog_events = db_catalog_events(db_path, limit=6)
-    except Exception as exc:
-        using_db = False
-        print(f"models: SQLite read model unavailable; using JSONL fallback ({exc})", file=sys.stderr)
+    if using_db:
+        try:
+            sync_result = sync_read_model_db(
+                db_path,
+                log_path,
+                catalog_path=catalog_path,
+                registry_path=registry_path,
+            )
+            rows, identity_registry = db_attempt_rows(db_path, since=since, engine=args.engine)
+            skipped = sync_result.skipped
+            catalog_models_from_db = db_catalog_models(db_path)
+            catalog_events = db_catalog_events(db_path, limit=6)
+        except Exception as exc:
+            using_db = False
+            print(f"models: SQLite read model unavailable; using JSONL fallback ({exc})", file=sys.stderr)
+            rows, skipped = read_model_log_rows(log_path, since=since, engine=args.engine)
+            identity_registry = load_model_identity_registry(registry_path)
+            catalog_models_from_db = []
+    else:
         rows, skipped = read_model_log_rows(log_path, since=since, engine=args.engine)
         identity_registry = load_model_identity_registry(registry_path)
         catalog_models_from_db = []
@@ -7942,6 +7977,7 @@ def run_persistent_hud(config: AppConfig, *, port: int | None, open_viewer: bool
         open_viewer=open_viewer,
     )
     server.model_log_path = config.eval.jsonl_path
+    server.default_model_log_path = config.eval.jsonl_path
     server.start()
     try:
         while True:

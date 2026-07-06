@@ -285,6 +285,27 @@ class ModelDbTests(unittest.TestCase):
         self.assertEqual("OpenCode", by_model["openrouter/vendor/model"]["harness"])
         self.assertEqual("OpenRouter API", by_model["openrouter/vendor/model"]["access"])
 
+    def test_models_override_log_without_db_does_not_touch_default_db(self) -> None:
+        fixture_log = self.root / "fixture-runs.jsonl"
+        write_jsonl(fixture_log, [attempt(run_id="fixture-run")])
+        default_db = Path(os.environ["RINGER_HOME"]) / "ringer.db"
+        args = self.model_args()
+        args.log = fixture_log
+        args.db = None
+        out = io.StringIO()
+        err = io.StringIO()
+
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            self.assertEqual(0, run_models_command(self.config(), args))
+
+        payload = json.loads(out.getvalue())
+        self.assertEqual(1, len(payload))
+        self.assertEqual("openrouter/z-ai/glm-5.2", payload[0]["model"])
+        self.assertEqual("", err.getvalue())
+        self.assertFalse(default_db.exists())
+        self.assertFalse(default_db.with_name(default_db.name + "-wal").exists())
+        self.assertFalse(default_db.with_name(default_db.name + "-shm").exists())
+
     def test_humanized_date_helper(self) -> None:
         self.assertEqual("last used: July 6, 2026", humanized_log_date("2026-07-06T10:00:00.123456+00:00", prefix="last used: "))
         self.assertEqual("July 6, 2026", humanized_log_date("2026-07-06"))

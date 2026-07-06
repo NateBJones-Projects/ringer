@@ -61,10 +61,11 @@ class HudModelsTabTests(unittest.TestCase):
         os.environ.clear()
         os.environ.update(self.old_env)
 
-    def start_server(self) -> tuple[PersistentHudServer, int]:
+    def start_server(self, *, use_db: bool = True) -> tuple[PersistentHudServer, int]:
         server = PersistentHudServer(self.state_dir, preferred_port=0, open_viewer=False)
         server.model_log_path = self.log_path
-        server.model_db_path = self.db_path
+        if use_db:
+            server.model_db_path = self.db_path
         port = server.start_background()
         self.addCleanup(server.stop)
         return server, port
@@ -107,6 +108,21 @@ class HudModelsTabTests(unittest.TestCase):
         self.assertEqual(1.0, rollup["pass_rate"])
         self.assertAlmostEqual(2 / 3, rollup["first_try_pass_rate"])
         self.assertEqual("2026-07-06T10:00:00+00:00", rollup["last_seen"])
+
+    def test_api_models_override_log_without_db_does_not_touch_default_db(self) -> None:
+        write_jsonl(self.log_path, [attempt(run_id="run-1", task_key="a", task_type="code-feature")])
+        default_db = Path(os.environ["RINGER_HOME"]) / "ringer.db"
+        _server, port = self.start_server(use_db=False)
+
+        with urlopen(f"http://127.0.0.1:{port}/api/models", timeout=5) as response:
+            self.assertEqual(200, response.status)
+            payload = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(1, len(payload["groups"]))
+        self.assertNotIn("error", payload)
+        self.assertFalse(default_db.exists())
+        self.assertFalse(default_db.with_name(default_db.name + "-wal").exists())
+        self.assertFalse(default_db.with_name(default_db.name + "-shm").exists())
 
     def test_api_models_error_path_returns_200(self) -> None:
         bad_parent = self.root / "not-a-directory"
