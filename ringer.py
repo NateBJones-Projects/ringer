@@ -2731,6 +2731,41 @@ def sanitize_artifact_name(value: str) -> str:
     return sanitized or "artifact"
 
 
+def running_under_wsl() -> bool:
+    if os.environ.get("WSL_DISTRO_NAME") or os.environ.get("WSL_INTEROP"):
+        return True
+    try:
+        return "microsoft" in Path("/proc/version").read_text().lower()
+    except OSError:
+        return False
+
+
+def folder_opener_command(resolved: Path) -> list[str] | None:
+    # Returns the argv that reveals `resolved` in the platform's file manager,
+    # or None when no opener exists for this platform.
+    if sys.platform == "darwin":
+        return ["open", str(resolved)]
+    if sys.platform == "win32":
+        return ["explorer.exe", str(resolved)]
+    if sys.platform.startswith("linux"):
+        if running_under_wsl():
+            try:
+                win_path = subprocess.run(
+                    ["wslpath", "-w", str(resolved)],
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    timeout=10,
+                ).stdout.strip()
+            except (OSError, subprocess.TimeoutExpired):
+                win_path = ""
+            if win_path:
+                return ["explorer.exe", win_path]
+        if shutil.which("xdg-open"):
+            return ["xdg-open", str(resolved)]
+    return None
+
+
 def is_html_artifact(path: Path) -> bool:
     return path.suffix.lower() in {".html", ".htm"}
 
@@ -4205,12 +4240,13 @@ class PersistentHudServer:
                         if resolved != artifact_root_dir and artifact_root_dir not in resolved.parents:
                             self.send_error(HTTPStatus.NOT_FOUND)
                             return
-                        if sys.platform == "darwin":
-                            subprocess.Popen(["open", str(resolved)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        opener = folder_opener_command(resolved)
+                        if opener is None:
+                            self.send_error(HTTPStatus.NOT_IMPLEMENTED)
+                        else:
+                            subprocess.Popen(opener, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                             self.send_response(HTTPStatus.NO_CONTENT)
                             self.end_headers()
-                        else:
-                            self.send_error(HTTPStatus.NOT_IMPLEMENTED)
                     except Exception:
                         self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR)
                     return
