@@ -194,6 +194,10 @@ grok login
 
 Route with per-task `"engine": "grok"` and pick the model with `"model": "grok-build"` or `"model": "grok-composer-2.5-fast"` (the shipped default — the speed pick). Grok brings its own OS sandbox on macOS (profile `workspace`: read everywhere, writes confined to the task dir, temp, and `~/.grok`), and its JSON output exposes no token counts — plan-billed workers report cost as included in plan.
 
+### The subscription lane: Claude Code via PTY (in progress)
+
+Claude Code can be a third flat-rate lane, but it can't join the closed-stdin subprocess model without losing its subscription subsidy — interactive `claude` bills as `cc_entrypoint=cli` (Max/Pro-subsidized) while `claude -p` does not. That needs a **PTY execution path**, not just a config block. The pattern and its reference implementation (env scrubbing, trust-dialog seeding, prompt-answering, sentinel-based completion) are proven and spun out to **[`will-sargent-dbtlabs/claude-pty`](https://github.com/will-sargent-dbtlabs/claude-pty)**; the ringer-side engine design, the four-invariant reconciliation, and where it hooks into `ringer.py` are written up in [`docs/claude-pty.md`](docs/claude-pty.md).
+
 ## Ringside — mission control
 
 ![Ringside in the browser: a run's live results page with per-worker status and verification](docs/ringside.png)
