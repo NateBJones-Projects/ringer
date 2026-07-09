@@ -21,6 +21,13 @@ TASKDIR="${1:?usage: opencode-sandboxed.sh <taskdir> [--no-sandbox] <args...>}";
 SANDBOX=1
 if [ "${1:-}" = "--no-sandbox" ]; then SANDBOX=0; shift; fi
 
+# Stagger simultaneous spawns. All OpenCode instances share one SQLite state DB
+# (~/.local/share/opencode/opencode.db); when a swarm launches several workers
+# in the same instant, the startup write burst collides and the losers die with
+# "database is locked", silently burning their one retry. A 0-4s random jitter
+# desynchronizes the stampede. (Observed on 2026-07-06 and 2026-07-08 runs.)
+sleep "$((RANDOM % 4)).$((RANDOM % 100))"
+
 # Resolve opencode without tripping `set -e` (command -v returns nonzero when absent).
 if ! OPENCODE_BIN="$(command -v opencode)" || [ -z "$OPENCODE_BIN" ]; then
   echo "opencode-sandboxed.sh: opencode not found on PATH" >&2
