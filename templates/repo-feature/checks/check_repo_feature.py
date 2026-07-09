@@ -4,9 +4,73 @@
 from __future__ import annotations
 
 import argparse
+import os
 import pathlib
+import shutil
 import subprocess
 import sys
+from pathlib import Path
+
+
+def _windows_posix_shell() -> str | None:
+    # Mirror ringer.py's check-shell resolution so verify commands keep the
+    # same POSIX-shell contract inside the validator as outside it.
+    env_shell = os.environ.get("RINGER_CHECK_SHELL")
+    if env_shell:
+        return env_shell
+    bash = shutil.which("bash")
+    if bash:
+        system_root = os.environ.get("SystemRoot") or os.environ.get("WINDIR") or r"C:\Windows"
+        system32 = os.path.normcase(os.path.abspath(os.path.join(system_root, "System32")))
+        # System32 bash.exe launches WSL, whose Linux environment cannot run
+        # commands that reference Windows paths — reject it.
+        if not os.path.normcase(os.path.abspath(bash)).startswith(system32):
+            return bash
+    for candidate in (
+        "C:/Program Files/Git/bin/bash.exe",
+        "C:/Program Files/Git/usr/bin/bash.exe",
+        "C:/Program Files (x86)/Git/bin/bash.exe",
+        "C:/Program Files/Git/bin/sh.exe",
+        "C:/Program Files/Git/usr/bin/sh.exe",
+        "C:/Program Files (x86)/Git/bin/sh.exe",
+    ):
+        if Path(candidate).is_file():
+            return candidate
+    return None
+
+
+def run_user_command(command: str, *, cwd: Path | None = None, timeout: int | None = None, merge_stderr: bool = False) -> subprocess.CompletedProcess[str]:
+    if sys.platform == "win32":
+        shell_path = _windows_posix_shell()
+        if shell_path is None:
+            return subprocess.CompletedProcess(
+                command,
+                127,
+                "repo-feature validator: no POSIX shell found for the user command on native Windows; "
+                "install Git for Windows or set RINGER_CHECK_SHELL.",
+                None if merge_stderr else "",
+            )
+        return subprocess.run(
+            [shell_path, "-c", command],
+            cwd=cwd,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE,
+            timeout=timeout,
+        )
+    return subprocess.run(
+        command,
+        shell=True,
+        cwd=cwd,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE,
+        timeout=timeout,
+    )
 
 
 def split_csv(value: str) -> list[str]:
@@ -77,7 +141,7 @@ def main() -> int:
                 fails.append(f"required text not found in owned files: {snippet!r}")
 
     print(f"running build/test command in {repo}: {args.build_command}")
-    proc = subprocess.run(args.build_command, cwd=repo, shell=True, capture_output=True, text=True, timeout=1800)
+    proc = run_user_command(args.build_command, cwd=repo, timeout=1800)
     if proc.returncode != 0:
         print("FAIL: build/test command failed")
         print(proc.stdout[-4000:])
