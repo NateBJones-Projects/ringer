@@ -1,0 +1,4 @@
+# Shell scripts must stay LF: Windows checkouts with core.autocrlf=true would
+# otherwise smudge them to CRLF, and bash in WSL/Linux rejects CRLF scripts
+# (engine wrappers are executed directly inside WSL from this working tree).
+*.sh text eol=lf

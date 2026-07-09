@@ -169,7 +169,7 @@ Per-task `"engine": "mymodel"` routes work to it — the invariants (stdin close
 
 Unless a model ships its own first-class harness (Codex does), OpenCode is the harness that runs it — one engine block covers every OpenRouter-served model. `config.sample.toml` includes a ready-to-uncomment engine whose `{model}` placeholder is filled per task from the manifest's `"model"` field, with `model_default` as the fallback. The shipped default is OpenRouter's `z-ai/glm-5.2` — roughly $0.74/M input and $2.33/M output (2026-07), about 20-30x cheaper output than frontier coding models; a complete write-code-and-pass-the-check task lands around a penny.
 
-OpenCode ships no OS sandbox, so the engine's `bin` points at an absolute path to `engines/opencode-sandboxed.sh` (ringer does not resolve engine bins relative to the repo): a macOS Seatbelt wrapper that leaves network and reads open but confines writes to the task dir, a per-run scratch dir (wired as the agent's `TMPDIR`/`XDG_CACHE_HOME`), and OpenCode's own state/config dirs. Its `--dangerously-skip-permissions` flag only silences OpenCode's interactive prompts; Seatbelt is the actual containment. Task paths reach the profile as `sandbox-exec -D` parameters rather than string interpolation, so a task dir with quotes or parens can't inject sandbox rules. `--no-sandbox` is wired as the engine's `full_access_args`, so ringer's `allow_full_access` gate still governs escapes. `engines/opencode-sandboxed.sh` is macOS-only; on Windows/Linux, OpenCode runs without that wrapper unless you provide your own sandbox.
+OpenCode ships no OS sandbox, so the engine's `bin` points at an absolute path to `engines/opencode-sandboxed.sh` (ringer does not resolve engine bins relative to the repo): a macOS Seatbelt wrapper that leaves network and reads open but confines writes to the task dir, a per-run scratch dir (wired as the agent's `TMPDIR`/`XDG_CACHE_HOME`), and OpenCode's own state/config dirs. Its `--dangerously-skip-permissions` flag only silences OpenCode's interactive prompts; Seatbelt is the actual containment. Task paths reach the profile as `sandbox-exec -D` parameters rather than string interpolation, so a task dir with quotes or parens can't inject sandbox rules. `--no-sandbox` is wired as the engine's `full_access_args`, so ringer's `allow_full_access` gate still governs escapes. `engines/opencode-sandboxed.sh` is macOS-only; its siblings cover the other platforms with the same contract: `engines/opencode-sandboxed-linux.sh` (Linux/WSL, bubblewrap — install `bubblewrap`) and `engines/opencode-sandboxed-wsl.sh` (Windows: set `bin = "wsl.exe"` and point `args_template` at the script's `/mnt` path; it translates `C:\` task dirs and hands off to the Linux wrapper inside WSL).
 
 Setting it up takes about five minutes:
 
@@ -183,9 +183,10 @@ curl -fsSL https://opencode.ai/install | bash
 opencode auth login   # select OpenRouter, paste the key
 
 # 3) In ~/.config/ringer/config.toml, uncomment [engines.opencode] and set
-#    bin to the ABSOLUTE path of engines/opencode-sandboxed.sh in this clone.
-#    (Windows/Linux/WSL: the wrapper is macOS-only — set bin to the opencode binary
-#    itself; there is no OS write-confinement then, so keep manifests scoped.)
+#    bin to the ABSOLUTE path of the wrapper for your OS in this clone:
+#    opencode-sandboxed.sh (macOS Seatbelt), opencode-sandboxed-linux.sh
+#    (Linux/WSL, needs bubblewrap), or on Windows bin = "wsl.exe" with
+#    args_template pointing at opencode-sandboxed-wsl.sh's /mnt path.
 ```
 
 Route with per-task `"engine": "opencode"`, pick the model with per-task `"model": "openrouter/<any-model>"`, and set reasoning effort via `engine_args`: `["--variant", "low|high|max"]`. A sensible split: mechanical or tightly-specced tasks on the cheap lane, gnarly ones on your frontier engine — the executed check catches shortfalls either way, and `swarm_runs` rows tell you whether the cheap lane's pass rate holds.

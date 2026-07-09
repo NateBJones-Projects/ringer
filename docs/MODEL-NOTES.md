@@ -103,6 +103,10 @@ checks and raw logs support — no vibes, no worker self-reports.
   openrouter-image commands, idempotent batch-runner spec): 3/3 passed on
   attempt 1, ~14.5k tokens each. The "execute these exact commands, do not
   improve them" spec pattern is fully reliable for glm-5.2.
+- 2026-07-09 — first run on the Windows machine, and first through the new
+  wsl.exe → bwrap sandbox lane (engines/opencode-sandboxed-wsl.sh): one-task
+  file-creation probe PASS attempt 1, 5s, 8k tokens. The Windows→WSL opencode
+  engine lane is live and verified end to end.
 
 - 2026-07-06 — backfill/seed script for the model log (252-line stdlib CLI
   with a run-state join, 3-level mapping precedence, never-overwrite and

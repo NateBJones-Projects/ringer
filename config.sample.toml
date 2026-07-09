@@ -119,18 +119,31 @@ token_regex = "tokens\\s+used\\s*:?\\s*([0-9][0-9,]*)"
 # the manifest's "model" field, falling back to model_default below. Example
 # default: GLM-5.2 (z-ai/glm-5.2, roughly $0.74/M input, $2.33/M output as of
 # 2026-07) — the cheap-intelligence lane.
-# OpenCode has no OS sandbox, so `bin` points at engines/opencode-sandboxed.sh
-# (macOS-only Seatbelt: network + reads open, writes confined to the task dir,
-# a per-run scratch dir, and OpenCode's state/config dirs). On Windows/Linux,
-# use the opencode binary directly unless you provide your own sandbox. Auth: put your
+# OpenCode has no OS sandbox, so `bin` points at a wrapper (all three share one
+# contract: network + reads open, writes confined to the task dir, a per-run
+# scratch dir, and OpenCode's state/config dirs):
+#   macOS      engines/opencode-sandboxed.sh        (Seatbelt)
+#   Linux/WSL  engines/opencode-sandboxed-linux.sh  (bubblewrap; install bwrap)
+#   Windows    bin = "wsl.exe" bridging into engines/opencode-sandboxed-wsl.sh
+#              (see the Windows example below; opencode + bwrap live inside WSL)
+# Auth: put your
 # OpenRouter key where your OpenCode version expects it — commonly
 # ~/.local/share/opencode/auth.json ({"openrouter": {"type": "api", "key": "..."}});
 # confirm the path with your installed CLI.
 # Per-task engine_args can set reasoning effort ("--variant", "low|high|max").
 # Uncomment and set an absolute path for `bin` to enable.
 # [engines.opencode]
-# macOS-only wrapper example:
+# macOS wrapper example (Linux: swap in opencode-sandboxed-linux.sh):
 # bin = "/absolute/path/to/ringer/engines/opencode-sandboxed.sh"
+# Windows example (verified 2026-07-09: ringer.py on Windows, sandbox in WSL):
+# bin = "C:/Windows/System32/wsl.exe"
+# args_template = [
+#   "-d", "Ubuntu", "-e",
+#   "/mnt/<drive>/path/to/ringer/engines/opencode-sandboxed-wsl.sh",
+#   "{taskdir}", "{access_args}", "run", "-m", "{model}",
+#   "--dangerously-skip-permissions", "--format", "json",
+#   "{engine_args}", "--dir", "{taskdir}", "{spec}",
+# ]
 # model_default = "openrouter/z-ai/glm-5.2"
 # args_template = [
 #   "{taskdir}",
