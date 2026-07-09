@@ -156,6 +156,17 @@ checks and raw logs support — no vibes, no worker self-reports.
   Harmless (excluded at patch-apply time) but worth tightening the wording
   next time: give an explicit path like "$TASKDIR/notes.md" instead of
   relying on "task directory" as an implied second location.
+- 2026-07-09 — votons-elisma rounds C+D, 3 more site-build passes (about-page
+  insert; full homepage rebuild — typed block model, newsletter form + CF
+  Pages function, WCAG contrast documented with computed ratios in its notes;
+  CMS wiring with map/validate/fallback loader + standalone probe script):
+  all attempt 1, 28k-60k tokens. glm-5.2 is now 8/8 first-try on site-build
+  for this user — proven tier. The homepage task was originally routed to
+  codex, which burned both attempts instantly on a ChatGPT plan usage limit
+  (locked out to Aug 7); resubmitting the identical spec to glm passed first
+  try. Also: opencode's sandbox cannot write to the ringer workdir outside
+  the task dir — "write notes OUTSIDE the worktree" specs fail there; have
+  workers write notes in-worktree and exclude the file at patch-apply time.
 
 ## kimi-k2.7 via opencode (`openrouter/moonshotai/kimi-k2.7-code`)
 
