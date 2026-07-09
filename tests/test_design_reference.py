@@ -105,8 +105,10 @@ class DesignReferenceTests(unittest.TestCase):
         self.assertIn('<section class="work"', html)
         self.assertIn('<div class="work-group">', html)
         self.assertIn('<div class="worker">', html)
-        self.assertIn('<span class="state retry">sent back — redoing</span>', html)
-        self.assertIn('<span class="activity" title="Reading section 4">Reading section 4</span>', html)
+        # Work gating (Ringside overhaul): unfinished tasks no longer render
+        # worker rows in "The work" — their state lives in the rounds strip.
+        self.assertIn('aria-label="contract-a: sent back — redoing"', html)
+        self.assertIn('aria-label="contract-b: working"', html)
 
     def test_final_page_uses_static_dot(self) -> None:
         html = render_final_report_html(
