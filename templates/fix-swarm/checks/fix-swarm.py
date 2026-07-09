@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -33,7 +35,52 @@ def output_tail(text: str, limit: int = 4000) -> str:
     return text[-limit:]
 
 
+def _windows_posix_shell() -> str | None:
+    # Mirror ringer.py's check-shell resolution so verify commands keep the
+    # same POSIX-shell contract inside the validator as outside it.
+    env_shell = os.environ.get("RINGER_CHECK_SHELL")
+    if env_shell:
+        return env_shell
+    bash = shutil.which("bash")
+    if bash:
+        system_root = os.environ.get("SystemRoot") or os.environ.get("WINDIR") or r"C:\Windows"
+        system32 = os.path.normcase(os.path.abspath(os.path.join(system_root, "System32")))
+        # System32 bash.exe launches WSL, whose Linux environment cannot run
+        # commands that reference Windows paths — reject it.
+        if not os.path.normcase(os.path.abspath(bash)).startswith(system32):
+            return bash
+    for candidate in (
+        "C:/Program Files/Git/bin/bash.exe",
+        "C:/Program Files/Git/usr/bin/bash.exe",
+        "C:/Program Files (x86)/Git/bin/bash.exe",
+        "C:/Program Files/Git/bin/sh.exe",
+        "C:/Program Files/Git/usr/bin/sh.exe",
+        "C:/Program Files (x86)/Git/bin/sh.exe",
+    ):
+        if Path(candidate).is_file():
+            return candidate
+    return None
+
+
 def run_shell(command: str) -> subprocess.CompletedProcess[str]:
+    if sys.platform == "win32":
+        shell_path = _windows_posix_shell()
+        if shell_path is None:
+            return subprocess.CompletedProcess(
+                command,
+                127,
+                "fix-swarm validator: no POSIX shell found for the verify command on "
+                "native Windows; install Git for Windows or set RINGER_CHECK_SHELL.",
+                None,
+            )
+        return subprocess.run(
+            [shell_path, "-c", command],
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
     return subprocess.run(
         command,
         shell=True,
