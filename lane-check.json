@@ -1,0 +1,18 @@
+{
+  "run_name": "opencode-lane-check",
+  "workdir": "/Users/usjoh/Projects/ringer/reviews/lane-check",
+  "max_parallel": 1,
+  "tasks": [
+    {
+      "key": "lane-check",
+      "task_type": "probe",
+      "engine": "opencode",
+      "model": "openrouter/z-ai/glm-5.2",
+      "spec": "You are a worker proving an execution lane end to end. Do exactly one thing: create a file named proof.md in your current task directory whose entire contents are the single line: RINGER OPENCODE LANE OK. Do not create any other files, do not modify anything else, and write nothing before or after that line.",
+      "check": "grep -qx 'RINGER OPENCODE LANE OK' proof.md || { echo 'FAIL: proof.md is missing the exact marker line. Contents were:'; cat proof.md 2>/dev/null || echo '(no proof.md was written)'; exit 1; }",
+      "expect_files": ["proof.md"],
+      "timeout_s": 180,
+      "verified": "proof.md contains the exact marker line, proving the OpenCode + OpenRouter (GLM-5.2) worker was authenticated, executed, and wrote a file to its task directory."
+    }
+  ]
+}

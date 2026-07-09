@@ -144,6 +144,24 @@ checks and raw logs support — no vibes, no worker self-reports.
   attempt 1, ~83k tokens. First real outing; promising for review work.
   (Ran through an ad-hoc copy of the opencode engine block — the per-task
   `model` field now makes that unnecessary.)
+- 2026-07-08 — capability-registry audit (Meridian, 6-YAML semantic docs
+  review, code-review type, exploration slot): PASS attempt 1, 112k tokens,
+  228s — the only worker of five to nail the output contract first try (all
+  4 GLM lanes lost attempt 1 to a report-location miss). Report quality
+  high: orchestrator spot-checked 2 findings, both verbatim-confirmed (a
+  structured-field schema gap and a CD-conflicting audit-trail location).
+  Now 2/2 first-try on review work; one more typed outing reaches proven
+  tier for code-review.
+
+- 2026-07-09 — capability-registry-fixes t1 (Meridian, code-feature AUDITION one
+  rung up from review): substance passed — created 7 Pydantic classes modeled on
+  the REAL storage shapes (orchestrator verified id/enqueued_at/owner_session
+  against storage.py; my spec had guessed wrong names and kimi followed code over
+  spec, as instructed), and honored "change server.py minimally or not at all"
+  with zero wire-format edits. Recorded FAIL x2 was orchestrator-side: relative
+  fix-summary path (spec-craft) + retry killed by the OpenRouter key-limit 403.
+  64k tokens. Treat as effective first-try substance; keep the code-feature
+  audition open.
 
 ## kimi-k2.6 (`moonshotai/kimi-k2.6`, subject-model evidence via OpenRouter)
 
@@ -160,6 +178,27 @@ checks and raw logs support — no vibes, no worker self-reports.
   first. Distinct model from k2.7-code above — don't transfer this verdict
   to k2.7.
 
+
+## opencode / GLM-5.2 (2026-07-09, capability-registry-fixes — YAML surgery + test-hardening)
+- Round 1: t2/t3 official PASS attempt 1 (subtle close-ordering contradiction fix
+  quoted both sides; 7-file enum+notes sweep clean). t4/t5 substance verified
+  green orchestrator-side (when_to_use x5 grounded in real responsibilities;
+  unsatisfiable-invariant removal preserved reasoning as a comment) — their FAILs
+  were the missing relative-path fix-summary + 403-dead retries, ruled FOR the
+  worker. Round 2 (absolute paths): t6 docs + t7 test-hardening PASS attempt 1
+  (92s/85s). One caution: t7's comment cited an INVENTED CD number as the
+  convention authority — caught at CSA review; specs should hand workers the
+  exact citation to use, and review should assume plausible-looking references
+  are unverified.
+
+## north-mini-code (via opencode, `openrouter/cohere/north-mini-code:free`)
+- 2026-07-09 — AUDITION FAILED (t6 exploration slot, $0): a 3-file mechanical
+  comment repoint, and it never oriented to its worktree — read and attempted
+  edits via the MAIN repo's absolute path (Seatbelt correctly blocked every
+  write), wrote an honest blocker summary, then its task dir vanished mid-verify
+  (crashed the run — see process lesson). Do not re-audition on repo-editing
+  tasks; if it gets another slot, use a pure-artifact task (writes only to its
+  own dir).
 
 ## grok-build (Grok CLI engine, flat plan)
 
@@ -266,6 +305,35 @@ checks and raw logs support — no vibes, no worker self-reports.
 - 2026-07-06 — opencode sqlite "database is locked" again with just 2
   simultaneous opencode spawns (page-news + page-about-faq); retry absorbed it.
 
+- 2026-07-09 — the absolute-path lesson bit a SECOND time: the fix-swarm
+  template's preamble says './fix-summary.md' (relative), and three lanes of
+  real YAML work failed [missing_summary] over it. The 2026-07-08 rule
+  ("spec deliverable paths as ABSOLUTE") applies to the template's own
+  boilerplate, not just report deliverables — fix the template.
+- 2026-07-09 — OpenRouter per-KEY total spend limit returned 403 mid-run:
+  every retry plus one whole lane died at 0 tokens ("Key limit exceeded
+  (total limit)"). Distinct from account credit; nothing in preflight
+  (`models`, `catalog`) surfaces it. Worth a pre-run credit/limit probe.
+- 2026-07-09 — ringer robustness: when a task dir vanished before verify
+  (north-mini audition), `run` crashed with argparse-style exit 2 (ENOENT)
+  instead of recording FAIL and continuing; one crashed lane took the whole
+  run's summary path down with it.
+
 ## codex (2026-07-06, bench-operator-proofing)
 - 8/8 code-feature tasks passed attempt 1 across 3 rounds (worktrees mode, Python harness refactor; 108k-406k tokens/task). Specs embedded the approved architecture doc + exact file ownership; checks built fresh uv venvs and ran the full pytest suite.
 - Lesson (check design, not model): all 3 post-integration bugs were invisible to the checks — a test that passed only because the worker's worktree lacked .env, a `--help`-only assertion missing a runtime importlib/sys.modules bug (py3.12 dataclasses), and bare console-script names failing outside activated venvs. Checks should exercise one real invocation from a cold shell, not just --help.
+
+## opencode / GLM-5.2 (2026-07-08, mcp-local-rag-review)
+- 3/4 code-review tasks passed (server attempt 1; vectordb + parser-pdf on attempt 2). Report quality high — orchestrator spot-checked 4 findings against source, 4/4 confirmed verbatim (incl. two P1s). 32k-112k tokens/task.
+- chunker-embedder failed both attempts, but the autopsy ruled FOR the worker: attempt 1 wrote no report.md (retry fixed that); attempt 2's report was excellent and died on the 1200-word cap at 1359 words. Check-craft lesson: hard length caps fail honest work — use ~1600 or have the spec say "trim evidence quotes if over," and treat length as format, not substance.
+- Same run, codex engine: 0/4 in 0.2s each — macOS XProtect had deleted the codex binary (spawn ENOENT). Environment failure, not model signal: disregard those 8 codex failure rows when reading the scoreboard.
+- **RESOLVED 2026-07-09** — root cause: Apple **revoked OpenAI's Developer ID cert** (fallout from the 2026-03-31 axios CI supply-chain compromise), so macOS deletes any binary still signed with it. That is why only the OpenAI-signed `codex` binary was removed while its sibling ripgrep survived — a cert-revocation match, not a content/YARA match. The installed 0.130.0 still carried the revoked-lineage cert; the public "Codex CLI 0.119.0+ is safe" guidance did NOT hold for the npm binary. Fix: `npm install -g @openai/codex@latest` → **0.144.0**, re-signed with a valid Developer ID (`OpenAI OpCo, LLC / 2DC432GLL2`), verified end-to-end — `codesign --verify` passes, `codex exec` (read-only sandbox) reached gpt-5.5 and returned the expected token, binary persists on disk. 0.144.0 also relocated the binary to `vendor/aarch64-apple-darwin/bin/codex`. Recurrence guard: a codex lane going 0/N at ~0.2s with spawn ENOENT is another cert/XProtect removal, not a model signal — reinstall the latest re-signed build, don't debug the model.
+
+## opencode / GLM-5.2 (2026-07-08, mcp-local-rag-fixes — worktrees code-fix)
+- Effectively 4/4 on real TypeScript fixes with regression tests (3 official PASS; the embedder-dispose-race FAIL was a harness artifact — see below — and the worker's epoch-fence fix + red→green test + full 870-test suite all passed orchestrator-side). 62k-95k tokens/task. The dispose-race fix (epoch fence, await-in-flight, test seam extraction) is genuinely sophisticated work from a cheap model.
+- Harness lesson (worktrees + node ecosystems): instructing workers to `ln -sfn <main>/node_modules node_modules` collides with a `node_modules/` (trailing-slash) .gitignore — the trailing slash matches DIRECTORIES only, so the SYMLINK is not ignored, the check's own `git add -A` patch-export stages it, and every later attempt false-fails `outside_owned_files`. Workers cannot repair it: a worktree's .git lives in the main repo, outside the task sandbox (by design). Fix: add `node_modules` (no slash) to the target repo's `.git/info/exclude` before worktree runs (local-only, done for mcp-local-rag), and remember retries inherit attempt 1's dirty index.
+- "database is locked" at spawn: shared opencode.db startup-write collision when several workers launch in the same instant; losers die instantly and burn their retry. Mitigated 2026-07-08 with random pre-spawn jitter in engines/opencode-sandboxed.sh; made a *uniform* 0-4s on 2026-07-09 (the fraction is now `printf '%02d'`-padded — a bare `$((RANDOM % 100))` produced "3.5" = 3.5s, not "3.05", underweighting the low end). This is a wrapper-level band-aid, not a cure: Ringer doesn't own opencode's DB connection, so it can't set the `busy_timeout=5000` + WAL it already uses on its own DB (ringer.py:4916) — the real fix (busy_timeout on opencode.db) belongs upstream *in opencode itself*. The jitter commit stays a clean cherry-pick if we ever offer it to upstream Ringer, but that PR was not opened.
+
+## opencode / GLM-5.2 (2026-07-08, capability-registry-audit — semantic docs review)
+- 4/4 PASS on attempt 2 (23k-54k tokens, 41-202s on the passing attempts). All four attempt-1 FAILs were the identical miss: report.md absent from the task dir at check time — workers exited 0 after 60-100k tokens of real reading, so the report went somewhere else or nowhere; the injected "missing expected files" retry context fixed all four instantly. Report substance high: orchestrator spot-checked 3 findings, 3/3 verbatim-confirmed, including a real cross-sibling factual contradiction and an unsatisfiable-invariant catch. Not a model-quality signal — a spec-craft miss (see process lesson below); kimi avoided the same trap on the same spec wording.
+- 2026-07-08 process lesson (spec-craft): "write report.md in your current working directory" is ambiguous for workers that cd into the repo they are auditing — 4 of 5 lanes lost attempt 1 to it. Spec deliverable paths as ABSOLUTE (the task dir is known at manifest-write time: <workdir>/<key>/report.md). Retry absorbed everything, but it doubled wall-clock and depressed first-try rates over a miss that never tested substance.
