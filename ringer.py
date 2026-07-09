@@ -6712,7 +6712,17 @@ def run_models_command(config: AppConfig, args: argparse.Namespace) -> int:
 
 class Verifier:
     async def verify(self, task: TaskSpec, taskdir: Path) -> VerifyResult:
-        check_returncode, check_timed_out, output = await self._run_check(task.check, taskdir)
+        if taskdir.is_dir():
+            check_returncode, check_timed_out, output = await self._run_check(task.check, taskdir)
+        else:
+            # A worker can delete or replace its own taskdir (seen live
+            # 2026-07-09); spawning the check there raises ENOENT, and
+            # unhandled it kills every other lane in the run. Fail the task.
+            check_returncode, check_timed_out = None, False
+            output = (
+                f"[ringer] task dir missing at verification: {taskdir} — "
+                "the worker deleted or replaced its own working directory"
+            )
         missing_files = tuple(
             rel for rel in task.expect_files if not self._is_nonempty_file(self._expect_file_path(taskdir, rel))
         )
@@ -6751,14 +6761,19 @@ class Verifier:
 
     @staticmethod
     async def _run_check(command: str, cwd: Path) -> tuple[int | None, bool, str]:
-        proc = await asyncio.create_subprocess_shell(
-            command,
-            cwd=str(cwd),
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            start_new_session=True,
-        )
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                command,
+                cwd=str(cwd),
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            # The taskdir can still vanish between verify()'s guard and this
+            # spawn; a check that cannot start is a task FAIL, never a run crash.
+            return None, False, f"[ringer] check spawn failed: {exc}"
         timed_out = False
         try:
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=CHECK_TIMEOUT_S)
@@ -6907,7 +6922,9 @@ class RingerRunner:
                         runtime.ended_at_monotonic = time.monotonic()
                     await self._cleanup_worktree_on_pass(runtime)
                     return
-                if attempt < max_attempts and verdict in {"FAIL", "TIMEOUT"}:
+                # A vanished taskdir cannot host a retry — the respawn would
+                # only ENOENT — so let this FAIL stand as final.
+                if attempt < max_attempts and verdict in {"FAIL", "TIMEOUT"} and runtime.taskdir.is_dir():
                     failure_context = build_failure_context(runtime.log_path, verify.raw_output_excerpt)
                     current_spec = (
                         f"{runtime.task.spec}\n\n"

@@ -57,6 +57,25 @@ class VerifyOrderTests(unittest.TestCase):
             result.raw_output_excerpt,
         )
 
+    def test_vanished_taskdir_records_fail_instead_of_raising(self) -> None:
+        # A worker can delete or replace its own taskdir (2026-07-09 run:
+        # spawning the check there raised ENOENT and killed every lane).
+        with tempfile.TemporaryDirectory() as root:
+            taskdir = Path(root) / "task"  # intentionally never created
+            task = TaskSpec(
+                key="vanished",
+                spec=LONG_SPEC,
+                check="echo built",
+                expect_files=("out.txt",),
+            )
+            result = self.verify(task, taskdir)
+
+        self.assertFalse(result.ok)
+        self.assertIsNone(result.check_returncode)
+        self.assertEqual(("out.txt",), result.missing_files)
+        self.assertIn("task dir missing at verification", result.raw_output_excerpt)
+        self.assertIn(str(taskdir), result.raw_output_excerpt)
+
     def test_silent_failing_check_message_is_unchanged(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             taskdir = Path(root) / "task"

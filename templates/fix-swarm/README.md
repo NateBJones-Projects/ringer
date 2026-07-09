@@ -41,6 +41,11 @@ The manifest invokes `checks/fix-swarm.py`. The validator runs the filled build/
 
 ## Gotchas
 
+- Spec deliverable paths must be ABSOLUTE. Workers lose track of `./` once
+  they cd around; a relative `./fix-summary.md` in this template's own
+  preamble cost three lanes their first attempts (2026-07-09). The spec now
+  names `{{WORKDIR}}/{{FIX_KEY}}/fix-summary.md` — the task worktree root —
+  and any spec edits should keep deliverable paths absolute the same way.
 - Worktrees that pass are deleted. Anything not exported by the check is gone.
 - `git add -A` cannot stage ignored build outputs. If a fix must preserve ignored files, extend the validator to copy them outside the worktree.
 - The ownership list is the safety rail. If a fix needs more files, stop and make a new task boundary.
