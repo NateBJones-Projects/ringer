@@ -174,6 +174,18 @@ checks and raw logs support — no vibes, no worker self-reports.
   executed standalone probe scripts against the live space — glm implemented
   the un-testable-in-sandbox CMS path correctly from shape docs alone, both
   times. 10/10 first-try on site-build.
+- 2026-07-09 — votons-elisma round F, visual-editor task (env-gated SSR
+  preview via @astrojs/cloudflare, bridge, _editable→data-blok-c, SSR route
+  fallbacks): PASS attempt 2, 88k tokens. Attempt 1 died on the adapter's
+  modern Workers output layout vs the check's dist/_worker.js expectation;
+  attempt 2 solved it with a build-hook shim writing a Pages advanced-mode
+  _worker.js — genuinely resourceful. One bug the executed check couldn't
+  catch: the worker invented a 'cb' cache-buster param that Storyblok 422s
+  (its real param is 'cv'), silently degrading the deployed preview to
+  fallback content. The check ran draft builds but never exercised a
+  request-time draft fetch — deploy-time behavior needs a deployed-surface
+  probe, or specs must pin exact API params. Fixed by orchestrator (1 line)
+  and caught only via wrangler deployment tail on the live preview.
 
 ## kimi-k2.7 via opencode (`openrouter/moonshotai/kimi-k2.7-code`)
 
