@@ -167,6 +167,13 @@ checks and raw logs support — no vibes, no worker self-reports.
   try. Also: opencode's sandbox cannot write to the ringer workdir outside
   the task dir — "write notes OUTSIDE the worktree" specs fail there; have
   workers write notes in-worktree and exclude the file at patch-apply time.
+- 2026-07-09 — votons-elisma round E, 2 parallel CMS-wiring tasks (legal
+  loader + 6 page swaps; about/posts loaders + 8 page swaps incl. dynamic
+  getStaticPaths from CMS list with per-language slugs): both PASS attempt 1,
+  23k/49k tokens. Checks ran dual builds (with/without real credentials) and
+  executed standalone probe scripts against the live space — glm implemented
+  the un-testable-in-sandbox CMS path correctly from shape docs alone, both
+  times. 10/10 first-try on site-build.
 
 ## kimi-k2.7 via opencode (`openrouter/moonshotai/kimi-k2.7-code`)
 
