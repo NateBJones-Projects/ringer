@@ -141,6 +141,65 @@ token_regex = "tokens\\s+used\\s*:?\\s*([0-9][0-9,]*)"
 # full_access_args = ["--no-sandbox"]
 # token_regex = '"tokens":\{"total":([0-9]+)'
 
+# Gemini CLI, direct to Google AI Studio (no OpenRouter). Install:
+# `brew install gemini-cli` or `npm i -g @google/gemini-cli`, then authenticate
+# (OAuth via `gemini` then /auth, or a GEMINI_API_KEY in the environment).
+# Gemini ships no verified OS sandbox for this use, so `bin` points at
+# engines/gemini-sandboxed.sh (macOS Seatbelt: network + reads open minus a
+# credential deny-list, writes confined to the task dir, scratch, and ~/.gemini).
+# --skip-trust is MANDATORY: Gemini 0.46 downgrades yolo approval to "default" in
+# an untrusted folder, and ringer task dirs are fresh temp dirs never trusted.
+# Uncomment and set an absolute path for `bin` to enable.
+# [engines.gemini]
+# bin = "/absolute/path/to/ringer/engines/gemini-sandboxed.sh"
+# model_default = "gemini-2.5-flash"
+# args_template = [
+#   "{taskdir}",
+#   "{access_args}",
+#   "-m",
+#   "{model}",
+#   "--approval-mode",
+#   "yolo",
+#   "--skip-trust",
+#   "-o",
+#   "json",
+#   "{engine_args}",
+#   "-p",
+#   "{spec}",
+# ]
+# sandbox_args = []
+# full_access_args = ["--no-sandbox"]
+
+# Claude Code as a worker lane. NOT a cheap lane: a headless Claude worker loads
+# the operator's global CLAUDE.md, hooks, and skills, so a trivial verified task
+# can run 100k+ input tokens. Route here only for tasks a cheaper lane has failed.
+# Claude ships no OS sandbox, so `bin` points at engines/claude-sandboxed.sh
+# (macOS Seatbelt). Claude stores its OAuth token in the macOS login Keychain, so
+# that wrapper keeps ~/.claude and ~/Library/Keychains readable and denies every
+# other credential store; see the header of claude-sandboxed.sh for the trade-off.
+# Uncomment and set an absolute path for `bin` to enable.
+# [engines.claude]
+# bin = "/absolute/path/to/ringer/engines/claude-sandboxed.sh"
+# model_default = "sonnet"
+# args_template = [
+#   "{taskdir}",
+#   "{access_args}",
+#   "-p",
+#   "{spec}",
+#   "--model",
+#   "{model}",
+#   "--permission-mode",
+#   "bypassPermissions",
+#   "--output-format",
+#   "json",
+#   "--strict-mcp-config",
+#   "{engine_args}",
+# ]
+# sandbox_args = []
+# full_access_args = ["--no-sandbox"]
+# Claude's JSON usage block has no total; this captures OUTPUT tokens only.
+# token_regex = '"output_tokens":\s*([0-9]+)'
+
 [artifact]
 # Zero-LLM, self-contained HTML artifacts rendered directly from state — no model calls, no
 # network. Three files per config, all pure stdlib templates:

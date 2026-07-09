@@ -72,6 +72,13 @@ export TMPDIR="$SCRATCH"
 export XDG_CACHE_HOME="$SCRATCH/cache"
 mkdir -p "$XDG_CACHE_HOME"
 
+# Append a credential read deny-list to the profile (base profile allows reads,
+# so a worker could otherwise read ~/.ssh, ~/.codex, gh tokens, the Keychain,
+# and exfiltrate over the open network). Sets DENY_ARGS, extends $PROFILE.
+# shellcheck source=deny-read-creds.sh
+source "$(dirname "$0")/deny-read-creds.sh"
+build_deny_read_args
+
 # Run as a child (not exec) so the EXIT trap fires and cleans up the profile +
 # scratch dir even on the success path; propagate the child's exit status.
 set +e
@@ -81,6 +88,7 @@ set +e
   -D "OC_SHARE=$HOME/.local/share/opencode" \
   -D "OC_STATE=$HOME/.local/state/opencode" \
   -D "OC_CONFIG=$HOME/.config/opencode" \
+  "${DENY_ARGS[@]}" \
   -f "$PROFILE" "$OPENCODE_BIN" "$@" < /dev/null
 status=$?
 set -e
