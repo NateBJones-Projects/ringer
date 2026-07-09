@@ -72,6 +72,20 @@ checks and raw logs support — no vibes, no worker self-reports.
   check. Review lane found the HIGH that mattered (sync cursor skipping a
   half-written trailing line). Codex is the proven lane for both sides of
   the review->fix loop on this codebase.
+- 2026-07-09 — Windows/Linux portability job (first runs on a native Windows
+  machine): code-review 5/5 scouts passed (1 retry, ~145-590s, ~67k tok on the
+  retried one); code-fix 6 distinct tasks all substance-green on attempt 1,
+  including a surgical 8300-line-file patch and a 9-file test-suite sweep
+  (132 tests green, 122k tok). Two caveats from the raw logs, neither a
+  competence gap: (a) the codex sandbox on Windows has no `python`/`py` on
+  PATH, so workers cannot self-run Python verify commands — they improvised
+  (PowerShell mirrors, an embedded pyRevit python) or skipped; write specs so
+  self-verification is best-effort and let the executed check carry the
+  verdict. (b) the test-sweep worker did the whole job but never wrote the
+  required fix-summary.md, failing the contract check twice — restate the
+  summary file as a deliverable, not paperwork. Workers were also wrongly
+  suspected of cp1252 mojibake; the corruption was the fix-swarm exporter's
+  text-mode capture (fixed 2026-07-09), so don't demote on that evidence.
 
 ## glm-5.2 via opencode (`openrouter/z-ai/glm-5.2`)
 
@@ -254,6 +268,20 @@ checks and raw logs support — no vibes, no worker self-reports.
   checks must be prefix-tolerant (workers legitimately trim slugs); (2) any
   heading-regex must tolerate numbered headings ("## 3. Type / Typography").
   Both failures looked like worker laziness until the raw logs said otherwise.
+- 2026-07-09 — first Windows-native runs, three lessons: (1) a worktrees-mode
+  task whose previous FAILED worktree still exists dies instantly (0.0s,
+  status fail, EMPTY error/log) when `git worktree add` collides — on OneDrive
+  the metadata under .git/worktrees can also survive `worktree remove` with
+  Permission denied; prune/delete stale worktrees before re-running a failed
+  key, and the instant-fail-with-no-error signature means exactly this.
+  (2) the fix-swarm patch exporter captured `git diff` in text mode — cp1252
+  decode corrupted every non-ASCII byte and injected CRLF, so patches from
+  correct worktrees failed to apply; fixed to byte-mode capture (round-1
+  ASCII-only patches applied fine, which hid it). (3) the day's only two
+  recorded FAILs that reached the model log were an orchestrator check bug
+  (importlib without sys.modules registration) and the fix-summary contract
+  miss noted under codex — first-try rates for 2026-07-09 code-fix are
+  depressed by the former.
 - 2026-07-06 — elsas-website demo, check-craft in BOTH directions: (1) a fixed
   800-char body floor failed a worker for faithfully converting genuinely tiny
   source posts — floor must scale with the source; (2) a citation gate treating
