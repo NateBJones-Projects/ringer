@@ -117,24 +117,24 @@ class PlainEnglishArtifactTests(unittest.TestCase):
         self.assertIn("<span aria-label=\"D-waiting: waiting\"></span>", rounds.group(1))
         self.assertIn("1 finished · 1 working · 1 failed · 1 waiting", html)
 
-    def test_status_change_updates_the_worker_state_word(self) -> None:
+    def test_status_change_updates_the_rounds_state_word(self) -> None:
         queued_html = render_status_html(
             self.state([self.task("A-mock-engine", "queued")]), renderer=self.renderer
         )
-        self.assertIn('<span class="state waiting">waiting</span>', queued_html)
+        self.assertIn('aria-label="A-mock-engine: waiting"', queued_html)
 
         html = render_status_html(
             self.state([self.task("A-mock-engine", "running", attempts=1)]),
             renderer=self.renderer,
         )
-        self.assertIn('<span class="state working">working</span>', html)
+        self.assertIn('aria-label="A-mock-engine: working"', html)
 
     def test_retry_and_second_try_state_words(self) -> None:
         retry_html = render_status_html(
             self.state([self.task("C-nudge-hooks", "retrying", attempts=1, elapsed_s=20)]),
             renderer=self.renderer,
         )
-        self.assertIn('<span class="state retry">sent back — redoing</span>', retry_html)
+        self.assertIn('aria-label="C-nudge-hooks: sent back — redoing"', retry_html)
 
         pass_html = render_status_html(
             self.state([self.task("C-nudge-hooks", "pass", attempts=2, elapsed_s=35)]),
@@ -190,6 +190,49 @@ class PlainEnglishArtifactTests(unittest.TestCase):
 
         self.assertIn('<meta http-equiv="refresh" content="2">', live_html)
         self.assertNotIn('http-equiv="refresh"', final_html)
+
+    def test_live_work_section_only_shows_finished_tasks(self) -> None:
+        logs = Path(self.tmp.name) / "logs"
+        logs.mkdir()
+        tasks = [
+            self.task("finished-task", "pass", attempts=1),
+            self.task("running-task", "running", attempts=1),
+        ]
+        for task in tasks:
+            log_path = logs / f'{task["key"]}.log'
+            log_path.write_text("work log\n", encoding="utf-8")
+            task["log_path"] = str(log_path)
+
+        live_html = render_status_html(self.state(tasks), renderer=self.renderer)
+        live_work = re.search(
+            r'<section class="work" aria-labelledby="the-work-heading">(.*?)</section>',
+            live_html,
+            re.S,
+        )
+        self.assertIsNotNone(live_work)
+        self.assertIn('title="finished-task"', live_work.group(1))
+        self.assertNotIn('title="running-task"', live_work.group(1))
+        self.assertEqual(1, live_work.group(1).count(">view the work log</a>"))
+
+        unfinished_html = render_status_html(
+            self.state([tasks[1]]), renderer=self.renderer
+        )
+        unfinished_work = re.search(
+            r'<section class="work" aria-labelledby="the-work-heading">(.*?)</section>',
+            unfinished_html,
+            re.S,
+        )
+        self.assertIsNotNone(unfinished_work)
+        self.assertIn("Deliverables appear here as workers finish.", unfinished_work.group(1))
+        self.assertNotIn('class="work-group"', unfinished_work.group(1))
+        self.assertNotIn(">view the work log</a>", unfinished_work.group(1))
+
+        final_html = render_final_report_html(
+            self.state(tasks, finished=True), renderer=self.renderer
+        )
+        self.assertIn('title="finished-task"', final_html)
+        self.assertIn('title="running-task"', final_html)
+        self.assertEqual(2, final_html.count(">view the work log</a>"))
 
     def test_theme_override_blocks_are_present(self) -> None:
         html = render_status_html(

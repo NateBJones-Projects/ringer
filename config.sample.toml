@@ -43,6 +43,11 @@ bin = "codex"
 # - {taskdir}: task working directory
 # - {spec}: task prompt/spec
 # - {access_args}: expands to sandbox_args or full_access_args
+# - {model_args}: expands to "-m <model>" only when the manifest task sets
+#   "model" or this engine sets model_default; otherwise it expands to nothing,
+#   preserving Codex's configured default. Setting model_default = "gpt-5.6-sol"
+#   pins the model instead of inheriting ~/.codex/config.toml drift and makes
+#   scoreboard attribution exact.
 # - {engine_args}: expands to the task's optional "engine_args" list — the orchestrator
 #   sets per-task flags here, e.g. ["-c", "model_reasoning_effort=medium"] to match
 #   reasoning depth to task difficulty instead of inheriting the CLI-wide default
@@ -50,6 +55,7 @@ args_template = [
   "exec",
   "--skip-git-repo-check",
   "{access_args}",
+  "{model_args}",
   "{engine_args}",
   "-C",
   "{taskdir}",

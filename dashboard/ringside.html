@@ -105,32 +105,45 @@
       border-bottom: 1px solid var(--hairline);
       gap: 10px;
     }
-    .machine-strip {
+    .running-now {
       display: flex;
-      gap: 4px;
+      gap: 7px;
       align-items: center;
-      min-width: 60px;
-      max-width: 220px;
-      flex: 0 1 auto;
+      min-width: 0;
+      flex: 1 1 auto;
+      overflow-x: auto;
+      scrollbar-width: thin;
     }
-    .machine-strip button {
-      flex: 1 1 0;
-      min-width: 14px;
-      height: 7px;
-      border: 0;
-      border-radius: 4px;
-      padding: 0;
-      background: var(--waiting);
-      opacity: .45;
-      cursor: pointer;
+    .running-now:empty { display: none; }
+    .run-switch {
+      flex: 0 0 auto;
+      min-width: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 6px 10px;
+      border: 1px solid var(--hairline);
+      border-radius: 999px;
+      background: var(--surface);
+      color: var(--ink);
+      font-size: 12px;
+      line-height: 1;
     }
-    .machine-strip button.live { background: var(--accent); opacity: 1; }
-    .machine-strip button.pass { background: var(--pass); opacity: .9; }
-    .machine-strip button.fail { background: var(--fail); opacity: .9; }
-    .machine-strip button[aria-current="true"] { outline: 1.5px solid var(--ink); outline-offset: 2px; }
-    @media (prefers-reduced-motion: no-preference) {
-      .machine-strip button.live { animation: pulse 1.4s ease-in-out infinite; }
+    .run-switch:hover { border-color: var(--accent); }
+    .run-switch[aria-current="true"] {
+      border-color: var(--accent);
+      color: var(--accent);
+      box-shadow: inset 0 0 0 1px var(--accent);
     }
+    .run-switch-name {
+      max-width: 18ch;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 700;
+    }
+    .run-switch-progress { color: var(--muted); font-size: 11px; }
+    .run-switch .live-dot { width: 7px; height: 7px; flex-basis: 7px; }
     .artifact-tools button {
       padding: 7px 14px;
       border: 1px solid var(--hairline);
@@ -160,7 +173,7 @@
     }
     select:focus-visible,
     summary.run-head:focus-visible,
-    .machine-strip button:focus-visible {
+    .run-switch:focus-visible {
       outline: 2px solid var(--accent);
       outline-offset: 2px;
     }
@@ -261,27 +274,51 @@
     @media (prefers-reduced-motion: no-preference) {
       .rounds .working, .rounds .retry { animation: pulse 1.4s ease-in-out infinite; }
     }
-    .legend { font-size: 12.5px; color: var(--muted); margin: 0 0 clamp(12px, 2vw, 18px); }
-
     section h2 {
       font-size: 12px; font-weight: 700; letter-spacing: .1em;
       text-transform: uppercase; color: var(--muted);
       margin: 0 0 4px; padding-bottom: 8px;
       border-bottom: 1px solid var(--hairline);
     }
-    .workers { margin-top: clamp(14px, 2vw, 20px); }
-    .worker {
+    .workers {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: clamp(14px, 2vw, 20px);
+    }
+    .workers > .empty { grid-column: 1 / -1; }
+    .worker-card {
+      min-width: 0;
+      overflow: hidden;
+      border: 1px solid var(--hairline);
+      border-radius: 8px;
+      background: var(--surface);
+    }
+    .worker-card.expanded { grid-column: 1 / -1; }
+    .worker-card-toggle {
       width: 100%;
       display: grid;
-      grid-template-columns: 18px minmax(0,1fr) auto auto;
-      gap: 4px 12px; align-items: baseline;
-      padding: 12px 0; border: 0; border-bottom: 1px solid var(--hairline);
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 7px 12px;
+      align-items: center;
+      padding: 12px;
+      border: 0;
       background: transparent;
       text-align: left;
     }
-    .worker:hover .name,
-    .worker:focus-visible .name { color: var(--accent); }
-    .worker[aria-expanded="true"] .name { color: var(--accent); }
+    .worker-card-toggle:hover .name,
+    .worker-card-toggle:focus-visible .name,
+    .worker-card-toggle[aria-expanded="true"] .name { color: var(--accent); }
+    .worker-card-toggle:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: -2px;
+    }
+    .worker-card-head {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
     .glyph { width: 11px; height: 11px; border-radius: 50%; align-self: center; }
     .glyph.pass { background: var(--pass); }
     .glyph.working { background: var(--accent); }
@@ -291,21 +328,31 @@
     @media (prefers-reduced-motion: no-preference) {
       .glyph.working, .glyph.retry { animation: pulse 1.4s ease-in-out infinite; }
     }
-    .worker .name { font-weight: 650; font-size: 15px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .worker .state { font-size: 13px; font-weight: 650; white-space: nowrap; }
+    .worker-card .name { font-weight: 650; font-size: 14px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .worker-card .state { font-size: 12px; font-weight: 650; white-space: nowrap; }
     .state.pass { color: var(--pass); }
     .state.working { color: var(--accent); }
     .state.retry,
     .state.fail { color: var(--fail); }
     .state.waiting { color: var(--waiting); }
-    .worker .time { font-size: 12.5px; color: var(--muted); white-space: nowrap; }
-    .worker .activity {
-      grid-column: 2 / -1; font-size: 13px; color: var(--muted);
+    .worker-card .meta {
+      grid-column: 1 / -1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--muted);
+      font-size: 11.5px;
+    }
+    .worker-card .activity {
+      grid-column: 1 / -1;
+      font-size: 12.5px;
+      color: var(--muted);
       min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
     .stream {
-      padding: 0 0 14px 30px;
-      border-bottom: 1px solid var(--hairline);
+      padding: 12px;
+      border-top: 1px solid var(--hairline);
     }
     .stream-head {
       display: flex;
@@ -491,6 +538,7 @@
 
     @media (max-width: 760px) {
       .topbar-main { flex-wrap: wrap; gap: 6px 10px; }
+      .running-now { order: 3; flex-basis: 100%; }
       .run-head .clock { width: 100%; margin-left: 21px; }
       .artifact-layout {
         min-height: auto;
@@ -509,22 +557,9 @@
         min-height: 58vh;
       }
     }
-    @media (max-width: 560px) {
-      .worker {
-        grid-template-columns: 18px minmax(0,1fr);
-      }
-      .worker .state,
-      .worker .time,
-      .worker .activity {
-        grid-column: 2 / -1;
-      }
-      .worker .state,
-      .worker .time {
-        white-space: normal;
-      }
-      .stream {
-        padding-left: 0;
-      }
+    @media (max-width: 720px) {
+      .workers { grid-template-columns: minmax(0, 1fr); }
+      .worker-card.expanded { grid-column: auto; }
     }
   </style>
 </head>
@@ -536,7 +571,7 @@
         <span class="eyebrow wordmark"><b>Ringside</b></span>
         <span id="reconnect" class="reconnect mono" hidden>reconnecting…</span>
       </div>
-      <div id="machine-strip" class="machine-strip" role="group" aria-label="Everything running on this machine"></div>
+      <div id="running-now" class="running-now" role="group" aria-label="Running now"></div>
       <time id="clock" class="clock mono"></time>
     </header>
 
@@ -574,7 +609,7 @@
       libraryError: null,
       tab: normalizeTab(localStorage.getItem(TAB_KEY)) || "live",
       hasStoredTab: Boolean(normalizeTab(localStorage.getItem(TAB_KEY))),
-      expanded: null,
+      expanded: new Map(),
       logTimer: null,
       artifactName: sessionStorage.getItem(ARTIFACT_KEY) || "",
       artifactManual: Boolean(sessionStorage.getItem(ARTIFACT_KEY)),
@@ -583,13 +618,15 @@
       frameContent: "",
       frameRequest: 0,
       rendering: false,
-      runOpen: {}
+      runOpen: {},
+      focusedRunId: ""
     };
 
     const els = {
       topDot: document.getElementById("top-dot"),
       reconnect: document.getElementById("reconnect"),
       clock: document.getElementById("clock"),
+      runningNow: document.getElementById("running-now"),
       runs: document.getElementById("runs"),
       artifactPicker: document.getElementById("artifact-picker"),
       artifactStatus: document.getElementById("artifact-status"),
@@ -660,6 +697,10 @@
       return String(task.key || task.id || task.name || `task-${index}`);
     }
 
+    function expansionKey(runIdValue, taskKeyValue) {
+      return JSON.stringify([String(runIdValue), String(taskKeyValue)]);
+    }
+
     function normalizeRuns(payload) {
       const raw = Array.isArray(payload) ? payload : (Array.isArray(payload?.runs) ? payload.runs : []);
       const runs = raw.filter(Boolean).map((run, index) => {
@@ -670,6 +711,10 @@
         const stateName = rawState === "died" ? "died" : (live ? "live" : "finished");
         const pass = numberOrZero(run.pass ?? summary.pass ?? totals.pass);
         const fail = numberOrZero(run.fail ?? summary.fail ?? totals.fail);
+        const doneSource = run.done ?? summary.done ?? totals.done;
+        const done = doneSource === undefined || doneSource === null
+          ? pass + fail
+          : numberOrZero(doneSource);
         const tokens = numberOrZero(run.tokens ?? summary.tokens ?? totals.tokens);
         return {
           ...run,
@@ -682,6 +727,7 @@
           elapsed_s: elapsedForRun({...run, state: stateName}),
           pass,
           fail,
+          done,
           tokens,
           tasks: Array.isArray(run.tasks) ? run.tasks : []
         };
@@ -723,6 +769,17 @@
       if (direct) return direct;
       const tail = Array.isArray(task?.log_tail) ? task.log_tail : [];
       return tail.map(line => String(line).trim()).filter(Boolean).slice(-1)[0] || "";
+    }
+
+    function runIsRunningNow(run) {
+      return run.state === "live"
+        && state.active
+        && typeof state.active === "object"
+        && Object.prototype.hasOwnProperty.call(state.active, run.__id);
+    }
+
+    function runningNowRuns() {
+      return state.runs.filter(runIsRunningNow);
     }
 
     function setTab(_tab, _persist) { /* unified page — tabs removed */ }
@@ -828,9 +885,76 @@
     }
 
     function renderTop() {
-      const anyLive = state.runs.some(run => run.state === "live");
+      const anyLive = runningNowRuns().length > 0;
       els.topDot.classList.toggle("live", anyLive);
       els.reconnect.hidden = !(state.runError || state.libraryError);
+    }
+
+    function effectiveFocusedRunId(liveRuns) {
+      if (liveRuns.some(run => run.__id === state.focusedRunId)) return state.focusedRunId;
+      return liveRuns.find(run => run.run_name === state.artifactName)?.__id || "";
+    }
+
+    function renderRunningNow() {
+      const liveRuns = runningNowRuns();
+      const staging = document.createElement("div");
+      if (liveRuns.length >= 2) {
+        const activeRunId = effectiveFocusedRunId(liveRuns);
+        liveRuns.forEach(run => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "run-switch";
+          button.dataset.key = run.__id;
+          button.setAttribute("aria-current", String(run.__id === activeRunId));
+          const total = run.tasks.length;
+          const done = Math.min(total, Math.max(0, run.done));
+          button.setAttribute("aria-label", `${run.run_name}, live, ${done} of ${total} tasks done`);
+          button.addEventListener("click", () => focusRun(run.__id));
+
+          const dot = document.createElement("span");
+          dot.className = "live-dot live";
+          dot.setAttribute("aria-hidden", "true");
+          const name = document.createElement("span");
+          name.className = "run-switch-name";
+          name.textContent = run.run_name;
+          const progress = document.createElement("span");
+          progress.className = "run-switch-progress mono";
+          progress.textContent = `${done}/${total}`;
+          button.append(dot, name, progress);
+          staging.appendChild(button);
+        });
+      }
+      state.rendering = true;
+      morphChildren(els.runningNow, staging);
+      state.rendering = false;
+    }
+
+    function focusRun(runIdValue) {
+      const run = state.runs.find(item => item.__id === runIdValue);
+      if (!run || !runIsRunningNow(run)) return;
+      state.focusedRunId = run.__id;
+      state.artifactName = run.run_name;
+      state.artifactManual = true;
+      state.artifactVersion = "live";
+      state.frameKey = "";
+      state.runOpen[run.__id] = true;
+      sessionStorage.setItem(ARTIFACT_KEY, run.run_name);
+      renderRunningNow();
+      renderArtifacts();
+      renderArtifactControls();
+      renderLive();
+      loadArtifactFrame(true);
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        const target = [...els.runs.querySelectorAll("details.run")]
+          .find(section => section.dataset.key === run.__id);
+        if (!target) return;
+        target.open = true;
+        state.runOpen[run.__id] = true;
+        target.scrollIntoView({
+          behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+          block: "start"
+        });
+      }));
     }
 
     function renderLive() {
@@ -870,20 +994,20 @@
         const head = document.createElement("summary");
         head.className = "corner run-head";
         const dot = document.createElement("span");
-        dot.className = `live-dot ${run.state === "live" ? "live" : ""}`;
+        dot.className = `live-dot ${runIsRunningNow(run) ? "live" : ""}`;
         dot.setAttribute("aria-hidden", "true");
         const title = document.createElement("span");
         title.className = "eyebrow";
         const titleBold = document.createElement("b");
-        titleBold.textContent = `Round ${roundOf(run)}`;
+        titleBold.textContent = run.run_name;
         title.appendChild(titleBold);
         const identity = document.createElement("span");
         identity.className = "identity";
-        identity.textContent = `${run.tasks.length} agent${run.tasks.length === 1 ? "" : "s"} · ${run.identity}`;
+        identity.textContent = `Round ${roundOf(run)} · ${run.identity}`;
         const stats = document.createElement("span");
         stats.className = "clock mono run-stats";
         const outcome = run.state === "live"
-          ? `${run.pass} passed so far`
+          ? `${Math.min(run.tasks.length, run.done)}/${run.tasks.length} done`
           : (run.fail > 0 ? `${run.pass} passed · ${run.fail} failed` : `all ${run.pass} passed`);
         const tok = run.tokens > 0 ? ` · ${formatTokens(run.tokens)}` : "";
         stats.textContent = `${outcome} · ${formatDuration(run.elapsed_s)}${tok}`;
@@ -909,11 +1033,6 @@
         );
         section.appendChild(rounds);
 
-        const legend = document.createElement("p");
-        legend.className = "legend";
-        legend.textContent = `${counts.pass} finished & checked · ${counts.working} working · ${counts.retry} sent back · ${counts.waiting} waiting · ${counts.fail} failed`;
-        section.appendChild(legend);
-
         const workers = document.createElement("div");
         workers.className = "workers";
         if (!run.tasks.length) {
@@ -925,13 +1044,19 @@
         run.tasks.forEach((task, taskIndex) => {
           const key = taskKey(task, taskIndex);
           const kind = taskKind(task);
-          const isExpanded = state.expanded && state.expanded.runId === run.__id && state.expanded.taskKey === key;
-          const row = document.createElement("button");
-          row.className = "worker";
-          row.dataset.key = `worker:${key}`;
-          row.type = "button";
-          row.setAttribute("aria-expanded", String(Boolean(isExpanded)));
-          row.addEventListener("click", () => toggleWorker(run, task, taskIndex));
+          const expandedKey = expansionKey(run.__id, key);
+          const expanded = state.expanded.get(expandedKey);
+          const isExpanded = Boolean(expanded);
+          const card = document.createElement("article");
+          card.className = `worker-card${isExpanded ? " expanded" : ""}`;
+          card.dataset.key = `worker:${key}`;
+
+          const toggle = document.createElement("button");
+          toggle.className = "worker-card-toggle";
+          toggle.type = "button";
+          toggle.setAttribute("aria-expanded", String(isExpanded));
+          if (isExpanded) toggle.setAttribute("aria-controls", `stream-${runIndex}-${taskIndex}`);
+          toggle.addEventListener("click", () => toggleWorker(run.__id, key));
 
           const glyph = document.createElement("span");
           glyph.className = `glyph ${kind}`;
@@ -939,24 +1064,39 @@
           const name = document.createElement("span");
           name.className = "name";
           name.textContent = key;
+          const cardHead = document.createElement("span");
+          cardHead.className = "worker-card-head";
+          cardHead.append(name, glyph);
           const taskState = document.createElement("span");
           taskState.className = `state ${kind}`;
           taskState.textContent = taskStateText(kind);
-          const time = document.createElement("span");
-          time.className = "time mono";
-          time.textContent = kind === "waiting" ? "—" : formatDuration(task.elapsed_s);
-          row.append(glyph, name, taskState, time);
-
-          const activity = taskIsRunning(task) ? taskActivity(task) : "";
-          if (activity) {
-            const line = document.createElement("span");
-            line.className = "activity";
-            line.textContent = activity;
-            row.appendChild(line);
+          const engine = String(task.engine || "").trim() || "engine not reported";
+          const model = String(task.model || "").trim();
+          const metaParts = [model ? `${engine} · ${model}` : engine];
+          metaParts.push(kind === "waiting" ? "—" : formatDuration(task.elapsed_s));
+          const attempts = numberOrZero(task.attempts);
+          if (attempts > 1) metaParts.push(`attempt ${attempts}`);
+          if (numberOrZero(task.tokens) > 0) metaParts.push(formatTokens(task.tokens));
+          const meta = document.createElement("span");
+          meta.className = "meta mono";
+          meta.textContent = metaParts.join(" · ");
+          toggle.setAttribute("aria-label", `${key}, ${taskStateText(kind)}, ${metaParts.join(", ")}`);
+          toggle.append(cardHead, taskState, meta);
+          const activityText = taskIsRunning(task) ? (taskActivity(task) || "No activity reported yet.") : "";
+          if (activityText) {
+            const activity = document.createElement("span");
+            activity.className = "activity";
+            activity.textContent = activityText;
+            toggle.appendChild(activity);
           }
-          workers.appendChild(row);
+          card.appendChild(toggle);
 
-          if (isExpanded) workers.appendChild(renderStream(run, task, taskIndex));
+          if (expanded) {
+            const stream = renderStream(run, task, taskIndex, expanded, expandedKey);
+            stream.id = `stream-${runIndex}-${taskIndex}`;
+            card.appendChild(stream);
+          }
+          workers.appendChild(card);
         });
         section.appendChild(workers);
         staging.appendChild(section);
@@ -969,11 +1109,12 @@
       syncLogPolling();
     }
 
-    function renderStream(run, task, taskIndex) {
+    function renderStream(run, task, taskIndex, expanded, expandedKey) {
       const panel = document.createElement("div");
       panel.className = "stream";
       panel.dataset.stream = "true";
       panel.dataset.key = `stream:${taskKey(task, taskIndex)}`;
+      panel.dataset.expansionKey = expandedKey;
 
       // The brief: the exact prompt this model was handed, plus the pass
       // test that will judge its work. Watchers should never have to guess
@@ -1013,21 +1154,21 @@
       const pre = document.createElement("pre");
       pre.className = "stream-log";
       pre.tabIndex = 0;
-      pre.textContent = state.expanded?.logText || "No log output yet.";
+      pre.textContent = expanded.logText || "No log output yet.";
       pre.addEventListener("scroll", () => {
         const distance = pre.scrollHeight - pre.scrollTop - pre.clientHeight;
-        if (state.expanded) {
-          state.expanded.pinned = distance < 28;
-          state.expanded.scrollTop = pre.scrollTop;
+        if (state.expanded.get(expandedKey) === expanded) {
+          expanded.pinned = distance < 28;
+          expanded.scrollTop = pre.scrollTop;
         }
       });
       panel.appendChild(pre);
-      if (state.expanded?.error) {
+      if (expanded.error) {
         const error = document.createElement("p");
         error.className = "catch";
         const bold = document.createElement("b");
         bold.textContent = "Log stream unavailable:";
-        error.append(bold, document.createTextNode(` ${state.expanded.error}`));
+        error.append(bold, document.createTextNode(` ${expanded.error}`));
         panel.appendChild(error);
       }
 
@@ -1062,55 +1203,57 @@
         }
       }
       requestAnimationFrame(() => {
-        if (state.expanded?.pinned !== false) {
+        if (expanded.pinned !== false) {
           pre.scrollTop = pre.scrollHeight;
         } else {
-          pre.scrollTop = state.expanded?.scrollTop || 0;
+          pre.scrollTop = expanded.scrollTop || 0;
         }
       });
       return panel;
     }
 
-    function toggleWorker(run, task, taskIndex) {
-      const key = taskKey(task, taskIndex);
-      if (state.expanded && state.expanded.runId === run.__id && state.expanded.taskKey === key) {
-        closeWorker();
+    function toggleWorker(runIdValue, taskKeyValue) {
+      const key = expansionKey(runIdValue, taskKeyValue);
+      if (state.expanded.has(key)) {
+        closeWorker(key);
         return;
       }
-      state.expanded = {
-        runId: run.__id,
-        taskKey: key,
+      state.expanded.set(key, {
+        runId: runIdValue,
+        taskKey: taskKeyValue,
         logText: "",
         error: "",
         pinned: true,
         scrollTop: 0,
         finalFetched: false
-      };
+      });
       renderLive();
-      fetchExpandedLog();
+      const found = findExpandedTask(state.expanded.get(key));
+      if (found && taskIsRunning(found.task)) fetchExpandedLog(key);
     }
 
-    function closeWorker() {
-      state.expanded = null;
-      if (state.logTimer) {
+    function closeWorker(key) {
+      if (key) state.expanded.delete(key);
+      else state.expanded.clear();
+      if (!hasRunningExpandedTasks() && state.logTimer) {
         clearInterval(state.logTimer);
         state.logTimer = null;
       }
       renderLive();
     }
 
-    function findExpandedTask() {
-      if (!state.expanded) return null;
-      const run = state.runs.find(item => item.__id === state.expanded.runId);
+    function findExpandedTask(expanded) {
+      if (!expanded) return null;
+      const run = state.runs.find(item => item.__id === expanded.runId);
       if (!run) return null;
-      const index = run.tasks.findIndex((task, taskIndex) => taskKey(task, taskIndex) === state.expanded.taskKey);
+      const index = run.tasks.findIndex((task, taskIndex) => taskKey(task, taskIndex) === expanded.taskKey);
       if (index < 0) return null;
       return {run, task: run.tasks[index], index};
     }
 
-    async function fetchExpandedLog() {
-      const expanded = state.expanded;
-      const found = findExpandedTask();
+    async function fetchExpandedLog(key) {
+      const expanded = state.expanded.get(key);
+      const found = findExpandedTask(expanded);
       if (!expanded || !found) return;
       const path = `/logs/${encodeURIComponent(found.run.__id)}/${encodeURIComponent(expanded.taskKey)}`;
       try {
@@ -1119,49 +1262,69 @@
         const raw = await response.text();
         // Worker logs carry raw terminal output; strip ANSI escapes for the stream view.
         const text = raw.replace(/\[[0-9;?]*[ -\/]*[@-~]/g, "").replace(/\[[0-9;]{1,6}m/g, "");
-        if (state.expanded !== expanded) return;
+        if (state.expanded.get(key) !== expanded) return;
         expanded.logText = text || "No log output yet.";
         expanded.error = "";
-        updateStreamText(expanded.logText);
+        updateStreamText(key, expanded.logText);
       } catch (error) {
-        if (state.expanded !== expanded) return;
+        if (state.expanded.get(key) !== expanded) return;
         expanded.error = error?.message || "could not read log";
         renderLive();
       }
     }
 
-    function updateStreamText(text) {
-      const pre = els.runs.querySelector(".stream pre.stream-log");
+    function updateStreamText(key, text) {
+      const stream = [...els.runs.querySelectorAll(".stream[data-expansion-key]")]
+        .find(item => item.dataset.expansionKey === key);
+      const pre = stream?.querySelector("pre.stream-log");
       if (!pre) return;
-      const shouldPin = state.expanded?.pinned !== false || pre.scrollHeight - pre.scrollTop - pre.clientHeight < 28;
+      const expanded = state.expanded.get(key);
+      if (!expanded) return;
+      const shouldPin = expanded.pinned !== false || pre.scrollHeight - pre.scrollTop - pre.clientHeight < 28;
       const scrollTop = pre.scrollTop;
       pre.textContent = text || "No log output yet.";
       if (shouldPin) {
         pre.scrollTop = pre.scrollHeight;
       } else {
         pre.scrollTop = scrollTop;
-        if (state.expanded) state.expanded.scrollTop = scrollTop;
+        expanded.scrollTop = scrollTop;
       }
     }
 
+    function hasRunningExpandedTasks() {
+      return [...state.expanded.values()].some(expanded => {
+        const found = findExpandedTask(expanded);
+        return found && taskIsRunning(found.task);
+      });
+    }
+
+    function fetchExpandedLogs() {
+      [...state.expanded.entries()].forEach(([key, expanded]) => {
+        const found = findExpandedTask(expanded);
+        if (found && taskIsRunning(found.task)) fetchExpandedLog(key);
+      });
+    }
+
     function syncLogPolling() {
-      if (!state.expanded) return;
-      const found = findExpandedTask();
-      if (!found) {
-        closeWorker();
-        return;
+      [...state.expanded.entries()].forEach(([key, expanded]) => {
+        const found = findExpandedTask(expanded);
+        if (!found) {
+          state.expanded.delete(key);
+          return;
+        }
+        if (taskIsRunning(found.task)) expanded.finalFetched = false;
+        if (!taskIsRunning(found.task) && !expanded.finalFetched) {
+          expanded.finalFetched = true;
+          fetchExpandedLog(key);
+        }
+      });
+      const hasRunning = hasRunningExpandedTasks();
+      if (hasRunning && !state.logTimer) {
+        state.logTimer = setInterval(fetchExpandedLogs, 1000);
       }
-      const running = taskIsRunning(found.task);
-      if (running && !state.logTimer) {
-        state.logTimer = setInterval(fetchExpandedLog, 1000);
-      }
-      if (!running && state.logTimer) {
+      if (!hasRunning && state.logTimer) {
         clearInterval(state.logTimer);
         state.logTimer = null;
-      }
-      if (!running && !state.expanded.finalFetched) {
-        state.expanded.finalFetched = true;
-        fetchExpandedLog();
       }
     }
 
@@ -1450,39 +1613,8 @@
         state.runError = error?.message || "runs unavailable";
       }
       renderTop();
-      renderMachineStrip();
+      renderRunningNow();
       renderLive();
-    }
-
-    function renderMachineStrip() {
-      const strip = document.getElementById("machine-strip");
-      if (!strip) return;
-      const runs = [...state.runs].sort((a, b) => parseTime(a.started_at) - parseTime(b.started_at)).slice(-10);
-      const staging = document.createElement("div");
-      runs.forEach(run => {
-        const seg = document.createElement("button");
-        seg.type = "button";
-        seg.dataset.key = run.__id;
-        seg.className = run.state === "live" ? "live" : (run.fail > 0 || run.state === "died" ? "fail" : "pass");
-        seg.title = `${run.run_name} — ${run.state === "live" ? "live" : run.state} (${run.identity})`;
-        seg.setAttribute("aria-label", seg.title);
-        seg.setAttribute("aria-current", String(run.run_name === state.artifactName));
-        seg.addEventListener("click", () => {
-          state.artifactName = run.run_name;
-          state.artifactManual = true;
-          state.artifactVersion = "live";
-          state.frameKey = "";
-          sessionStorage.setItem(ARTIFACT_KEY, run.run_name);
-          renderArtifacts();
-          renderArtifactControls();
-          renderLive();
-          loadArtifactFrame(true);
-        });
-        staging.appendChild(seg);
-      });
-      state.rendering = true;
-      morphChildren(strip, staging);
-      state.rendering = false;
     }
 
     async function fetchLibrary() {
@@ -1498,6 +1630,7 @@
       renderTop();
       renderArtifacts();
       renderArtifactControls();
+      renderRunningNow();
       loadArtifactFrame(false);
     }
     els.artifactVersion.addEventListener("change", () => {
@@ -1524,16 +1657,20 @@
       state.artifactVersion = "live";
       state.frameKey = "";
       sessionStorage.setItem(ARTIFACT_KEY, name);
+      state.focusedRunId = "";
       renderArtifacts();
       renderArtifactControls();
+      renderRunningNow();
+      renderLive();
       loadArtifactFrame(true);
     });
     document.addEventListener("keydown", event => {
-      if (event.key === "Escape" && state.expanded) closeWorker();
+      if (event.key === "Escape" && state.expanded.size) closeWorker();
     });
 
     tickClock();
     renderTop();
+    renderRunningNow();
     renderLive();
     renderArtifacts();
     fetchRuns();

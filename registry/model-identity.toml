@@ -17,6 +17,21 @@ display = "GPT-5.5"
 confidence = "verified"     # snapshot gpt-5.5-2026-04-23, Codex CLI default; see capability file
 source = "https://developers.openai.com/codex/models"
 
+[engines.codex.models."gpt-5.6-sol"]
+display = "GPT-5.6 Sol"
+confidence = "verified"
+source = "https://developers.openai.com/codex/models"
+
+[engines.codex.models."gpt-5.6-luna"]
+display = "GPT-5.6 Luna"
+confidence = "verified"
+source = "https://developers.openai.com/codex/models"
+
+[engines.codex.models."gpt-5.6-terra"]
+display = "GPT-5.6 Terra"
+confidence = "verified"
+source = "https://developers.openai.com/codex/models"
+
 [engines.grok]
 harness = "Grok Build CLI"
 access = "OAuth plan"
