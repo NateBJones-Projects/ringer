@@ -12,6 +12,9 @@ sys.path.insert(0, str(ROOT))
 
 from ringer import ARTIFACT_BASE_CSS, ArtifactRenderer, render_final_report_html, render_status_html  # noqa: E402
 
+# Design-bake artifact that only exists on the machine where the reference was baked;
+# it is not checked into the repo. If the bake is re-run, check the HTML into
+# tests/fixtures/ and point REFERENCE there so the token test runs everywhere.
 REFERENCE = Path(
     "/private/tmp/claude-501/-Users-jonathanedwards-WORKSPACE-20-CLIENTS-NATE-10-ACTIVE-SYSTEMS-ringer-system/"
     "d4e72b45-c6bd-4928-aaf0-4e3552eb8f04/scratchpad/design-bake/design-reference.html"
@@ -50,6 +53,10 @@ class DesignReferenceTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.renderer = ArtifactRenderer(Path(self.tmp.name) / "artifacts" / "run.html")
 
+    @unittest.skipUnless(
+        REFERENCE.exists(),
+        f"design reference HTML not present on this machine: {REFERENCE}",
+    )
     def test_renderer_tokens_match_design_reference(self) -> None:
         reference_css = REFERENCE.read_text(encoding="utf-8")
 
