@@ -12,13 +12,12 @@ sys.path.insert(0, str(ROOT))
 
 from ringer import ARTIFACT_BASE_CSS, ArtifactRenderer, render_final_report_html, render_status_html  # noqa: E402
 
-# Design-bake artifact that only exists on the machine where the reference was baked;
-# it is not checked into the repo. If the bake is re-run, check the HTML into
-# tests/fixtures/ and point REFERENCE there so the token test runs everywhere.
-REFERENCE = Path(
-    "/private/tmp/claude-501/-Users-jonathanedwards-WORKSPACE-20-CLIENTS-NATE-10-ACTIVE-SYSTEMS-ringer-system/"
-    "d4e72b45-c6bd-4928-aaf0-4e3552eb8f04/scratchpad/design-bake/design-reference.html"
-)
+# Frozen design-approved reference page, checked into the repo so this test
+# runs on every machine (re-baked 2026-07-09 from the current renderer after
+# the original design-bake artifact was lost). Regenerate ONLY for intentional
+# design changes: python3 tests/fixtures/make_design_reference.py — then
+# review the diff and commit; silently re-baking defeats the test.
+REFERENCE = ROOT / "tests" / "fixtures" / "design-reference.html"
 
 
 def css_block(css: str, selector: str) -> str:

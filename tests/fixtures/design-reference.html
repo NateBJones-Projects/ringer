@@ -1,0 +1,588 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">
+<title>ringer report &middot; Design Reference</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --ground: #0b0e14;
+    --surface: #141a26;
+    --ink: #e9eef7;
+    --muted: #8fa0b6;
+    --hairline: rgba(143, 160, 182, .22);
+    --accent: #35d0ff;
+    --pass: #45d17e;
+    --fail: #ff5f6b;
+    --waiting: #6f7c92;
+    --quote-bg: rgba(255, 95, 107, .08);
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      color-scheme: light;
+      --ground: #f2f5f9;
+      --surface: #ffffff;
+      --ink: #17202e;
+      --muted: #5a6a7e;
+      --hairline: rgba(90, 106, 126, .28);
+      --accent: #007fb0;
+      --pass: #178a4c;
+      --fail: #cc3340;
+      --waiting: #7d8ba0;
+      --quote-bg: rgba(204, 51, 64, .07);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --ground: #0b0e14; --surface: #141a26; --ink: #e9eef7; --muted: #8fa0b6;
+    --hairline: rgba(143,160,182,.22); --accent: #35d0ff; --pass: #45d17e;
+    --fail: #ff5f6b; --waiting: #6f7c92; --quote-bg: rgba(255,95,107,.08);
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --ground: #f2f5f9; --surface: #ffffff; --ink: #17202e; --muted: #5a6a7e;
+    --hairline: rgba(90,106,126,.28); --accent: #007fb0; --pass: #178a4c;
+    --fail: #cc3340; --waiting: #7d8ba0; --quote-bg: rgba(204,51,64,.07);
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    min-height: 100%;
+    overflow-x: hidden;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    line-height: 1.5;
+  }
+  body {
+    padding: clamp(18px, 4vw, 52px);
+  }
+  .page {
+    max-width: 860px;
+    margin: 0 auto;
+  }
+  .corner {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: clamp(14px, 3vw, 26px);
+  }
+  .live-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--accent);
+    align-self: center;
+    flex: 0 0 9px;
+  }
+  .live-dot.pass { background: var(--pass); }
+  .live-dot.fail, .live-dot.retry { background: var(--fail); }
+  .live-dot.waiting { background: var(--waiting); }
+  @media (prefers-reduced-motion: no-preference) {
+    .live-dot.is-live { animation: pulse 1.4s ease-in-out infinite; }
+    @keyframes pulse { 50% { opacity: .35; } }
+  }
+  .eyebrow {
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+  }
+  .eyebrow b {
+    color: var(--ink);
+  }
+  .clock {
+    margin-left: auto;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .briefing {
+    max-width: 30ch;
+    margin: 0 0 clamp(16px, 3vw, 24px);
+    font-size: clamp(20px, 3.4vw, 30px);
+    font-weight: 800;
+    letter-spacing: 0;
+    line-height: 1.25;
+    text-wrap: balance;
+  }
+  .briefing .n-pass { color: var(--pass); }
+  .briefing .n-fail { color: var(--fail); }
+  .rounds {
+    display: flex;
+    gap: 5px;
+    margin-bottom: 8px;
+  }
+  .rounds span {
+    flex: 1;
+    height: 7px;
+    border-radius: 4px;
+    background: var(--waiting);
+    opacity: .45;
+  }
+  .rounds .pass { background: var(--pass); opacity: 1; }
+  .rounds .working { background: var(--accent); opacity: 1; }
+  .rounds .retry, .rounds .fail { background: var(--fail); opacity: 1; }
+  @media (prefers-reduced-motion: no-preference) {
+    .rounds .working, .rounds .retry { animation: pulse 1.4s ease-in-out infinite; }
+  }
+  .legend {
+    margin: 0;
+    margin-bottom: clamp(26px, 5vw, 40px);
+    color: var(--muted);
+    font-size: 12.5px;
+  }
+  .work {
+    margin-bottom: clamp(28px, 5vw, 44px);
+  }
+  .work-list {
+    display: grid;
+    gap: 10px;
+    margin-top: 10px;
+  }
+  .work-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .work-main {
+    min-width: 0;
+  }
+  .work-link {
+    color: var(--ink);
+    font-size: 15px;
+    font-weight: 750;
+  }
+  .work-kind {
+    margin-top: 2px;
+    color: var(--muted);
+    font-size: 12.5px;
+  }
+  .work-task {
+    display: inline-block;
+    margin-left: 6px;
+  }
+  .work-thumb-link {
+    flex: 0 0 auto;
+  }
+  .work-thumb {
+    display: block;
+    max-width: 132px;
+    max-height: 96px;
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    object-fit: cover;
+  }
+  .work.is-primary .work-list {
+    gap: 12px;
+  }
+  .work.is-primary .work-link {
+    font-size: clamp(17px, 2.6vw, 22px);
+  }
+  .work-group .worker {
+    border-bottom: none;
+    padding-bottom: 6px;
+  }
+  .work-group-body {
+    padding: 0 0 14px 30px;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .work-group:last-child .work-group-body { border-bottom: none; }
+  .work-group-body .work-item:last-of-type { border-bottom: none; }
+  .work-group-body .empty-note { margin: 4px 0 8px; }
+  .work-group-body .verified {
+    display: block;
+    margin-top: 6px;
+    color: var(--muted);
+    font-size: 13px;
+    overflow-wrap: break-word;
+  }
+  .work-group-body .proof {
+    margin-top: 4px;
+    font-size: 12px;
+  }
+  .work-group-body .proof summary {
+    cursor: pointer;
+    color: var(--accent);
+  }
+  .work-group-body .proof pre {
+    margin: 6px 0 0;
+    padding: 10px 12px;
+    max-height: 200px;
+    overflow: auto;
+    border-left: 2px solid var(--hairline);
+    background: var(--surface);
+    color: var(--muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11.5px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .work-group-body .links {
+    display: block;
+    margin-top: 8px;
+    font-size: 13px;
+  }
+  .work-group-body .links a {
+    color: var(--accent);
+    text-decoration: none;
+  }
+  .work-group-body .links a:hover,
+  .work-group-body .links a:focus-visible {
+    text-decoration: underline;
+  }
+  .work.is-primary .work-group {
+    padding: 12px 16px 2px;
+    border: 1px solid var(--hairline);
+    border-radius: 8px;
+    background: var(--surface);
+  }
+  .work.is-primary .work-group-body { border-bottom: none; }
+  section h2 {
+    margin: 0 0 4px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--hairline);
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+  }
+  .timeline {
+    margin-bottom: clamp(28px, 5vw, 44px);
+  }
+  details.timeline > summary {
+    cursor: pointer;
+    list-style: none;
+  }
+  details.timeline > summary::-webkit-details-marker { display: none; }
+  details.timeline > summary h2::after {
+    content: " ▸";
+    color: var(--muted);
+    font-size: 11px;
+  }
+  details.timeline[open] > summary h2::after { content: " ▾"; }
+  details.timeline > summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .tl-row {
+    display: grid;
+    grid-template-columns: 76px minmax(0,1fr);
+    gap: 14px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--hairline);
+    font-size: 14px;
+  }
+  .tl-row time {
+    color: var(--muted);
+    font-size: 12px;
+    padding-top: 2px;
+  }
+  .tl-row .catch {
+    margin: 6px 0 0;
+    padding: 8px 12px;
+    background: var(--quote-bg);
+    border-left: 2px solid var(--fail);
+    border-radius: 0 6px 6px 0;
+    color: var(--muted);
+    font-size: 13px;
+    overflow-wrap: break-word;
+  }
+  .tl-row .catch b {
+    color: var(--fail);
+    font-weight: 650;
+  }
+  .workers {
+    margin-bottom: clamp(28px, 5vw, 44px);
+  }
+  .worker {
+    display: grid;
+    grid-template-columns: 18px minmax(0,1fr) auto auto;
+    gap: 4px 12px;
+    align-items: baseline;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .glyph {
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    align-self: center;
+  }
+  .glyph.pass { background: var(--pass); }
+  .glyph.working { background: var(--accent); }
+  .glyph.retry, .glyph.fail { background: var(--fail); }
+  .glyph.waiting {
+    background: transparent;
+    border: 1.5px solid var(--waiting);
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .glyph.working, .glyph.retry { animation: pulse 1.4s ease-in-out infinite; }
+  }
+  .worker .name {
+    min-width: 0;
+    overflow: hidden;
+    font-size: 15px;
+    font-weight: 650;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .worker .state {
+    font-size: 13px;
+    font-weight: 650;
+    white-space: nowrap;
+  }
+  .state.pass { color: var(--pass); }
+  .state.working { color: var(--accent); }
+  .state.retry, .state.fail { color: var(--fail); }
+  .state.waiting { color: var(--waiting); }
+  .worker .time {
+    color: var(--muted);
+    font-size: 12.5px;
+    white-space: nowrap;
+  }
+  .worker .activity {
+    grid-column: 2 / -1;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--muted);
+    font-size: 13px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .worker .verified {
+    grid-column: 2 / -1;
+    min-width: 0;
+    color: var(--muted);
+    font-size: 13px;
+    overflow-wrap: break-word;
+  }
+  .worker .proof {
+    grid-column: 2 / -1;
+    min-width: 0;
+    font-size: 12px;
+  }
+  .worker .proof summary {
+    cursor: pointer;
+    color: var(--accent);
+  }
+  .worker .proof pre {
+    margin: 6px 0 0;
+    padding: 10px 12px;
+    max-height: 200px;
+    overflow: auto;
+    border-left: 2px solid var(--hairline);
+    background: var(--surface);
+    color: var(--muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11.5px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .worker .links {
+    grid-column: 2 / -1;
+    font-size: 13px;
+  }
+  .worker .links a {
+    color: var(--accent);
+    text-decoration: none;
+  }
+  .worker .links a:hover,
+  .worker .links a:focus-visible {
+    text-decoration: underline;
+  }
+  .runs {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .omitted-note,
+  .empty-note {
+    max-width: 65ch;
+    margin: 8px 0 0;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.45;
+  }
+  .run-row {
+    display: grid;
+    gap: 16px;
+    align-items: center;
+    padding: 12px 0;
+    border-top: 1px solid var(--hairline);
+  }
+  .run-row {
+    grid-template-columns: minmax(0, 1.35fr) minmax(112px, .55fr) minmax(76px, .4fr) minmax(150px, .8fr);
+  }
+  .run-name {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--ink);
+    font-weight: 700;
+    line-height: 1.35;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .run-state {
+    color: var(--state-color);
+    font-weight: 800;
+  }
+  .run-duration {
+    color: var(--muted);
+  }
+  .run-links {
+    display: flex;
+    min-width: 0;
+    flex-wrap: wrap;
+    gap: 8px 14px;
+  }
+  .run-links .muted {
+    color: var(--muted);
+  }
+  .state-pass { --state-color: var(--pass); }
+  .state-fail { --state-color: var(--fail); }
+  .state-running { --state-color: var(--accent); }
+  .state-waiting { --state-color: var(--waiting); }
+  .meta {
+    max-width: 65ch;
+    margin: 0 0 18px;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.55;
+  }
+  .meta b { color: var(--ink); }
+  .mono,
+  time {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+  .muted { color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--hairline); vertical-align: top; }
+  th { color: var(--muted); font-weight: 700; font-size: 10px; letter-spacing: 0; }
+  .chip { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 10px; font-weight: 800; color: var(--ground); white-space: nowrap; }
+  pre {
+    width: 100%;
+    max-width: 100%;
+    margin: 0;
+    overflow: auto;
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--ink);
+    padding: clamp(14px,3vw,24px);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.65;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  footer,
+  .page-foot {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  @media (max-width: 640px) {
+    .worker,
+    .run-row {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 6px;
+    }
+    .glyph {
+      display: none;
+    }
+    .worker .activity,
+    .worker .links {
+      grid-column: 1 / -1;
+    }
+    .work-item,
+    .work.is-primary .work-item {
+      align-items: flex-start;
+      padding: 12px 0;
+      border-width: 0 0 1px;
+      border-radius: 0;
+      background: transparent;
+    }
+    .work-thumb {
+      max-width: 96px;
+      max-height: 72px;
+    }
+    .run-links {
+      gap: 6px 12px;
+    }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="corner">
+    <span class="live-dot fail" aria-hidden="true"></span>
+    <span class="eyebrow">Ringer &nbsp;·&nbsp; <b>Design Reference</b> &nbsp;·&nbsp; design-bake</span>
+    <span class="clock mono">1m 32s total</span>
+  </header>
+  <h1 id="what-happened-heading" class="briefing">What happened — Ringer finished 3 tasks in 1m 32s. <span class="n-pass">2 finished and checked</span>, <span class="n-fail">1 failed after retry.</span></h1>
+  <div class="rounds" role="img" aria-label="3 tasks: 2 passed, 0 working, 0 retrying, 0 waiting, 1 failed"><span class="pass" aria-label="task-pass: finished &amp; checked"></span><span class="pass" aria-label="task-retry-pass: finished &amp; checked"></span><span class="fail" aria-label="task-fail: failed"></span></div>
+    <p class="legend">2 finished · 1 failed</p>
+  <section class="work is-primary" aria-labelledby="the-work-heading">
+    <h2 id="the-work-heading">The work</h2>
+    <div class="work-list"><div class="work-group">
+      <div class="worker">
+        <span class="glyph pass" aria-hidden="true"></span>
+        <span class="name" title="task-pass">task-pass</span>
+        <span class="state pass">finished &amp; checked</span>
+        <span class="time mono">41s</span>
+        
+      </div>
+      <div class="work-group-body">
+        <p class="empty-note">Finished and checked — this worker filed nothing to the shelf.</p>
+        <details class="proof"><summary>See the proof</summary><pre>all checks green</pre></details>
+        <span class="links"><span class="muted">—</span></span>
+      </div>
+    </div><div class="work-group">
+      <div class="worker">
+        <span class="glyph pass" aria-hidden="true"></span>
+        <span class="name" title="task-retry-pass">task-retry-pass</span>
+        <span class="state pass">finished &amp; checked</span>
+        <span class="time mono">1m 17s</span>
+        
+      </div>
+      <div class="work-group-body">
+        <p class="empty-note">Finished and checked — this worker filed nothing to the shelf.</p>
+        <details class="proof"><summary>See the proof</summary><pre>recovered on retry</pre></details>
+        <span class="links"><span class="muted">—</span></span>
+      </div>
+    </div><div class="work-group">
+      <div class="worker">
+        <span class="glyph fail" aria-hidden="true"></span>
+        <span class="name" title="task-fail">task-fail</span>
+        <span class="state fail">failed</span>
+        <span class="time mono">1m 3s</span>
+        
+      </div>
+      <div class="work-group-body">
+        <p class="empty-note">Failed its check — nothing was delivered.</p>
+        <details class="proof"><summary>See why it failed</summary><pre>FAIL: expected section missing</pre></details>
+        <span class="links"><span class="muted">—</span></span>
+      </div>
+    </div></div>
+  </section>
+  <footer>
+    <span class="mono">Finished 12:00:00 UTC</span>
+  </footer>
+</div>
+</body>
+</html>
