@@ -152,6 +152,8 @@ args_template = ["run", "{spec}", "--dir", "{taskdir}"]
 
 Per-task `"engine": "mymodel"` routes work to it — the invariants (stdin closed, process-group kill, executed verification, raw logs) apply to every engine identically.
 
+One lane you should never wire up: **the orchestrator must not be its own worker.** No engine block should point at the model that is writing the specs and reading the results. The economics of ringer are the split between an expensive model that plans and cheap models that type; routing the work back to the orchestrator collapses that split and quietly restores the inline edit-test-edit loop this tool exists to break — at frontier prices, with the swarm as decoration.
+
 ### The universal harness: OpenCode + OpenRouter
 
 Unless a model ships its own first-class harness (Codex does), OpenCode is the harness that runs it — one engine block covers every OpenRouter-served model. `config.sample.toml` includes a ready-to-uncomment engine whose `{model}` placeholder is filled per task from the manifest's `"model"` field, with `model_default` as the fallback. The shipped default is OpenRouter's `z-ai/glm-5.2` — roughly $0.74/M input and $2.33/M output (2026-07), about 20-30x cheaper output than frontier coding models; a complete write-code-and-pass-the-check task lands around a penny.
