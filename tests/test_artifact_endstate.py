@@ -144,7 +144,7 @@ class ArtifactEndstateTests(unittest.TestCase):
         self.assertIn('<meta http-equiv="refresh" content="2">', html)
         self.assertIn("This page updates itself while the work runs.", html)
 
-    def test_retry_state_shows_on_the_work_group(self) -> None:
+    def test_retry_state_shows_on_the_rounds_bar(self) -> None:
         render_status_html(
             self.state([self.task("task-one", "running", attempts=1)]),
             renderer=self.renderer,
@@ -164,10 +164,8 @@ class ArtifactEndstateTests(unittest.TestCase):
             renderer=self.renderer,
         )
 
-        # Per-task status lives on the work group itself; the separate
-        # "What's happening" timeline and "The workers" strip are gone —
-        # live per-model narration is Ringside's job.
-        self.assertIn('<span class="state retry">sent back — redoing</span>', html)
+        self.assertIn('aria-label="task-one: sent back — redoing"', html)
+        self.assertIn("Deliverables appear here as workers finish.", html)
         self.assertNotIn("What&#x27;s happening", html)
         self.assertNotIn("What's happening", html)
         self.assertNotIn("The workers", html)
@@ -199,7 +197,7 @@ class ArtifactEndstateTests(unittest.TestCase):
         self.assertIn("See why it failed", fail_html)
         self.assertIn("FAIL: still missing output", fail_html)
 
-    def test_running_task_activity_line_is_optional(self) -> None:
+    def test_running_task_activity_is_omitted_from_live_work_section(self) -> None:
         html = render_status_html(
             self.state(
                 [
@@ -210,8 +208,8 @@ class ArtifactEndstateTests(unittest.TestCase):
             renderer=self.renderer,
         )
 
-        self.assertIn('<span class="activity" title="edited report.md">edited report.md</span>', html)
-        self.assertEqual(1, html.count('class="activity"'))
+        self.assertNotIn('<span class="activity" title="edited report.md">', html)
+        self.assertIn("Deliverables appear here as workers finish.", html)
 
     def test_task_rows_include_checklist_glyph_css(self) -> None:
         html = render_status_html(

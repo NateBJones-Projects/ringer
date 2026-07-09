@@ -323,6 +323,7 @@ def built_in_codex_engine() -> EngineConfig:
             "exec",
             "--skip-git-repo-check",
             "{access_args}",
+            "{model_args}",
             "{engine_args}",
             "-C",
             "{taskdir}",
@@ -854,6 +855,7 @@ class TaskRuntime:
     last_check_returncode: int | None = None
     last_check_timed_out: bool = False
     last_check_output: str = ""
+    last_worker_command: list[str] = field(default_factory=list)
 
     def elapsed_s(self, now: float) -> float:
         if self.started_at_monotonic is None:
@@ -1036,7 +1038,11 @@ class StateWriter:
                         "status": runtime.status,
                         "verdict": runtime.final_verdict,
                         "engine": runtime.task.engine,
-                        "model": runtime.task.model or (engine.model_default if engine else ""),
+                        "model": (
+                            runtime.task.model
+                            or (engine.model_default if engine else "")
+                            or effective_model_from_command(runtime.last_worker_command)
+                        ),
                         "spec": runtime.task.spec,
                         "spec_short": runtime.spec_short,
                         "verified": runtime.task.verified,
@@ -3303,6 +3309,7 @@ def render_work_section(
     page_path: Path | None,
     force_wrappers: bool = False,
     primary: bool = False,
+    finished_only: bool = False,
 ) -> str:
     # One section carries the whole story: each worker, what it delivered,
     # how the delivery was checked, and where the raw log lives. The old
@@ -3310,9 +3317,16 @@ def render_work_section(
     # this information; per-worker live detail belongs to Ringside's agent
     # accordion, not the artifact.
     tasks = state_tasks(state)
+    if finished_only:
+        tasks = [
+            task
+            for task in tasks
+            if task_state_bucket(str(task.get("status", "queued"))) in {"pass", "fail"}
+        ]
     section_class = "work is-primary" if primary else "work"
     if not tasks:
-        body = '<p class="empty-note">No tasks.</p>'
+        empty_note = "Deliverables appear here as workers finish." if finished_only else "No tasks."
+        body = f'<p class="empty-note">{empty_note}</p>'
     else:
         groups = "".join(
             render_work_group(
@@ -3584,7 +3598,7 @@ def render_status_html(
   {render_corner_header(state, live=True)}
   <h1 id="right-now-heading" class="briefing">{briefing}</h1>
   {render_progress_bar(tasks, counts)}
-  {render_work_section(state, renderer=renderer, page_path=page_path, force_wrappers=force_wrappers)}
+  {render_work_section(state, renderer=renderer, page_path=page_path, force_wrappers=force_wrappers, finished_only=True)}
   <footer>
     <span class="mono">Updated {html_escape(local_time_label())}</span>
     <span>·</span>
@@ -7226,6 +7240,8 @@ class RingerRunner:
             engine_args=runtime.task.engine_args,
             model=runtime.task.model,
         )
+        with self.lock:
+            runtime.last_worker_command = list(cmd)
         append_text(
             log_path,
             "\n"
@@ -7314,7 +7330,11 @@ class RingerRunner:
         duration_ms: int,
     ) -> None:
         engine = self.config.engines.get(runtime.task.engine)
-        resolved_model = runtime.task.model or (engine.model_default if engine else "")
+        resolved_model = (
+            runtime.task.model
+            or (engine.model_default if engine else "")
+            or effective_model_from_command(runtime.last_worker_command)
+        )
         notes_parts = [
             f"retry={'true' if retrying else 'false'}",
             f"worker_returncode={worker.returncode}",
@@ -7501,6 +7521,18 @@ def parse_token_count(text: str, token_regex: str | None = DEFAULT_TOKEN_REGEX) 
     return int(matches[-1].replace(",", ""))
 
 
+def effective_model_from_command(command: list[str]) -> str:
+    """Return the model selected by a composed worker argv, if present."""
+    for index, item in enumerate(command):
+        if item in {"-m", "--model"}:
+            if index + 1 >= len(command):
+                return ""
+            return command[index + 1]
+        if item.startswith("--model="):
+            return item.removeprefix("--model=")
+    return ""
+
+
 def build_worker_command(
     engine: EngineConfig,
     *,
@@ -7516,6 +7548,10 @@ def build_worker_command(
     for item in engine.args_template:
         if item == "{access_args}":
             command.extend(access_args)
+            continue
+        if item == "{model_args}":
+            if resolved_model:
+                command.extend(("-m", resolved_model))
             continue
         if item == "{engine_args}":
             command.extend(engine_args)
@@ -7570,13 +7606,14 @@ def validate_manifest_engines(manifest: Manifest, config: AppConfig) -> None:
         raise ValueError(f"unknown worker engine(s): {', '.join(missing)}")
     for task in manifest.tasks:
         engine = config.engines[task.engine]
-        takes_model = any("{model}" in item for item in engine.args_template)
-        if takes_model and not (task.model or engine.model_default):
+        requires_model = any("{model}" in item for item in engine.args_template)
+        accepts_model = requires_model or "{model_args}" in engine.args_template
+        if requires_model and not (task.model or engine.model_default):
             raise ValueError(
                 f"task {task.key}: engine {engine.name} needs a model — set the task's "
                 f"\"model\" field or engines.{engine.name}.model_default in config.toml"
             )
-        if task.model and not takes_model:
+        if task.model and not accepts_model:
             raise ValueError(
                 f"task {task.key}: \"model\" is set but engine {engine.name} has no "
                 "{model} placeholder in its args_template, so it would be silently ignored"

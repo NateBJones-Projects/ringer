@@ -59,7 +59,7 @@ class ArtifactWrapperTests(unittest.TestCase):
             "tasks": [
                 {
                     "key": "task-one",
-                    "status": "running",
+                    "status": "pass",
                     "attempts": 1,
                     "elapsed_s": 1,
                     "check": "echo ok",
