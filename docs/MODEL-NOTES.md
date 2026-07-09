@@ -137,6 +137,25 @@ checks and raw logs support — no vibes, no worker self-reports.
   contention findings (full catalog re-ingest per sync; schema writes on
   read paths) plus an empirical XSS all-clear on the new DOM surfaces.
   Third proven-tier structured review today.
+- 2026-07-09 — votons-elisma-site (first site-build task_type data point):
+  4/4 content-page tasks (home+contact, about, news+sample-post, legal x3)
+  all PASS attempt 1, ~100-500s each, against a fresh Astro 7 content-layer
+  API (getCollection/getEntry + render(), not legacy entry.render()) that
+  glm had to follow from an in-spec code sample rather than training-data
+  habit. Quality was high enough to ship without edits: verbatim bilingual
+  copy preserved exactly as specified, and the legal task independently
+  caught and correctly worked around a real Astro glob-loader quirk (ids
+  strip dots from filenames, so `terms.fr.md` → id `termsfr`, not `terms.fr`)
+  that the orchestrator's own spec had gotten wrong — verified against
+  node_modules/.astro/data-store.json before writing the pages. One
+  reproducible process note: all 4 tasks wrote their required notes.md
+  *inside the repo worktree* instead of the task directory, despite the
+  spec saying "in your task directory, not the repo" — likely because the
+  same spec also says "your current working directory IS the worktree,"
+  which reads as contradictory to a worker taking "./notes.md" literally.
+  Harmless (excluded at patch-apply time) but worth tightening the wording
+  next time: give an explicit path like "$TASKDIR/notes.md" instead of
+  relying on "task directory" as an implied second location.
 
 ## kimi-k2.7 via opencode (`openrouter/moonshotai/kimi-k2.7-code`)
 
