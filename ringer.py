@@ -1841,13 +1841,22 @@ def pid_is_alive(pid: int) -> bool:
             kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
             kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
             kernel32.OpenProcess.restype = wintypes.HANDLE
+            kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+            kernel32.GetExitCodeProcess.restype = wintypes.BOOL
             kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
             kernel32.CloseHandle.restype = wintypes.BOOL
             handle = kernel32.OpenProcess(0x1000, False, pid)
-            if handle:
+            if not handle:
+                return ctypes.get_last_error() == 5  # ERROR_ACCESS_DENIED: exists
+            try:
+                # OpenProcess succeeds for exited processes whose handles are
+                # still held (e.g. an unreaped child) — require STILL_ACTIVE.
+                exit_code = wintypes.DWORD()
+                if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                    return False
+                return exit_code.value == 259  # STILL_ACTIVE
+            finally:
                 kernel32.CloseHandle(handle)
-                return True
-            return ctypes.get_last_error() == 5
         except Exception:
             return False
     try:
