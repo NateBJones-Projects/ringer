@@ -1260,8 +1260,12 @@
     function fileHref(path) {
       const text = String(path || "").trim();
       if (!text) return "";
-      if (/^(?:file|https?):/i.test(text)) return text;
-      return `file://${encodeURI(text).replace(/#/g, "%23")}`;
+      const normalized = text.replace(/\\/g, "/");
+      if (/^(?:file|https?):/i.test(normalized)) return normalized;
+      if (/^[A-Za-z]:\//.test(normalized)) {
+        return `file:///${encodeURI(normalized).replace(/#/g, "%23")}`;
+      }
+      return `file://${encodeURI(normalized).replace(/#/g, "%23")}`;
     }
 
     function artifactWrapperHref(run, task, sourcePath) {
@@ -1285,7 +1289,7 @@
       const links = [];
       if (task.taskdir) links.push(linkHtml(fileHref(task.taskdir), "taskdir"));
 
-      const logPath = task.log_path || (task.taskdir ? `${task.taskdir}/worker.log` : "");
+      const logPath = task.log_path || (task.taskdir ? `${String(task.taskdir).replace(/\\/g, "/")}/worker.log` : "");
       if (logPath) {
         links.push(linkHtml(artifactWrapperHref(run, task, logPath) || fileHref(logPath), "worker.log"));
       }
@@ -1301,7 +1305,7 @@
     }
 
     function workerLogPath(task) {
-      return String(task?.log_path || (task?.taskdir ? `${task.taskdir}/worker.log` : "") || "");
+      return String(task?.log_path || (task?.taskdir ? `${String(task.taskdir).replace(/\\/g, "/")}/worker.log` : "") || "");
     }
 
     function workerLogKey(task) {

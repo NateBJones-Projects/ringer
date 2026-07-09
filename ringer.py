@@ -85,6 +85,8 @@ CSP_META_TAG = (
 )
 DASHBOARD_HTML_PATH = Path(__file__).resolve().parent / "dashboard" / "dashboard.html"
 RINGSIDE_HTML_PATH = Path(__file__).resolve().parent / "dashboard" / "ringside.html"
+_CHECK_SHELL_UNSET = object()
+_CHECK_SHELL_CACHE: object = _CHECK_SHELL_UNSET
 MINIMAL_DASHBOARD_HTML = """<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><title>ringer dashboard</title></head>
@@ -98,6 +100,47 @@ function update(states) {
 </body>
 </html>
 """
+
+
+def _path_is_under_windows_system32(path: str) -> bool:
+    system_root = os.environ.get("SystemRoot") or os.environ.get("WINDIR") or r"C:\Windows"
+    system32 = os.path.abspath(os.path.join(system_root, "System32"))
+    candidate = os.path.abspath(path)
+    try:
+        return os.path.commonpath([os.path.normcase(candidate), os.path.normcase(system32)]) == os.path.normcase(system32)
+    except ValueError:
+        return False
+
+
+def find_windows_check_shell() -> str | None:
+    global _CHECK_SHELL_CACHE
+    if _CHECK_SHELL_CACHE is not _CHECK_SHELL_UNSET:
+        return _CHECK_SHELL_CACHE  # type: ignore[return-value]
+
+    env_shell = os.environ.get("RINGER_CHECK_SHELL")
+    if env_shell:
+        _CHECK_SHELL_CACHE = env_shell
+        return env_shell
+
+    bash = shutil.which("bash")
+    if bash and not _path_is_under_windows_system32(bash):
+        _CHECK_SHELL_CACHE = bash
+        return bash
+
+    for candidate in (
+        "C:/Program Files/Git/bin/bash.exe",
+        "C:/Program Files/Git/usr/bin/bash.exe",
+        "C:/Program Files (x86)/Git/bin/bash.exe",
+        "C:/Program Files/Git/bin/sh.exe",
+        "C:/Program Files/Git/usr/bin/sh.exe",
+        "C:/Program Files (x86)/Git/bin/sh.exe",
+    ):
+        if Path(candidate).is_file():
+            _CHECK_SHELL_CACHE = candidate
+            return candidate
+
+    _CHECK_SHELL_CACHE = None
+    return None
 
 
 @dataclass(frozen=True)
@@ -839,6 +882,9 @@ class VerifyResult:
 class ProcessTree:
     @staticmethod
     def read() -> tuple[dict[int, list[int]], dict[int, str]]:
+        if sys.platform == "win32":
+            # Child-count telemetry is a documented limitation on native Windows.
+            return {}, {}
         try:
             proc = subprocess.run(
                 ["ps", "-eo", "pid=,ppid=,args="],
@@ -1787,6 +1833,23 @@ def active_runs_path() -> Path:
 def pid_is_alive(pid: int) -> bool:
     if pid <= 0:
         return False
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            kernel32.OpenProcess.restype = wintypes.HANDLE
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel32.CloseHandle.restype = wintypes.BOOL
+            handle = kernel32.OpenProcess(0x1000, False, pid)
+            if handle:
+                kernel32.CloseHandle(handle)
+                return True
+            return ctypes.get_last_error() == 5
+        except Exception:
+            return False
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -1838,10 +1901,13 @@ def _prune_active_runs(runs: dict[str, dict[str, Any]]) -> dict[str, dict[str, A
 
 def _write_active_runs(runs: dict[str, dict[str, Any]]) -> None:
     path = active_runs_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(_prune_active_runs(runs), indent=2, sort_keys=True), encoding="utf-8")
-    os.replace(tmp, path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(_prune_active_runs(runs), indent=2, sort_keys=True), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        return
 
 
 def read_active_runs() -> dict[str, dict[str, Any]]:
@@ -4207,6 +4273,14 @@ class PersistentHudServer:
                             return
                         if sys.platform == "darwin":
                             subprocess.Popen(["open", str(resolved)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            self.send_response(HTTPStatus.NO_CONTENT)
+                            self.end_headers()
+                        elif sys.platform == "win32":
+                            os.startfile(str(resolved))  # type: ignore[attr-defined]
+                            self.send_response(HTTPStatus.NO_CONTENT)
+                            self.end_headers()
+                        elif sys.platform.startswith("linux") and shutil.which("xdg-open"):
+                            subprocess.Popen(["xdg-open", str(resolved)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                             self.send_response(HTTPStatus.NO_CONTENT)
                             self.end_headers()
                         else:
@@ -6751,14 +6825,34 @@ class Verifier:
 
     @staticmethod
     async def _run_check(command: str, cwd: Path) -> tuple[int | None, bool, str]:
-        proc = await asyncio.create_subprocess_shell(
-            command,
-            cwd=str(cwd),
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            start_new_session=True,
-        )
+        if sys.platform == "win32":
+            shell_path = find_windows_check_shell()
+            if shell_path is None:
+                return (
+                    127,
+                    False,
+                    "Ringer check verification on native Windows requires Git for Windows "
+                    "(Git Bash) or RINGER_CHECK_SHELL pointing at a POSIX sh.\n",
+                )
+            proc = await asyncio.create_subprocess_exec(
+                shell_path,
+                "-c",
+                command,
+                cwd=str(cwd),
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                start_new_session=True,
+            )
+        else:
+            proc = await asyncio.create_subprocess_shell(
+                command,
+                cwd=str(cwd),
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                start_new_session=True,
+            )
         timed_out = False
         try:
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=CHECK_TIMEOUT_S)
@@ -7100,7 +7194,7 @@ class RingerRunner:
             "\n"
             f"[ringer.py] attempt {attempt} started {datetime.now(timezone.utc).isoformat()}\n"
             f"[ringer.py] engine: {runtime.task.engine}\n"
-            f"[ringer.py] command: {shell_command_for_display(cmd)} < /dev/null\n",
+            f"[ringer.py] command: {shell_command_for_display(cmd)} {stdin_closed_display_suffix()}\n",
         )
         capture = RollingBytes(max_bytes=1_000_000)
         try:
@@ -7405,7 +7499,7 @@ def build_worker_command(
 
 ENGINE_INSTALL_HINTS = {
     "codex": "install it with `npm install -g @openai/codex` (or `brew install --cask codex`), then run `codex login`",
-    "opencode": "install it with `curl -fsSL https://opencode.ai/install | bash`, then run `opencode auth login`",
+    "opencode": "install it with `curl -fsSL https://opencode.ai/install | bash`, then run `opencode auth login`; on native Windows use winget/scoop or see opencode.ai/docs",
 }
 
 
@@ -7687,6 +7781,18 @@ def append_text(path: Path, text: str) -> None:
 
 
 def terminate_process_group(proc: asyncio.subprocess.Process) -> None:
+    if sys.platform == "win32":
+        try:
+            result = subprocess.run(["taskkill", "/PID", str(proc.pid), "/T"], capture_output=True)
+            if result.returncode == 0:
+                return
+        except Exception:
+            pass
+        try:
+            proc.terminate()
+        except ProcessLookupError:
+            pass
+        return
     try:
         os.killpg(proc.pid, signal.SIGTERM)
     except ProcessLookupError:
@@ -7699,6 +7805,18 @@ def terminate_process_group(proc: asyncio.subprocess.Process) -> None:
 
 
 def kill_process_group(proc: asyncio.subprocess.Process) -> None:
+    if sys.platform == "win32":
+        try:
+            result = subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True)
+            if result.returncode == 0:
+                return
+        except Exception:
+            pass
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        return
     try:
         os.killpg(proc.pid, signal.SIGKILL)
     except ProcessLookupError:
@@ -7712,6 +7830,10 @@ def kill_process_group(proc: asyncio.subprocess.Process) -> None:
 
 def shell_command_for_display(parts: Iterable[str]) -> str:
     return " ".join(shlex.quote(part) for part in parts)
+
+
+def stdin_closed_display_suffix() -> str:
+    return "(stdin closed)" if sys.platform == "win32" else "< /dev/null"
 
 
 def dry_run(
@@ -7775,7 +7897,7 @@ def dry_run(
         elif task.full_access and not config.allow_full_access:
             print("    command: ERROR full_access requires allow_full_access=true in config")
         else:
-            print(f"    command: {shell_command_for_display(cmd)} < /dev/null")
+            print(f"    command: {shell_command_for_display(cmd)} {stdin_closed_display_suffix()}")
 
 
 def print_lint_findings(findings: list[str]) -> None:

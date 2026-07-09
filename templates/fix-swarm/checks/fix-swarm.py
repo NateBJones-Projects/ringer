@@ -38,6 +38,8 @@ def run_shell(command: str) -> subprocess.CompletedProcess[str]:
         command,
         shell=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
@@ -47,6 +49,18 @@ def run_git(args: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", *args],
         text=True,
+        encoding="utf-8",
+        errors="replace",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+
+
+def run_git_bytes(args: list[str]) -> subprocess.CompletedProcess[bytes]:
+    # Patch content must stay byte-faithful: decoding through the locale
+    # (cp1252 on Windows) corrupts UTF-8 and newline translation breaks hunks.
+    return subprocess.run(
+        ["git", *args],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
@@ -138,10 +152,11 @@ def main() -> int:
     if not args.summary.is_absolute() and args.summary.exists():
         run_git(["reset", "--quiet", "--", str(args.summary)])
 
-    names_result = run_git(["diff", "--cached", "--name-only", "-z"])
-    changed_files = [item for item in names_result.stdout.split("\0") if item]
+    names_result = run_git_bytes(["diff", "--cached", "--name-only", "-z"])
+    names_text = names_result.stdout.decode("utf-8", errors="replace")
+    changed_files = [item for item in names_text.split("\0") if item]
     if names_result.returncode != 0:
-        failures.append(fail("git_diff_names_failed", output_tail(names_result.stdout)))
+        failures.append(fail("git_diff_names_failed", output_tail(names_text)))
     elif not changed_files:
         failures.append(fail("empty_patch", "no staged changes were produced"))
     else:
@@ -149,12 +164,12 @@ def main() -> int:
             if not allowed(changed, owned_files):
                 failures.append(fail("outside_owned_files", f"{changed} is not in the owned-files list"))
 
-    patch_result = run_git(["diff", "--cached", "--binary"])
+    patch_result = run_git_bytes(["diff", "--cached", "--binary"])
     if patch_result.returncode != 0:
-        failures.append(fail("git_diff_failed", output_tail(patch_result.stdout)))
+        failures.append(fail("git_diff_failed", output_tail(patch_result.stdout.decode("utf-8", errors="replace"))))
     elif patch_result.stdout.strip() and not has_placeholder(str(args.patch)):
         args.patch.parent.mkdir(parents=True, exist_ok=True)
-        args.patch.write_text(patch_result.stdout, encoding="utf-8")
+        args.patch.write_bytes(patch_result.stdout)
 
     if not has_placeholder(str(args.patch)) and (not args.patch.is_file() or args.patch.stat().st_size == 0):
         failures.append(fail("patch_not_written", f"{args.patch} was not written or is empty"))

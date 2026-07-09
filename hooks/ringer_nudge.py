@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import ctypes
+import ctypes.wintypes
 import hashlib
 import json
 import os
@@ -45,6 +47,35 @@ def pid_is_alive(pid: Any) -> bool:
         return False
     if parsed <= 0:
         return False
+    if sys.platform == "win32":
+        process_query_limited_information = 0x1000
+        error_access_denied = 5
+        still_active = 259
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = (
+            ctypes.wintypes.DWORD,
+            ctypes.wintypes.BOOL,
+            ctypes.wintypes.DWORD,
+        )
+        kernel32.OpenProcess.restype = ctypes.wintypes.HANDLE
+        kernel32.GetExitCodeProcess.argtypes = (
+            ctypes.wintypes.HANDLE,
+            ctypes.POINTER(ctypes.wintypes.DWORD),
+        )
+        kernel32.GetExitCodeProcess.restype = ctypes.wintypes.BOOL
+        kernel32.CloseHandle.argtypes = (ctypes.wintypes.HANDLE,)
+        kernel32.CloseHandle.restype = ctypes.wintypes.BOOL
+
+        handle = kernel32.OpenProcess(process_query_limited_information, False, parsed)
+        if not handle:
+            return ctypes.get_last_error() == error_access_denied
+        try:
+            exit_code = ctypes.wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return False
+            return exit_code.value == still_active
+        finally:
+            kernel32.CloseHandle(handle)
     try:
         os.kill(parsed, 0)
     except ProcessLookupError:
