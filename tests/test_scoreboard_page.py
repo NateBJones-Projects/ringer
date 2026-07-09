@@ -288,7 +288,15 @@ class ScoreboardPageTests(unittest.TestCase):
         self.assertIn("no judgment notes yet", html)
 
     def test_html_header_links_watchlist_and_footer_diagnostics(self) -> None:
-        html = self.render_to(self.root / "scoreboard.html")
+        # The page stamps wall-clock "now" by default; pin generated_at through the
+        # renderer's injection seam so the date assertion doesn't rot with the calendar.
+        real_render = ringer.render_model_scoreboard_html
+
+        def pinned_render(**kwargs: object) -> str:
+            return real_render(generated_at="2026-07-06T12:30:00+00:00", **kwargs)
+
+        with mock.patch.object(ringer, "render_model_scoreboard_html", pinned_render):
+            html = self.render_to(self.root / "scoreboard.html")
 
         self.assertIn("<h1 class=\"scoreboard-title\">Model performance scoreboard</h1>", html)
         self.assertIn("Generated July 6, 2026", html)
