@@ -7823,6 +7823,13 @@ def terminate_process_group(proc: asyncio.subprocess.Process) -> None:
             result = subprocess.run(["taskkill", "/PID", str(proc.pid), "/T"], capture_output=True)
             if result.returncode == 0:
                 return
+            # Graceful /T is refused by console processes that require /F.
+            # Killing only the parent here would orphan the worker's children
+            # (the parent's exit stops the later kill_process_group escalation),
+            # so force the tree kill before any parent-only fallback.
+            result = subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True)
+            if result.returncode == 0:
+                return
         except Exception:
             pass
         try:
