@@ -12,7 +12,7 @@
         "report.md"
       ],
       "spec": "You are {{PERSONA_PROFILE}} reviewing {{PRODUCT_NAME}} as a realistic buyer, not as a marketer. Write only ./report.md in your current task directory; never modify files outside this directory.\n\nPRODUCT FACTS: {{PRODUCT_FACTS}}\n\nTHE ORCHESTRATOR SHORTLISTED THESE NAMES AND TAGLINES FROM ROUND 1: {{SHORTLISTED_NAMES_AND_TAGLINES}}\n\nTHE ORCHESTRATOR SHORTLISTED THESE PITCHES FROM ROUND 1: {{SHORTLISTED_PITCHES}}\n\nYOUR TASK: write a 250-500 word in-character reaction. Say what grabs you, what feels weak, what would stop you from buying, what you would check before paying, and where you would expect to buy it. Skepticism is useful; do not fake a BUY.\n\nEnd with this exact parseable block, one field per line:\nVERDICT: BUY or MAYBE or PASS\nPITCH: A or B or C\nNAME: <one shortlisted name>\nWOULD PAY: $<number>\nWHERE: <store, marketplace, app, or direct site>\nTOP OBJECTION: <one concise line>\n\nHARD RULES: stay in character until the verdict block, do not invent product facts, mark assumptions, and do not help the seller improve the brief except through your honest objection.",
-      "check": "python3 '{{KIT_DIR}}/checks/check_persona.py' --file report.md --min-words 200",
+      "check": "{{PYTHON}} '{{KIT_DIR}}/checks/check_persona.py' --file report.md --min-words 200",
       "verified": "report.md contains a substantial in-character reaction and a parseable buyer verdict block."
     },
     {
@@ -24,7 +24,7 @@
         "brand-kit.md"
       ],
       "spec": "You are a brand designer assembling the locked launch kit for {{PRODUCT_NAME}}. The orchestrator already read round-1 artifacts and buyer verdicts; do not re-litigate the choice. Write only ./brand-kit.md in this task directory.\n\nLOCKED DECISIONS: {{LOCKED_BRAND_DECISIONS}}\n\nPRODUCT FACTS: {{PRODUCT_FACTS}}\n\nTASK: write a practical brand kit for a solo operator. Required sections: NAME AND TAGLINE, COLORS as a markdown table with Role | Name | Hex, TYPE, SIGNATURE DEVICE, WORDMARK, PRICING OR OFFER NOTES, and VOICE. The WORDMARK section must include a standalone inline <svg> block using the locked brand name. The pricing section must clearly label tests and draft numbers.\n\nHARD RULES: no invented product facts, all unmeasured claims stay TBD, system fonts unless the locked decisions explicitly provide licensed fonts, and copy must be usable by the final site builder without searching other files.",
-      "check": "python3 '{{KIT_DIR}}/checks/check_brand_kit.py' --file brand-kit.md --brand-name '{{LOCKED_BRAND_NAME}}' --tagline '{{LOCKED_TAGLINE}}' --palette '{{LOCKED_PALETTE_HEXES}}'",
+      "check": "{{PYTHON}} '{{KIT_DIR}}/checks/check_brand_kit.py' --file brand-kit.md --brand-name '{{LOCKED_BRAND_NAME}}' --tagline '{{LOCKED_TAGLINE}}' --palette '{{LOCKED_PALETTE_HEXES}}'",
       "verified": "brand-kit.md carries the locked name, tagline, palette, type guidance, SVG wordmark, pricing notes, and voice rules."
     }
   ]

@@ -13,7 +13,7 @@
         "report.md"
       ],
       "spec": "You are an adversarial reviewer for {{REVIEW_SCOPE}}. You are read-only. Your current working directory is only for ./report.md; never modify the repo, artifact, diff, generated files, or test fixtures.\n\nREVIEW SURFACE: {{ARTIFACT_PATH_OR_DIFF_COMMAND}}\n\nCONTEXT: {{CODEBASE_CONTEXT}}\n\nFOCUS: {{REVIEW_FOCUS}}\n\nTASK: inspect the same diff or artifact as the other reviewers and write ./report.md. Review for concrete product failures only: what the code does or fails to do, who is affected, what condition allows the behavior, practical outcome, and the specific fix. Do not speculate beyond evidence.\n\nOUTPUT CONTRACT: start with ## Summary, then either write NO FINDINGS with what you checked, or write one structured block per finding using exactly these labels: Finding:, Evidence:, Impact:, Fix:, Priority:, Confidence:. Priority must be P0, P1, P2, or P3. Confidence must be high, medium, or low. Use file paths, route names, command output, screenshots, or exact reproduction details as Evidence.\n\nHARD RULES: do not edit files, do not run broad destructive commands, do not approve your own assumptions, do not duplicate another model's perspective by guessing what it will say, and do not include fixes as patches. The orchestrator will synthesize, dedupe, and confirm against the code after all reviewers finish.",
-      "check": "python3 '{{KIT_DIR}}/checks/check_review_report.py' --file report.md",
+      "check": "{{PYTHON}} '{{KIT_DIR}}/checks/check_review_report.py' --file report.md",
       "verified": "report.md contains either an explicit no-findings verdict or structured findings with evidence, priority, confidence, and fixes."
     },
     {
@@ -26,7 +26,7 @@
         "report.md"
       ],
       "spec": "You are an adversarial reviewer for {{REVIEW_SCOPE}}. You are read-only. Your current working directory is only for ./report.md; never modify the repo, artifact, diff, generated files, or test fixtures.\n\nREVIEW SURFACE: {{ARTIFACT_PATH_OR_DIFF_COMMAND}}\n\nCONTEXT: {{CODEBASE_CONTEXT}}\n\nFOCUS: {{REVIEW_FOCUS}}\n\nTASK: inspect the same diff or artifact as the other reviewers and write ./report.md. Review for concrete product failures only: what the code does or fails to do, who is affected, what condition allows the behavior, practical outcome, and the specific fix. Do not speculate beyond evidence.\n\nOUTPUT CONTRACT: start with ## Summary, then either write NO FINDINGS with what you checked, or write one structured block per finding using exactly these labels: Finding:, Evidence:, Impact:, Fix:, Priority:, Confidence:. Priority must be P0, P1, P2, or P3. Confidence must be high, medium, or low. Use file paths, route names, command output, screenshots, or exact reproduction details as Evidence.\n\nHARD RULES: do not edit files, do not run broad destructive commands, do not approve your own assumptions, do not duplicate another model's perspective by guessing what it will say, and do not include fixes as patches. The orchestrator will synthesize, dedupe, and confirm against the code after all reviewers finish.",
-      "check": "python3 '{{KIT_DIR}}/checks/check_review_report.py' --file report.md",
+      "check": "{{PYTHON}} '{{KIT_DIR}}/checks/check_review_report.py' --file report.md",
       "verified": "report.md contains either an explicit no-findings verdict or structured findings with evidence, priority, confidence, and fixes."
     },
     {
@@ -39,7 +39,7 @@
         "report.md"
       ],
       "spec": "You are an adversarial reviewer for {{REVIEW_SCOPE}}. You are read-only. Your current working directory is only for ./report.md; never modify the repo, artifact, diff, generated files, or test fixtures.\n\nREVIEW SURFACE: {{ARTIFACT_PATH_OR_DIFF_COMMAND}}\n\nCONTEXT: {{CODEBASE_CONTEXT}}\n\nFOCUS: {{REVIEW_FOCUS}}\n\nTASK: inspect the same diff or artifact as the other reviewers and write ./report.md. Review for concrete product failures only: what the code does or fails to do, who is affected, what condition allows the behavior, practical outcome, and the specific fix. Do not speculate beyond evidence.\n\nOUTPUT CONTRACT: start with ## Summary, then either write NO FINDINGS with what you checked, or write one structured block per finding using exactly these labels: Finding:, Evidence:, Impact:, Fix:, Priority:, Confidence:. Priority must be P0, P1, P2, or P3. Confidence must be high, medium, or low. Use file paths, route names, command output, screenshots, or exact reproduction details as Evidence.\n\nHARD RULES: do not edit files, do not run broad destructive commands, do not approve your own assumptions, do not duplicate another model's perspective by guessing what it will say, and do not include fixes as patches. The orchestrator will synthesize, dedupe, and confirm against the code after all reviewers finish.",
-      "check": "python3 '{{KIT_DIR}}/checks/check_review_report.py' --file report.md",
+      "check": "{{PYTHON}} '{{KIT_DIR}}/checks/check_review_report.py' --file report.md",
       "verified": "report.md contains either an explicit no-findings verdict or structured findings with evidence, priority, confidence, and fixes."
     }
   ]

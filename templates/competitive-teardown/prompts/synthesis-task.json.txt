@@ -1,7 +1,7 @@
 {
   "key": "{{SYNTHESIS_KEY}}",
   "spec": "You are the second-phase synthesis worker for a competitive teardown. Boundary: the scout phase is already complete, and you must use only the scout reports listed here: {{SCOUT_REPORT_FILES}}. Do not browse, do not fetch new sources, and do not modify any scout report. You own only ./synthesis.md in your current task directory. Synthesis scope: {{SYNTHESIS_SCOPE — comparison question the final report must answer}}. HOW TO RUN: read every listed scout report, extract only claims that were cited or explicitly marked 'could not fetch', and compare the targets on the required angles already present in those reports. Output contract for ./synthesis.md: start with ## Decision Summary, then ## Comparison Table, ## Strongest Evidence, ## Gaps And Could-Not-Fetch Items, and ## Recommended Follow-Up. Every comparison row must name the target, the angle, the cited evidence, and the source URL copied from a scout report. If the scouts disagree or evidence is thin, say that directly. Hard rules: no new URLs, no new facts, no edits outside the task directory, and no ranking that is not supported by the scout reports.",
-  "check": "python3 '{{SYNTHESIS_CHECK}}' --report synthesis.md --scout-reports '{{SCOUT_REPORT_FILES}}' --min-competitors '{{MIN_COMPETITORS}}'",
+  "check": "{{PYTHON}} '{{SYNTHESIS_CHECK}}' --report synthesis.md --scout-reports '{{SCOUT_REPORT_FILES}}' --min-competitors '{{MIN_COMPETITORS}}'",
   "expect_files": [
     "synthesis.md"
   ],

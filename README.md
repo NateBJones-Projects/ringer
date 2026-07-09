@@ -29,7 +29,7 @@ manifest.json ──▶ ringer.py ──▶ N parallel workers (codex exec, each
 
 ## Quickstart
 
-Ringer runs on macOS and Linux (Windows via WSL) and needs Python 3.11+.
+Ringer runs on macOS, Linux, WSL, and native Windows, and needs Python 3.11+. On native Windows, manifest `check` commands require Git Bash from Git for Windows; if Git Bash is not on the default path, set `RINGER_CHECK_SHELL` to a POSIX `sh`.
 
 1. Install a worker CLI and sign in (Codex is the built-in default engine):
 
@@ -44,6 +44,19 @@ codex login                    # sign in with your ChatGPT plan
 git clone https://github.com/NateBJones-Projects/ringer && cd ringer
 mkdir -p ~/.config/ringer && cp config.sample.toml ~/.config/ringer/config.toml   # optional — sane defaults without it
 ```
+
+On native Windows, use PowerShell-friendly commands:
+
+```powershell
+git clone https://github.com/NateBJones-Projects/ringer
+cd ringer
+New-Item -ItemType Directory -Force "$env:USERPROFILE\.config\ringer" | Out-Null
+Copy-Item config.sample.toml "$env:USERPROFILE\.config\ringer\config.toml"   # optional — sane defaults without it
+python ringer.py demo
+python ringer.py hud
+```
+
+Windows manifest paths can use forward slashes, e.g. `"workdir": "C:/Users/<user>/ringer-runs/my-batch"`. Native Windows check execution still requires Git Bash; set `RINGER_CHECK_SHELL` when you need to point Ringer at a specific POSIX shell.
 
 3. Teach your agent to route work through Ringer:
 
@@ -156,7 +169,7 @@ Per-task `"engine": "mymodel"` routes work to it — the invariants (stdin close
 
 Unless a model ships its own first-class harness (Codex does), OpenCode is the harness that runs it — one engine block covers every OpenRouter-served model. `config.sample.toml` includes a ready-to-uncomment engine whose `{model}` placeholder is filled per task from the manifest's `"model"` field, with `model_default` as the fallback. The shipped default is OpenRouter's `z-ai/glm-5.2` — roughly $0.74/M input and $2.33/M output (2026-07), about 20-30x cheaper output than frontier coding models; a complete write-code-and-pass-the-check task lands around a penny.
 
-OpenCode ships no OS sandbox, so the engine's `bin` points at an absolute path to `engines/opencode-sandboxed.sh` (ringer does not resolve engine bins relative to the repo): a macOS Seatbelt wrapper that leaves network and reads open but confines writes to the task dir, a per-run scratch dir (wired as the agent's `TMPDIR`/`XDG_CACHE_HOME`), and OpenCode's own state/config dirs. Its `--dangerously-skip-permissions` flag only silences OpenCode's interactive prompts; Seatbelt is the actual containment. Task paths reach the profile as `sandbox-exec -D` parameters rather than string interpolation, so a task dir with quotes or parens can't inject sandbox rules. `--no-sandbox` is wired as the engine's `full_access_args`, so ringer's `allow_full_access` gate still governs escapes. Non-macOS installs need their own sandbox (or full-access mode).
+OpenCode ships no OS sandbox, so the engine's `bin` points at an absolute path to `engines/opencode-sandboxed.sh` (ringer does not resolve engine bins relative to the repo): a macOS Seatbelt wrapper that leaves network and reads open but confines writes to the task dir, a per-run scratch dir (wired as the agent's `TMPDIR`/`XDG_CACHE_HOME`), and OpenCode's own state/config dirs. Its `--dangerously-skip-permissions` flag only silences OpenCode's interactive prompts; Seatbelt is the actual containment. Task paths reach the profile as `sandbox-exec -D` parameters rather than string interpolation, so a task dir with quotes or parens can't inject sandbox rules. `--no-sandbox` is wired as the engine's `full_access_args`, so ringer's `allow_full_access` gate still governs escapes. `engines/opencode-sandboxed.sh` is macOS-only; on Windows/Linux, OpenCode runs without that wrapper unless you provide your own sandbox.
 
 Setting it up takes about five minutes:
 
@@ -171,7 +184,7 @@ opencode auth login   # select OpenRouter, paste the key
 
 # 3) In ~/.config/ringer/config.toml, uncomment [engines.opencode] and set
 #    bin to the ABSOLUTE path of engines/opencode-sandboxed.sh in this clone.
-#    (Linux/WSL: the wrapper is macOS-only — set bin to the opencode binary
+#    (Windows/Linux/WSL: the wrapper is macOS-only — set bin to the opencode binary
 #    itself; there is no OS write-confinement then, so keep manifests scoped.)
 ```
 
@@ -208,6 +221,8 @@ Ringside is a local web page — no install, no account, nothing leaves your mac
 The top of the page is the run's live results document: what the job is, a progress bar of rounds, and "The work" — every deliverable each worker filed, with a plain-English line saying what the check proved and the raw check output one click away. Below it, the agents: expand a worker to see the exact brief it was handed, which engine and model are typing, and its live work stream. Past runs stay in a versioned library, and a swarm whose orchestrator *died* without finishing gets its own unmissable state — the failure mode every dashboard forgets.
 
 Multiple swarms at once is the designed-for case: run three batches under three identities and Ringside shows all three, live. `--browser` opens a simpler per-run fallback dashboard, and `--no-dashboard` runs headless.
+
+On native Windows, per-task child-process counts currently read zero in the dashboard; run status, logs, and verdicts still work.
 
 A native desktop build (Tauri, under `hud/`) exists as a v0.1.1 prototype; the web dashboard is currently ahead of it — start there.
 

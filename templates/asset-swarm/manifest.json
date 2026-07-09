@@ -12,7 +12,7 @@
         "anim.html"
       ],
       "spec": "You are a motion-design worker authoring one render-as-check animation for {{PROJECT_NAME}}. Your current working directory is the only place you may write. You own exactly one file: ./anim.html. Do not create rendered video files yourself; the host check renders those after you finish.\n\nSTORYBOARD: {{ANIMATION_STORYBOARD}}\n\nDESIGN TOKENS: {{ANIMATION_DESIGN_TOKENS}}\n\nOUTPUT CONTRACT: ./anim.html must be a self-contained HTML document with all CSS and JS inline, zero external requests, fixed 1920x1080 stage, deterministic 12-second loop, starts immediately, and uses transform/opacity animation for smooth capture. Text is allowed here because browser-rendered HTML text stays crisp; keep it minimal and legible.\n\nHOW TO RUN LOCALLY: open anim.html in a browser if available. The real gate is the Ringer check, which runs {{RENDER_ANIM_SCRIPT}} on the host and validates the rendered MP4 bytes.\n\nHARD RULES: never modify files outside this task directory, do not depend on network, do not load fonts/CDNs/images, do not output video manually, and mark any assumption in an HTML comment at the top.",
-      "check": "python3 '{{KIT_DIR}}/checks/check_rendered_media.py' --source anim.html --render-command 'node {{RENDER_ANIM_SCRIPT}} ./anim.html ./{{ANIMATION_KEY}} 14 1920 1080' --outputs '{{ANIMATION_KEY}}.mp4' --min-bytes 400000",
+      "check": "{{PYTHON}} '{{KIT_DIR}}/checks/check_rendered_media.py' --source anim.html --render-command 'node {{RENDER_ANIM_SCRIPT}} ./anim.html ./{{ANIMATION_KEY}} 14 1920 1080' --outputs '{{ANIMATION_KEY}}.mp4' --min-bytes 400000",
       "verified": "anim.html exists, the host renderer executes it, and the resulting MP4 meets the configured byte floor."
     },
     {
@@ -26,7 +26,7 @@
         "{{IMAGE_OUTPUT_3}}"
       ],
       "spec": "You are a batch image-generation operator for {{PROJECT_NAME}}. This is an execution task, not a creative rewrite. Write outputs only in the current task directory.\n\nPROMPTS: prompt files live in {{IMAGE_PROMPTS_DIR}}. Each prompt must have a subject paragraph, the shared STYLE block, and the no-text rule.\n\nHOW TO RUN: execute these exact commands and do not improve or substitute them:\n{{IMAGE_BATCH_COMMANDS}}\n\nIDEMPOTENCY RULE: every command must be guarded with test -s OUTPUT || so reruns skip completed images. If any image command can exceed about two minutes under OpenCode, run it with nohup in the background, write a per-image log, poll for the expected output, and then validate the file exists. OpenCode's bash tool can kill long foreground calls; background-and-poll is part of the contract.\n\nOUTPUT CONTRACT: produce exactly these PNG files unless the orchestrator filled a different list: {{IMAGE_OUTPUT_1}}, {{IMAGE_OUTPUT_2}}, {{IMAGE_OUTPUT_3}}. Leave logs only when they explain a retry or failure.\n\nHARD RULES: no text, lettering, logos, watermarks, UI brand marks, or client names inside generated images; use the prompt files as written; never modify files outside this task directory.",
-      "check": "python3 '{{KIT_DIR}}/checks/check_image_batch.py' --files '{{IMAGE_OUTPUT_1}},{{IMAGE_OUTPUT_2}},{{IMAGE_OUTPUT_3}}' --min-bytes {{IMAGE_MIN_BYTES}}",
+      "check": "{{PYTHON}} '{{KIT_DIR}}/checks/check_image_batch.py' --files '{{IMAGE_OUTPUT_1}},{{IMAGE_OUTPUT_2}},{{IMAGE_OUTPUT_3}}' --min-bytes {{IMAGE_MIN_BYTES}}",
       "verified": "each expected PNG exists and meets the configured byte floor, with failures naming the missing or undersized file."
     },
     {
@@ -38,7 +38,7 @@
         "diagram.html"
       ],
       "spec": "You are an editorial diagram designer for {{PROJECT_NAME}}. Your current task directory is your only write surface. You own exactly ./diagram.html; the host check will render the retina PNG.\n\nDIAGRAM BRIEF: {{DIAGRAM_BRIEF}}\n\nOUTPUT CONTRACT: ./diagram.html must be a self-contained 1456x816 HTML page, all CSS and SVG inline, zero external requests, dark editorial treatment, crisp vector shapes, no clipped text, and readable at 2x PNG export. Use real labels supplied in the brief, but do not invent claims or metrics. If a label is unknown, write TBD in the diagram.\n\nHOW TO RUN LOCALLY: open diagram.html in a browser and inspect for clipping at 1456x816. The Ringer check renders it with {{RENDER_SHOT_SCRIPT}} at retina scale and validates the PNG.\n\nHARD RULES: never modify files outside this task directory, no external fonts or assets, keep text short, and put any assumptions in a small footer note inside the diagram.",
-      "check": "python3 '{{KIT_DIR}}/checks/check_rendered_media.py' --source diagram.html --render-command 'node {{RENDER_SHOT_SCRIPT}} ./diagram.html ./diagram.png 1456 816 800' --outputs 'diagram.png' --min-bytes 120000",
+      "check": "{{PYTHON}} '{{KIT_DIR}}/checks/check_rendered_media.py' --source diagram.html --render-command 'node {{RENDER_SHOT_SCRIPT}} ./diagram.html ./diagram.png 1456 816 800' --outputs 'diagram.png' --min-bytes 120000",
       "verified": "diagram.html exists, the host renderer captures it, and diagram.png meets the byte floor for a real retina export."
     },
     {
@@ -50,7 +50,7 @@
         "capture-plan.md"
       ],
       "spec": "You are a capture producer for {{PROJECT_NAME}}. You do not screen-record directly from the sandbox. Your job is to write ./capture-plan.md, then the host-side check records the real screen or local URL.\n\nCAPTURE TARGET: {{CAPTURE_URL}}\n\nOUTPUT CONTRACT: capture-plan.md must list the target URL, the exact viewport {{CAPTURE_VIEWPORT}}, the duration {{CAPTURE_DURATION_SECONDS}} seconds, the start state to show, any private data that must be hidden, and 3-5 timestamps or moments the final clip should contain. If the target is not ready, say what prerequisite is missing.\n\nHOW TO RUN: do not launch a browser from the worker. The check records the target with {{RENDER_ANIM_SCRIPT}} in URL mode and validates the MP4.\n\nHARD RULES: never expose private client data, never record production accounts unless explicitly approved, never modify files outside this task directory, and keep this as real product footage rather than a simulation.",
-      "check": "python3 '{{KIT_DIR}}/checks/check_rendered_media.py' --source capture-plan.md --render-command 'node {{RENDER_ANIM_SCRIPT}} {{CAPTURE_URL}} ./{{CAPTURE_KEY}} {{CAPTURE_DURATION_SECONDS}} 1920 1080' --outputs '{{CAPTURE_KEY}}.mp4' --min-bytes 400000",
+      "check": "{{PYTHON}} '{{KIT_DIR}}/checks/check_rendered_media.py' --source capture-plan.md --render-command 'node {{RENDER_ANIM_SCRIPT}} {{CAPTURE_URL}} ./{{CAPTURE_KEY}} {{CAPTURE_DURATION_SECONDS}} 1920 1080' --outputs '{{CAPTURE_KEY}}.mp4' --min-bytes 400000",
       "verified": "capture-plan.md exists, the host recorder captures the target URL, and the resulting MP4 meets the configured byte floor."
     }
   ]

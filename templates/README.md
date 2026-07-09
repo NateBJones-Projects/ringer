@@ -26,6 +26,10 @@ A kit is a reusable Ringer starter: a manifest skeleton, check skeletons, and a 
 
 Standard kit files are `manifest.json`, `README.md`, and usually one or more executable helpers under `checks/`. Placeholders use bare identifiers like `{{NAME}}` for required values and freeform prompts like `{{THING — inline guidance}}` when the placeholder itself explains the choice to make. After fill-in, every manifest must pass `./ringer.py lint` before a run. Kit checks are skeletons to adapt to the real task; never turn them into `exit 0`, `true`, or any other check that cannot fail.
 
+## Cross-platform note
+
+Fill `{{PYTHON}}` with the interpreter that exists on the machine: on macOS and Linux, use `python3` or an absolute path; on native Windows, use `python` or `py -3`. Check commands are POSIX-shell strings on every OS; on native Windows, Ringer runs them via Git Bash.
+
 ## Composition Guide
 
 - `review-swarm` findings feed `fix-swarm`: scouts identify the confirmed work, then fix workers own disjoint patches.

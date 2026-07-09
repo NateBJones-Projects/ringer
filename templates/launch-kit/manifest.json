@@ -12,7 +12,7 @@
         "report.md"
       ],
       "spec": "You are a read-only market scout for {{PRODUCT_NAME}}. Your current working directory is your only write surface; never modify files outside this task directory.\n\nPRODUCT FACTS: {{PRODUCT_FACTS}}\n\nSOURCE BOUNDARY: cite only URLs from {{SOURCE_ALLOWLIST_PATH}}. Fetch those pages when useful, but if a page blocks you or will not load, write that plainly. Never invent prices, counts, review totals, buyer behavior, or source details.\n\nTASK: write ./report.md, 400-900 words, answering who actually buys this and why. Required sections: BUYER SEGMENTS, WHERE THEY SHOP OR HANG OUT, PRICE SIGNALS, PRICE VERDICT, SOURCES, and OPEN QUESTIONS. Copy every citation URL verbatim from the allowlist or from a longer URL that shares the same page prefix; the validator is prefix-tolerant but it still rejects made-up URLs.\n\nHARD RULES: plain language, no hype, mark assumptions, keep every claim attached to a source URL, and explicitly address these required terms somewhere in the report: {{MARKET_REQUIRED_TERMS}}.",
-      "check": "python3 '{{KIT_DIR}}/checks/check_market.py' --report report.md --sources '{{SOURCE_ALLOWLIST_PATH}}' --required-terms '{{MARKET_REQUIRED_TERMS}}' --min-words 350 --min-citations 4",
+      "check": "{{PYTHON}} '{{KIT_DIR}}/checks/check_market.py' --report report.md --sources '{{SOURCE_ALLOWLIST_PATH}}' --required-terms '{{MARKET_REQUIRED_TERMS}}' --min-words 350 --min-citations 4",
       "verified": "report.md is substantial, cites only allowlisted source URLs with prefix-tolerant matching, and addresses the required buyer and pricing topics."
     },
     {
@@ -24,7 +24,7 @@
         "candidates.md"
       ],
       "spec": "You are a brand namer and launch copywriter for {{PRODUCT_NAME}}. Write only ./candidates.md in your current task directory; never modify files outside this directory.\n\nPRODUCT FACTS: {{PRODUCT_FACTS}}\n\nBRAND VIBE: {{BRAND_VIBE}}\n\nTASK: produce a parseable short list the orchestrator can machine-read. Section 1 must contain at least ten lines beginning NAME: with a short candidate, a one-line rationale, and a note that domain and trademark availability are unverified. Section 2 must contain exactly three buyer-specific one-sentence pitches on lines beginning PITCH A:, PITCH B:, and PITCH C:. Section 3 must contain at least three TAGLINE (<name>): lines, each eight words or fewer. End with MY PICK: and a brief reason.\n\nHARD RULES: no invented product facts, no claim that a name is legally available, no private research outside the allowed product facts unless you label it as an assumption, and keep pitches under 25 words each.",
-      "check": "python3 '{{KIT_DIR}}/checks/check_candidates.py' --file candidates.md",
+      "check": "{{PYTHON}} '{{KIT_DIR}}/checks/check_candidates.py' --file candidates.md",
       "verified": "candidates.md parses into name, pitch, tagline, and recommendation sections the orchestrator can shortlist."
     },
     {
@@ -36,7 +36,7 @@
         "hero.png"
       ],
       "spec": "You are a batch image operator for {{PRODUCT_NAME}}. Your job is command execution, not creative rewriting. Write outputs only in the current task directory.\n\nINPUTS: prompt file {{HERO_PROMPT_FILE}} and reference image {{HERO_REFERENCE_IMAGE}}. Do not edit either input.\n\nHOW TO RUN: execute this exact idempotent command shape, replacing only the placeholders already filled by the orchestrator: test -s ./hero.png || { {{IMAGE_GENERATOR_COMMAND}} --prompt-file {{HERO_PROMPT_FILE}} --ref {{HERO_REFERENCE_IMAGE}} --name hero --out . && mv $(ls hero-*.png | head -1) hero.png; }\n\nIf the image command can run longer than about two minutes under OpenCode, launch it with nohup in the background, write stdout and stderr to ./hero-generation.log, poll until the output exists, and then continue. Run one retry for transient API failure, then stop and leave the log.\n\nOUTPUT CONTRACT: ./hero.png must be a real PNG suitable for a site hero. Also leave ./hero-generation.log if the generation command produced one. Do not create alternate hero files.",
-      "check": "python3 '{{KIT_DIR}}/checks/check_image_file.py' --file hero.png --min-bytes {{HERO_IMAGE_MIN_BYTES}} --min-width {{HERO_IMAGE_MIN_WIDTH}} --min-height {{HERO_IMAGE_MIN_HEIGHT}}",
+      "check": "{{PYTHON}} '{{KIT_DIR}}/checks/check_image_file.py' --file hero.png --min-bytes {{HERO_IMAGE_MIN_BYTES}} --min-width {{HERO_IMAGE_MIN_WIDTH}} --min-height {{HERO_IMAGE_MIN_HEIGHT}}",
       "verified": "hero.png exists, is a valid image, and meets the configured size and dimension floor for a launch hero."
     },
     {
@@ -48,7 +48,7 @@
         "brand-board.md"
       ],
       "spec": "You are a brand designer exploring visual directions for {{PRODUCT_NAME}}. Write only ./brand-board.md in your current task directory; never modify files outside this directory.\n\nPRODUCT FACTS: {{PRODUCT_FACTS}}\n\nBRAND VIBE: {{BRAND_VIBE}}\n\nTASK: write three distinct visual directions, not palette swaps. Each section heading must tolerate numbering and begin like ## DIRECTION 1: <name>. For each direction include PALETTE with at least four Role - Name - #RRGGBB lines, HEADLINE TYPE, BODY TYPE, TEXTURE OR DEVICE, and WHY IT FITS. End with MY PICK: and a short recommendation the orchestrator can use in round 2.\n\nHARD RULES: system fonts unless the orchestrator explicitly supplied licensed fonts, no invented product claims, no brand direction that depends on external assets the site cannot ship, and plain language a solo operator can reuse.",
-      "check": "python3 '{{KIT_DIR}}/checks/check_brand_board.py' --file brand-board.md",
+      "check": "{{PYTHON}} '{{KIT_DIR}}/checks/check_brand_board.py' --file brand-board.md",
       "verified": "brand-board.md has parseable visual directions with palettes, type choices, visual devices, rationales, and a recommendation."
     },
     {
@@ -60,7 +60,7 @@
         "listing-copy.md"
       ],
       "spec": "You are an ecommerce listing copywriter for {{PRODUCT_NAME}}. Write only ./listing-copy.md in the current task directory; never modify files outside this directory.\n\nPRODUCT FACTS: {{PRODUCT_FACTS}}\n\nTASK: create paste-ready listing copy for the first three products or offers the orchestrator named in the product facts. Use exactly three product sections with headings like ## PRODUCT 1: <name>. Each product needs TITLE: under 140 characters, a 2-3 sentence description, and at least three factual bullets. Include ## ABOUT THE MAKER or ABOUT THE COMPANY with a short honest paragraph.\n\nHARD RULES: no invented specs, dimensions, delivery promises, warranties, materials, or inventory. Mark unknowns as TBD - to be measured, assumption, draft, or coming soon. Keep tone aligned with {{BRAND_VIBE}}, but keep the copy practical enough for a real storefront.",
-      "check": "python3 '{{KIT_DIR}}/checks/check_listing.py' --file listing-copy.md",
+      "check": "{{PYTHON}} '{{KIT_DIR}}/checks/check_listing.py' --file listing-copy.md",
       "verified": "listing-copy.md parses into three product sections with titles, factual bullets, maker copy, and honesty markers for unknowns."
     },
     {
@@ -72,7 +72,7 @@
         "site.html"
       ],
       "spec": "You are a front-end builder creating the first product-site pass for {{PRODUCT_NAME}}. Write only ./site.html in this task directory; never modify files outside this directory.\n\nPRODUCT FACTS: {{PRODUCT_FACTS}}\n\nPHOTOS: use the real product photos listed here and embed them as base64 data URIs so the file is self-contained: {{PRODUCT_PHOTO_PATHS_AND_DESCRIPTIONS}}\n\nROUND-1 SITE GOAL: make the structure and honest product story work before the final name and brand are locked. Use the placeholder brand string {{WORKING_BRAND_PLACEHOLDER}} wherever the future name should go, and make it easy for round 3 to replace.\n\nREQUIRED PAGE ORDER: header, hero with headline slot and one-sentence pitch slot, product lineup with three cards and draft prices, printed-to-order or operations note, interest form placeholder with no external action, and footer with a photo-honesty line and policy placeholder.\n\nHARD RULES: one self-contained HTML file, zero external requests, system fonts, responsive single-column mobile collapse, no invented specs, all uncertain prices or claims marked draft/TBD/placeholder, and nothing clipped at {{DESKTOP_WIDTH}} or {{MOBILE_WIDTH}} widths.",
-      "check": "python3 '{{KIT_DIR}}/checks/check_site.py' --file site.html --min-images 3 --min-bytes {{SITE_MIN_BYTES}} --required-terms '{{SITE_REQUIRED_TERMS}}'",
+      "check": "{{PYTHON}} '{{KIT_DIR}}/checks/check_site.py' --file site.html --min-images 3 --min-bytes {{SITE_MIN_BYTES}} --required-terms '{{SITE_REQUIRED_TERMS}}'",
       "verified": "site.html is self-contained, embeds the required real photos, includes the launch sections, and carries honesty markers instead of invented specs."
     }
   ]
