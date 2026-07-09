@@ -184,16 +184,17 @@ class LintManifestTests(unittest.TestCase):
         )
 
     def test_w6_write_collision(self) -> None:
+        shared = str(Path(tempfile.gettempdir()) / "shared-deliverable.txt")
         manifest = self.manifest(
             [
-                self.task("one", expect_files=["/tmp/shared-deliverable.txt"]),
-                self.task("two", expect_files=["/tmp/shared-deliverable.txt"]),
+                self.task("one", expect_files=[shared]),
+                self.task("two", expect_files=[shared]),
             ],
             worktrees=False,
         )
         self.assertHasFinding(
             lint_manifest(manifest),
-            "manifest: write collision on /tmp/shared-deliverable.txt: listed by one, two.",
+            f"manifest: write collision on {shared}: listed by one, two.",
         )
 
     def test_w6_relative_paths_do_not_collide(self) -> None:
@@ -219,7 +220,9 @@ class LintManifestTests(unittest.TestCase):
             home.mkdir()
             (home / "report.md").write_text("done\n", encoding="utf-8")
             previous_home = os.environ.get("HOME")
+            previous_userprofile = os.environ.get("USERPROFILE")
             os.environ["HOME"] = str(home)
+            os.environ["USERPROFILE"] = str(home)
             try:
                 task = TaskSpec(
                     key="one",
@@ -233,6 +236,10 @@ class LintManifestTests(unittest.TestCase):
                     os.environ.pop("HOME", None)
                 else:
                     os.environ["HOME"] = previous_home
+                if previous_userprofile is None:
+                    os.environ.pop("USERPROFILE", None)
+                else:
+                    os.environ["USERPROFILE"] = previous_userprofile
         self.assertTrue(result.ok, result.raw_output_excerpt)
         self.assertEqual((), result.missing_files)
 

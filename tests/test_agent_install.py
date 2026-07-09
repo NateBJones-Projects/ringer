@@ -23,9 +23,10 @@ class AgentInstallTests(unittest.TestCase):
     def run_cli(self, *args: str, cwd: Path = ROOT) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
         env["HOME"] = str(self.home)
+        env["USERPROFILE"] = str(self.home)
         env["RINGER_HOME"] = str(self.ringer_home)
         return subprocess.run(
-            [sys.executable, "ringer.py", *args],
+            [sys.executable, str(ROOT / "ringer.py"), *args],
             cwd=str(cwd),
             env=env,
             text=True,
@@ -157,7 +158,6 @@ class AgentInstallTests(unittest.TestCase):
     def test_project_variant_writes_under_temp_cwd(self) -> None:
         project = Path(self.tmp.name) / "project"
         project.mkdir()
-        os.symlink(ROOT / "ringer.py", project / "ringer.py")
 
         install = self.run_cli("install-agent", "--project", cwd=project)
         self.assertEqual(0, install.returncode, install.stderr)

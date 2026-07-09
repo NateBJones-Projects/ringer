@@ -80,6 +80,7 @@ class DeliverableTests(unittest.TestCase):
         self.addCleanup(self.restore_env)
         self.root = Path(self.tmp.name)
         os.environ["HOME"] = str(self.root / "home")
+        os.environ["USERPROFILE"] = str(self.root / "home")
         os.environ["RINGER_HOME"] = str(self.root / "ringer-home")
         self.state_dir = self.root / "state"
         self.workdir = self.root / "work"
@@ -237,11 +238,10 @@ class DeliverableTests(unittest.TestCase):
         self.assertEqual([], runtime.deliverables)
 
     def test_runner_harvests_when_task_passes(self) -> None:
-        check_code = "from pathlib import Path; raise SystemExit(0 if Path('site-final.html').is_file() else 1)"
         task = TaskSpec(
             key="task-one",
             spec="from pathlib import Path; Path('site-final.html').write_text('<h1>done</h1>\\n')",
-            check=f"{sys.executable!s} -c {json.dumps(check_code)}",
+            check="test -f site-final.html || { echo FAIL: site-final.html missing; exit 1; }",
             engine="mock",
             expect_files=("site-final.html",),
         )

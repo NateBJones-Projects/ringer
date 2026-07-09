@@ -168,7 +168,7 @@ class ModelDbTests(unittest.TestCase):
         )
 
     def count_attempts(self) -> int:
-        with sqlite3.connect(self.db_path) as conn:
+        with contextlib.closing(sqlite3.connect(self.db_path)) as conn:
             return int(conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0])
 
     def test_schema_creation_uses_wal_mode(self) -> None:
@@ -210,7 +210,7 @@ class ModelDbTests(unittest.TestCase):
         self.assertEqual(1, result.skipped)
         self.assertEqual(2, second.attempts_inserted)
         self.assertEqual(2, self.count_attempts())
-        with sqlite3.connect(self.db_path) as conn:
+        with contextlib.closing(sqlite3.connect(self.db_path)) as conn:
             self.assertEqual(1, conn.execute("SELECT COUNT(*) FROM catalog_models").fetchone()[0])
             self.assertEqual(2, conn.execute("SELECT COUNT(*) FROM identity").fetchone()[0])
 
@@ -255,8 +255,8 @@ class ModelDbTests(unittest.TestCase):
         second_line = json.dumps(attempt(run_id="run-2"))
         cut_at = len(second_line) // 2
         partial_second = second_line[:cut_at]
-        partial_start = len(first_line.encode("utf-8"))
         self.log_path.write_text(first_line + partial_second, encoding="utf-8")
+        partial_start = self.log_path.read_bytes().index(partial_second.encode("utf-8"))
 
         result = sync_read_model_db(
             self.db_path,

@@ -33,6 +33,7 @@ class NudgeHookTests(unittest.TestCase):
     def run_hook(self, mode: str, payload: object | str) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
         env["HOME"] = str(self.home)
+        env["USERPROFILE"] = str(self.home)
         env["RINGER_HOME"] = str(self.ringer_home)
         stdin = payload if isinstance(payload, str) else json.dumps(payload)
         return subprocess.run(

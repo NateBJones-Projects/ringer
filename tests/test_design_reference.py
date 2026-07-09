@@ -12,10 +12,30 @@ sys.path.insert(0, str(ROOT))
 
 from ringer import ARTIFACT_BASE_CSS, ArtifactRenderer, render_final_report_html, render_status_html  # noqa: E402
 
-REFERENCE = Path(
-    "/private/tmp/claude-501/-Users-jonathanedwards-WORKSPACE-20-CLIENTS-NATE-10-ACTIVE-SYSTEMS-ringer-system/"
-    "d4e72b45-c6bd-4928-aaf0-4e3552eb8f04/scratchpad/design-bake/design-reference.html"
-)
+EXPECTED_DARK_TOKENS = {
+    "--ground": "#0b0e14",
+    "--surface": "#141a26",
+    "--ink": "#e9eef7",
+    "--muted": "#8fa0b6",
+    "--hairline": "rgba(143,160,182,.22)",
+    "--accent": "#35d0ff",
+    "--pass": "#45d17e",
+    "--fail": "#ff5f6b",
+    "--waiting": "#6f7c92",
+    "--quote-bg": "rgba(255,95,107,.08)",
+}
+EXPECTED_LIGHT_TOKENS = {
+    "--ground": "#f2f5f9",
+    "--surface": "#ffffff",
+    "--ink": "#17202e",
+    "--muted": "#5a6a7e",
+    "--hairline": "rgba(90,106,126,.28)",
+    "--accent": "#007fb0",
+    "--pass": "#178a4c",
+    "--fail": "#cc3340",
+    "--waiting": "#7d8ba0",
+    "--quote-bg": "rgba(204,51,64,.07)",
+}
 
 
 def css_block(css: str, selector: str) -> str:
@@ -51,17 +71,16 @@ class DesignReferenceTests(unittest.TestCase):
         self.renderer = ArtifactRenderer(Path(self.tmp.name) / "artifacts" / "run.html")
 
     def test_renderer_tokens_match_design_reference(self) -> None:
-        reference_css = REFERENCE.read_text(encoding="utf-8")
-
-        expected_dark = token_values(css_block(reference_css, ":root"))
-        expected_light = token_values(media_light_root(reference_css))
-        expected_dark_override = token_values(css_block(reference_css, ':root[data-theme="dark"]'))
-        expected_light_override = token_values(css_block(reference_css, ':root[data-theme="light"]'))
-
-        self.assertEqual(expected_dark, token_values(css_block(ARTIFACT_BASE_CSS, ":root")))
-        self.assertEqual(expected_light, token_values(media_light_root(ARTIFACT_BASE_CSS)))
-        self.assertEqual(expected_dark_override, token_values(css_block(ARTIFACT_BASE_CSS, ':root[data-theme="dark"]')))
-        self.assertEqual(expected_light_override, token_values(css_block(ARTIFACT_BASE_CSS, ':root[data-theme="light"]')))
+        self.assertEqual(EXPECTED_DARK_TOKENS, token_values(css_block(ARTIFACT_BASE_CSS, ":root")))
+        self.assertEqual(EXPECTED_LIGHT_TOKENS, token_values(media_light_root(ARTIFACT_BASE_CSS)))
+        self.assertEqual(
+            EXPECTED_DARK_TOKENS,
+            token_values(css_block(ARTIFACT_BASE_CSS, ':root[data-theme="dark"]')),
+        )
+        self.assertEqual(
+            EXPECTED_LIGHT_TOKENS,
+            token_values(css_block(ARTIFACT_BASE_CSS, ':root[data-theme="light"]')),
+        )
 
     def test_live_page_uses_reference_structure(self) -> None:
         render_status_html(

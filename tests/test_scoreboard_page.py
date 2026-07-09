@@ -6,6 +6,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -291,7 +292,7 @@ class ScoreboardPageTests(unittest.TestCase):
         html = self.render_to(self.root / "scoreboard.html")
 
         self.assertIn("<h1 class=\"scoreboard-title\">Model performance scoreboard</h1>", html)
-        self.assertIn("Generated July 6, 2026", html)
+        self.assertRegex(html, r"Generated [A-Z][a-z]+ \d{1,2}, \d{4}")
         self.assertIn('>eval log</a>', html)
         self.assertIn('>catalog</a>', html)
         self.assertIn('>model notes</a>', html)

@@ -12,6 +12,7 @@ from urllib.request import urlopen
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+import ringer  # noqa: E402
 from ringer import PersistentHudServer  # noqa: E402
 
 
@@ -51,6 +52,7 @@ class HudModelsTabTests(unittest.TestCase):
         self.addCleanup(self.restore_env)
         self.root = Path(self.tmp.name)
         os.environ["HOME"] = str(self.root / "home")
+        os.environ["USERPROFILE"] = str(self.root / "home")
         os.environ["RINGER_HOME"] = str(self.root / "ringer-home")
         self.state_dir = self.root / "state"
         self.state_dir.mkdir(parents=True)
@@ -125,9 +127,9 @@ class HudModelsTabTests(unittest.TestCase):
         self.assertFalse(default_db.with_name(default_db.name + "-shm").exists())
 
     def test_api_models_error_path_returns_200(self) -> None:
-        bad_parent = self.root / "not-a-directory"
-        bad_parent.write_text("file", encoding="utf-8")
-        self.log_path = bad_parent / "models.jsonl"
+        original = ringer.build_models_api_payload
+        self.addCleanup(setattr, ringer, "build_models_api_payload", original)
+        ringer.build_models_api_payload = lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("boom"))
         _server, port = self.start_server()
 
         with urlopen(f"http://127.0.0.1:{port}/api/models", timeout=5) as response:
@@ -136,7 +138,7 @@ class HudModelsTabTests(unittest.TestCase):
 
         self.assertEqual([], payload["groups"])
         self.assertEqual([], payload["rollup"])
-        self.assertIn("error", payload)
+        self.assertEqual("boom", payload["error"])
         self.assertIn("generated_at", payload)
 
     def test_frontend_sources_include_models_tab_and_api_fetch(self) -> None:

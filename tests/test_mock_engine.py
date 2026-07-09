@@ -106,6 +106,7 @@ class MockEngineEndToEndTests(unittest.TestCase):
 
             env = os.environ.copy()
             env["HOME"] = str(home)
+            env["USERPROFILE"] = str(home)
             env["RINGER_HOME"] = str(ringer_home)
             env["XDG_CONFIG_HOME"] = str(root / "xdg-config")
 
