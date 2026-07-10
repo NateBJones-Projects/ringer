@@ -8468,9 +8468,20 @@ async def run_manifest(
         manifest.workdir,
         started_at=runner.started_at,
     )
+    task = asyncio.create_task(runner.run())
+    loop = asyncio.get_running_loop()
+    registered_signals: list[signal.Signals] = []
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        with contextlib.suppress(NotImplementedError, RuntimeError):
+            loop.add_signal_handler(sig, task.cancel)
+            registered_signals.append(sig)
     try:
-        return await runner.run()
+        return await task
+    except asyncio.CancelledError:
+        return 130
     finally:
+        for sig in registered_signals:
+            loop.remove_signal_handler(sig)
         unregister_active_run(runner.run_id)
 
 
