@@ -1938,8 +1938,17 @@ def start_catalog_auto_refresh(
         return None
 
 
+# Promotion ladder: 3+ tasks and first-try >= 2/3 ("2 of 3"). The exact
+# fraction matters — 0.67 would misclassify a literal 2-of-3 record.
+PROVEN_MIN_TASKS = 3
+PROVEN_MIN_FIRST_TRY = 2 / 3
+
+
 def proven_model_group(group: dict[str, Any]) -> bool:
-    return int(group.get("tasks") or 0) >= 3 and float(group.get("first_try_pass_rate") or 0) >= 0.67
+    return (
+        int(group.get("tasks") or 0) >= PROVEN_MIN_TASKS
+        and float(group.get("first_try_pass_rate") or 0) >= PROVEN_MIN_FIRST_TRY
+    )
 
 
 def catalog_model_is_text_candidate(model: dict[str, Any]) -> bool:
@@ -6070,8 +6079,10 @@ def catalog_models_by_id(catalog_models: list[dict[str, Any]]) -> dict[str, dict
     return by_id
 
 
-def model_scoreboard_tier(tasks: int) -> str:
-    if tasks >= 3:
+def model_scoreboard_tier(tasks: int, first_try_pass_rate: float) -> str:
+    # Same promotion rule as proven_model_group: volume alone never proves a
+    # model — a 0% pass rate with many tasks is evidence against, not for.
+    if tasks >= PROVEN_MIN_TASKS and first_try_pass_rate >= PROVEN_MIN_FIRST_TRY:
         return "proven"
     return "probation"
 
@@ -6183,7 +6194,12 @@ def aggregate_model_scoreboard_rows(
                 }
             )
         breakdown_rows.sort(key=lambda item: (-item["tasks"], item["task_type"]))
-        tier = "unranked" if entry["unattributed"] else model_scoreboard_tier(tasks_count)
+        first_try_rate = entry["first_try_passed"] / tasks_count if tasks_count else 0.0
+        tier = (
+            "unranked"
+            if entry["unattributed"]
+            else model_scoreboard_tier(tasks_count, first_try_rate)
+        )
         finalized.append(
             {
                 "engine": entry["engine"],

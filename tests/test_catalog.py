@@ -61,6 +61,11 @@ class CatalogTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.old_env = os.environ.copy()
         self.addCleanup(self.restore_env)
+        # Isolate ALL default state paths: without this, tests that hit
+        # default_read_model_db_path() sync fixture rows into the REAL
+        # ~/.ringer/ringer.db (this exact leak put 'proven-model' on the
+        # live public scoreboard, 2026-07-10).
+        os.environ["RINGER_HOME"] = str(self.root / "ringer-home")
 
     def restore_env(self) -> None:
         os.environ.clear()

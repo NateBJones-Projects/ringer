@@ -81,13 +81,13 @@ lab = "OpenAI"
 confidence = "verified"
 source = "fixture"
 
-[engines.grok]
-harness = "Grok Build CLI"
+[engines.demo]
+harness = "Demo CLI"
 access = "OAuth plan"
 
-[engines.grok.models."grok-build"]
-display = "grok-build (xAI, alias)"
-lab = "xAI"
+[engines.demo.models."demo-alias"]
+display = "demo-alias (DemoLab, alias)"
+lab = "DemoLab"
 alias = true
 confidence = "verified"
 source = "fixture"
@@ -190,8 +190,8 @@ source = "fixture"
     def test_registry_threads_lab_alias_and_unknown_fallback(self) -> None:
         registry = load_model_identity_registry(self.registry_path)
         self.assertEqual("OpenAI", registry.resolve("codex", "gpt-5.5").lab)
-        alias = registry.resolve("grok", "grok-build")
-        self.assertEqual(("xAI", True), (alias.lab, alias.alias))
+        alias = registry.resolve("demo", "demo-alias")
+        self.assertEqual(("DemoLab", True), (alias.lab, alias.alias))
         self.assertEqual("vendor?", registry.resolve("opencode", "openrouter/vendor/model").lab)
         self.assertEqual("(unknown)", registry.resolve("custom", "model").lab)
 
@@ -259,7 +259,7 @@ source = "fixture"
 
     def test_alias_marker_and_lab_render_in_html(self) -> None:
         log_path = self.root / "alias.jsonl"
-        self.write_rows(log_path, [row("alias", model="grok-build", engine="grok")])
+        self.write_rows(log_path, [row("alias", model="demo-alias", engine="demo")])
         html_path = self.root / "scoreboard.html"
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
@@ -271,8 +271,8 @@ source = "fixture"
             )
         html = html_path.read_text(encoding="utf-8")
         self.assertIn(">Lab<", html)
-        self.assertIn("grok-build (xAI, alias)", html)
-        self.assertIn(">xAI<", html)
+        self.assertIn("demo-alias (DemoLab, alias)", html)
+        self.assertIn(">DemoLab<", html)
 
     def test_existing_database_migrates_reasoning_effort_without_data_loss(self) -> None:
         db_path = self.root / "ringer.db"

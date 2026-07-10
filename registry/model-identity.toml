@@ -42,13 +42,13 @@ access = "OAuth plan"
 default_model_key = "grok-build"
 
 [engines.grok.models."grok-build"]
-# "Grok Build" is the HARNESS (the CLI product); the model behind the
-# grok-build alias has unestablished lineage.
-# Keep the alias marker explicit so harness branding cannot read as a model name.
-display = "grok-build (xAI, alias)"
+# "Grok Build" is the HARNESS (the CLI product), never a model name. The CLI
+# serves exactly two models: Grok 4.5 (xAI) and Composer 2.5 (Cursor). The
+# 'grok-build' engine default resolves to Grok 4.5. An earlier entry here
+# wrongly recorded "Grok Build 0.1" as a model — do not reintroduce it.
+display = "Grok 4.5"
 lab = "xAI"
-alias = true
-confidence = "verified"
+confidence = "verified"     # operator-confirmed (Jon, 2026-07-10): Grok Build CLI serves Grok 4.5 + Composer 2.5
 source = "https://docs.x.ai/developers/release-notes"
 
 [engines.grok.models."grok-composer-2.5-fast"]

@@ -173,6 +173,11 @@ checks and raw logs support — no vibes, no worker self-reports.
 
 ## grok-build (Grok CLI engine, flat plan)
 
+- 2026-07-10 — identity correction (Jon): the Grok Build CLI is a HARNESS
+  serving exactly two models — Grok 4.5 (xAI) and Composer 2.5 (Cursor).
+  The engine-lane slug `grok-build` resolves to Grok 4.5. "Grok Build 0.1"
+  was never a model; earlier notes/rows using it as one describe Grok 4.5.
+
 - 2026-07-06 — first outing (elsas-website demo), engine added same day:
   audition PASS attempt 1 in 28.9s. Then: asset harvest (11 images, live URL
   re-fetch check), books page, 5 work-page routes in one task (59 verbatim
