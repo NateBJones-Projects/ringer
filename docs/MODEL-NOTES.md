@@ -72,6 +72,21 @@ checks and raw logs support — no vibes, no worker self-reports.
   check. Review lane found the HIGH that mattered (sync cursor skipping a
   half-written trailing line). Codex is the proven lane for both sides of
   the review->fix loop on this codebase.
+- 2026-07-10 — meridian corpus-ingest dissolution (3 lanes: bash checker fix,
+  wrapper authoring, python work-unit + tests): 3/3 pass, one lane needed
+  attempt 2 after the executed smoke check caught close-status poisoning the
+  worker believed was done (rc=0). Executed checks earn their keep on
+  infra-contract work.
+- 2026-07-10 — sleep-dissolution-slice-1b (2 lanes: mcp-server staleness
+  predicate + tests; extractor/wrapper sweep): 2/2 first-try, additive-schema
+  contracts honored, behavioral idempotence check (backdated fixtures) passed.
+  Two integration lessons, neither a worker fault: (1) worker-side full-suite
+  run hit a sandbox PermissionError because meridian's smoke_test.py writes to
+  the REAL repo (test-hermeticity nit in the target repo); (2) the dispatch
+  checks ran the mcp-server suite only, while meridian's CD-075 checkpoint
+  gate also runs tests/harness-eval (2,817 tests) — the gate caught one
+  contract-pinning test the checks couldn't see. Derive check suite scope
+  from the target repo's own gate config, not from precedent check scripts.
 
 ## glm-5.2 via opencode (`openrouter/z-ai/glm-5.2`)
 
