@@ -184,6 +184,10 @@ class AppConfig:
     eval: EvalConfig
     engines: dict[str, EngineConfig]
     artifact: ArtifactConfig
+    # When set, each `check` is run as: <check_launcher...> <check-command>, so
+    # a fixed reviewed launcher can sandbox the check instead of the engine
+    # running the task-controlled command with a bare `sh -c`.
+    check_launcher: tuple[str, ...] | None = None
 
     @classmethod
     def load(cls, path: Path | None = None) -> "AppConfig":
@@ -210,6 +214,12 @@ class AppConfig:
         eval_config = load_eval_config(data.get("eval"), state_dir)
         engines = load_engines(data.get("engines"))
         artifact_config = load_artifact_config(data.get("artifact"), state_dir)
+        check_launcher_raw = data.get("check_launcher")
+        check_launcher = (
+            as_string_tuple(check_launcher_raw, key="check_launcher")
+            if check_launcher_raw
+            else None
+        )
         return cls(
             path=config_path if config_path.exists() else None,
             identity_default=identity_default,
@@ -221,6 +231,7 @@ class AppConfig:
             eval=eval_config,
             engines=engines,
             artifact=artifact_config,
+            check_launcher=check_launcher,
         )
 
 
@@ -6711,6 +6722,14 @@ def run_models_command(config: AppConfig, args: argparse.Namespace) -> int:
 
 
 class Verifier:
+    def __init__(self, check_launcher: tuple[str, ...] | None = None) -> None:
+        # When set, `check` is run as: <launcher...> <check-command>, so a
+        # fixed reviewed launcher can sandbox the check (its own UID, no
+        # network, dropped caps, read-only input) instead of the engine running
+        # the task-controlled command with a bare `sh -c`. None keeps the
+        # plain-shell behavior.
+        self.check_launcher = check_launcher
+
     async def verify(self, task: TaskSpec, taskdir: Path) -> VerifyResult:
         check_returncode, check_timed_out, output = await self._run_check(task.check, taskdir)
         missing_files = tuple(
@@ -6749,16 +6768,30 @@ class Verifier:
         # Keep runtime verification aligned with lint's treatment of "~" paths.
         return candidate if candidate.is_absolute() else taskdir / candidate
 
-    @staticmethod
-    async def _run_check(command: str, cwd: Path) -> tuple[int | None, bool, str]:
-        proc = await asyncio.create_subprocess_shell(
-            command,
-            cwd=str(cwd),
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            start_new_session=True,
-        )
+    async def _run_check(self, command: str, cwd: Path) -> tuple[int | None, bool, str]:
+        if self.check_launcher:
+            # Hand the raw check command to the reviewed launcher as one arg; it
+            # owns how (and whether) the command runs inside its sandbox. No
+            # bare `sh -c` here, so a task's auto-loaded config (conftest.py /
+            # Makefile / …) never executes in the engine's context.
+            proc = await asyncio.create_subprocess_exec(
+                *self.check_launcher,
+                command,
+                cwd=str(cwd),
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                start_new_session=True,
+            )
+        else:
+            proc = await asyncio.create_subprocess_shell(
+                command,
+                cwd=str(cwd),
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                start_new_session=True,
+            )
         timed_out = False
         try:
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=CHECK_TIMEOUT_S)
@@ -6816,7 +6849,7 @@ class RingerRunner:
             else None
         )
         self.logger = EvalLogger(config.eval)
-        self.verifier = Verifier()
+        self.verifier = Verifier(check_launcher=config.check_launcher)
         self.semaphore = asyncio.Semaphore(manifest.max_parallel)
         self.active_processes: dict[int, asyncio.subprocess.Process] = {}
 
