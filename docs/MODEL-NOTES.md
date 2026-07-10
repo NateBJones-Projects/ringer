@@ -179,6 +179,17 @@ checks and raw logs support — no vibes, no worker self-reports.
   to k2.7.
 
 
+## grok-4.5 via opencode (`openrouter/x-ai/grok-4.5`)
+
+- xAI's July 2026 flagship (default model in Grok Build CLI; $2/M in, $6/M out
+  on OpenRouter as of 2026-07).
+- 2026-07-09 — audition (exploration slot, Windows→WSL bwrap sandbox lane):
+  short mechanical coding task with an executed-output check (script run,
+  exact stdout compared): PASS attempt 1, 10.2s, 8.8k tokens (~1-2¢). Clean
+  idiomatic artifact. Untested→probation; next rung is a real code-fix or
+  docs lane in a batch. Note the flat-plan Grok Build CLI route would make
+  this model ~$0 marginal — worth wiring if the subscription exists.
+
 ## grok-build (Grok CLI engine, flat plan)
 
 - 2026-07-06 — first outing (elsas-website demo), engine added same day:
