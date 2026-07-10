@@ -184,6 +184,11 @@ class AppConfig:
     eval: EvalConfig
     engines: dict[str, EngineConfig]
     artifact: ArtifactConfig
+    # When set, worker.log and a standalone full check-output sink are written
+    # here — a supervisor-owned directory outside the worker-writable taskdir —
+    # instead of into taskdir/worker.log, so the worker cannot tamper with the
+    # evidence that becomes its own trust record. Independent of worktrees.
+    worker_log_dir: Path | None = None
 
     @classmethod
     def load(cls, path: Path | None = None) -> "AppConfig":
@@ -210,6 +215,7 @@ class AppConfig:
         eval_config = load_eval_config(data.get("eval"), state_dir)
         engines = load_engines(data.get("engines"))
         artifact_config = load_artifact_config(data.get("artifact"), state_dir)
+        worker_log_dir = optional_path(data.get("worker_log_dir"))
         return cls(
             path=config_path if config_path.exists() else None,
             identity_default=identity_default,
@@ -221,6 +227,7 @@ class AppConfig:
             eval=eval_config,
             engines=engines,
             artifact=artifact_config,
+            worker_log_dir=worker_log_dir,
         )
 
 
@@ -6711,8 +6718,20 @@ def run_models_command(config: AppConfig, args: argparse.Namespace) -> int:
 
 
 class Verifier:
-    async def verify(self, task: TaskSpec, taskdir: Path) -> VerifyResult:
+    async def verify(
+        self, task: TaskSpec, taskdir: Path, check_output_sink: Path | None = None
+    ) -> VerifyResult:
         check_returncode, check_timed_out, output = await self._run_check(task.check, taskdir)
+        if check_output_sink is not None:
+            # A standalone, untruncated sink for the raw (worker-influenced)
+            # check output, written supervisor-side. runs.jsonl keeps only the
+            # bounded excerpt below; the full bytes live here as a clearly-
+            # untrusted blob for a later reader to sanitize before trusting.
+            try:
+                check_output_sink.parent.mkdir(parents=True, exist_ok=True)
+                check_output_sink.write_text(output, encoding="utf-8")
+            except OSError:
+                pass
         missing_files = tuple(
             rel for rel in task.expect_files if not self._is_nonempty_file(self._expect_file_path(taskdir, rel))
         )
@@ -6891,7 +6910,14 @@ class RingerRunner:
                     runtime.status = "verifying"
                     if worker.tokens is not None:
                         runtime.tokens = (runtime.tokens or 0) + worker.tokens
-                verify = await self.verifier.verify(runtime.task, runtime.taskdir)
+                check_output_sink = (
+                    self.config.worker_log_dir / f"{runtime.task.key}.check-output.txt"
+                    if self.config.worker_log_dir is not None
+                    else None
+                )
+                verify = await self.verifier.verify(
+                    runtime.task, runtime.taskdir, check_output_sink=check_output_sink
+                )
                 verdict = verdict_for(worker, verify)
                 with self.lock:
                     runtime.last_check_returncode = verify.check_returncode
@@ -7236,6 +7262,14 @@ class RingerRunner:
         return taskdir
 
     def _log_path(self, task: TaskSpec, taskdir: Path) -> Path:
+        external = self.config.worker_log_dir
+        if external is not None:
+            external.mkdir(parents=True, exist_ok=True)
+            external_real = external.resolve()
+            log_path = (external_real / f"{task.key}.worker.log").resolve()
+            if log_path != external_real and external_real not in log_path.parents:
+                raise ValueError(f"task key escapes worker log dir: {task.key}")
+            return log_path
         if not self.manifest.worktrees:
             return taskdir / "worker.log"
         logs_dir = (self.manifest.workdir / "logs").resolve()
