@@ -149,6 +149,216 @@ class ArtifactConfig:
         return Path(format_artifact_template(self.report_template, run_id, run_name))
 
 
+@dataclass(frozen=True)
+class SteeringConfig:
+    dir: Path | None = None
+    inject_candidates: bool = True
+
+
+@dataclass(frozen=True)
+class SteeringRule:
+    id: str
+    status: str
+    audience: str
+    inject: str
+
+
+@dataclass(frozen=True)
+class SteeringProfile:
+    model: str
+    profile_version: str
+    slug: str
+    rules: tuple[SteeringRule, ...]
+
+
+STEERING_STATUSES = {"candidate", "confirmed", "refuted", "stale-pending-reverify"}
+STEERING_AUDIENCES = {"driver", "worker"}
+STEERING_RULE_HEADING_RE = re.compile(r"^## R\d+ · ([^\n]+?)\s*$", re.MULTILINE)
+
+
+def load_steering_config(raw: Any) -> SteeringConfig:
+    """Load optional steering settings without allowing them to break config load."""
+    try:
+        section = raw if isinstance(raw, dict) else {}
+        env_dir = os.environ.get(f"{ENV_VAR_PREFIX}_STEERING_DIR")
+        directory = optional_path(env_dir) if env_dir and env_dir.strip() else optional_path(
+            section.get("dir")
+        )
+        return SteeringConfig(
+            dir=directory,
+            inject_candidates=bool(section.get("inject_candidates", True)),
+        )
+    except Exception:
+        return SteeringConfig()
+
+
+def _steering_yaml_values(text: str) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for line in text.splitlines():
+        if line != line.lstrip():
+            continue
+        match = re.match(r"^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*?)\s*$", line)
+        if not match:
+            continue
+        value = match.group(2).strip()
+        value = re.split(r"\s+#", value, maxsplit=1)[0].rstrip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1]
+        values[match.group(1)] = value
+    return values
+
+
+def parse_steering_profile(text: str, *, slug: str | None = None) -> SteeringProfile | None:
+    """Parse the small, documented subset of steering profile markdown. Never raise."""
+    try:
+        lines = text.splitlines()
+        if not lines or lines[0].strip() != "---":
+            return None
+        frontmatter_end = next(
+            index for index in range(1, len(lines)) if lines[index].strip() == "---"
+        )
+        frontmatter = _steering_yaml_values("\n".join(lines[1:frontmatter_end]))
+        model = frontmatter.get("model", "").strip()
+        profile_version = frontmatter.get("profile_version", "").strip()
+        if not model or not profile_version:
+            return None
+
+        body = "\n".join(lines[frontmatter_end + 1 :])
+        headings = list(STEERING_RULE_HEADING_RE.finditer(body))
+        rules: list[SteeringRule] = []
+        for heading in headings:
+            next_section = re.search(r"^## ", body[heading.end() :], re.MULTILINE)
+            section_end = (
+                heading.end() + next_section.start() if next_section is not None else len(body)
+            )
+            section = body[heading.end() : section_end]
+            yaml_match = re.search(r"```yaml[ \t]*\n(.*?)^```[ \t]*$", section, re.MULTILINE | re.DOTALL)
+            if yaml_match is None:
+                continue
+            metadata = _steering_yaml_values(yaml_match.group(1))
+            rule_id = metadata.get("id", "").strip()
+            status = metadata.get("status", "").strip().lower()
+            audience = metadata.get("audience", "driver").strip().lower() or "driver"
+            if not rule_id or status not in STEERING_STATUSES or audience not in STEERING_AUDIENCES:
+                continue
+
+            inject_parts: list[str] = []
+            found_inject = False
+            for line in section.splitlines():
+                stripped = line.strip()
+                if not found_inject:
+                    if stripped.startswith("**Inject:**"):
+                        found_inject = True
+                        first = stripped.removeprefix("**Inject:**").strip()
+                        if first:
+                            inject_parts.append(first)
+                    continue
+                if not stripped:
+                    break
+                inject_parts.append(stripped)
+            inject_text = " ".join(inject_parts).strip()
+            if not inject_text:
+                continue
+            rules.append(
+                SteeringRule(
+                    id=rule_id,
+                    status=status,
+                    audience=audience,
+                    inject=inject_text,
+                )
+            )
+        if not rules:
+            return None
+        return SteeringProfile(
+            model=model,
+            profile_version=profile_version,
+            slug=(slug or model).strip(),
+            rules=tuple(rules),
+        )
+    except Exception:
+        return None
+
+
+def load_steering_profile(path: Path) -> SteeringProfile | None:
+    try:
+        return parse_steering_profile(
+            path.read_text(encoding="utf-8", errors="replace"),
+            slug=path.stem,
+        )
+    except Exception:
+        return None
+
+
+def steering_profile_candidates(steering_dir: Path, resolved_model: str) -> tuple[Path, ...]:
+    model = resolved_model.strip().lower()
+    if not model:
+        return ()
+    slugs = [model.replace("/", "-"), model.rsplit("/", 1)[-1]]
+    unique_slugs = tuple(dict.fromkeys(slugs))
+    return tuple(steering_dir / "profiles" / f"{slug}.md" for slug in unique_slugs)
+
+
+def resolve_steering_profile(
+    steering_dir: Path | None, resolved_model: str
+) -> SteeringProfile | None:
+    """Return the first matching profile path, even when that file is malformed."""
+    try:
+        if steering_dir is None:
+            return None
+        for candidate in steering_profile_candidates(steering_dir, resolved_model):
+            if candidate.is_file():
+                return load_steering_profile(candidate)
+    except Exception:
+        return None
+    return None
+
+
+def steering_worker_rules(
+    profile: SteeringProfile, *, inject_candidates: bool = True
+) -> tuple[SteeringRule, ...]:
+    try:
+        return tuple(
+            rule
+            for rule in profile.rules
+            if rule.audience == "worker"
+            and (
+                rule.status in {"confirmed", "stale-pending-reverify"}
+                or (rule.status == "candidate" and inject_candidates)
+            )
+        )
+    except Exception:
+        return ()
+
+
+def inject_steering_spec(
+    spec: str,
+    profile: SteeringProfile | None,
+    *,
+    inject_candidates: bool = True,
+) -> tuple[str, tuple[str, ...]]:
+    """Prepend qualifying worker rules, returning the original spec on any error."""
+    try:
+        if profile is None:
+            return spec, ()
+        rules = steering_worker_rules(profile, inject_candidates=inject_candidates)
+        if not rules:
+            return spec, ()
+        lines = [
+            f"[Steering profile {profile.model} v{profile.profile_version} — auto-injected by ringer.py]"
+        ]
+        for rule in rules:
+            prefix = ""
+            if rule.status == "candidate":
+                prefix = "(candidate) "
+            elif rule.status == "stale-pending-reverify":
+                prefix = "(unverified on current model version) "
+            lines.append(f"- {prefix}{rule.inject}")
+        lines.append("[End steering profile]")
+        return "\n".join(lines) + "\n\n" + spec, tuple(rule.id for rule in rules)
+    except Exception:
+        return spec, ()
+
+
 def format_artifact_template(template: str, run_id: str, run_name: str) -> str:
     text = template.replace("{run_id}", run_id).replace("{run_name}", run_name)
     return str(Path(text).expanduser())
@@ -184,6 +394,7 @@ class AppConfig:
     eval: EvalConfig
     engines: dict[str, EngineConfig]
     artifact: ArtifactConfig
+    steering: SteeringConfig = field(default_factory=SteeringConfig)
 
     @classmethod
     def load(cls, path: Path | None = None) -> "AppConfig":
@@ -210,6 +421,12 @@ class AppConfig:
         eval_config = load_eval_config(data.get("eval"), state_dir)
         engines = load_engines(data.get("engines"))
         artifact_config = load_artifact_config(data.get("artifact"), state_dir)
+        try:
+            steering_config = load_steering_config(data.get("steering"))
+        except Exception:
+            # Steering is optional and must never make the base config unusable,
+            # including when its loader itself is replaced or extended later.
+            steering_config = SteeringConfig()
         return cls(
             path=config_path if config_path.exists() else None,
             identity_default=identity_default,
@@ -221,6 +438,7 @@ class AppConfig:
             eval=eval_config,
             engines=engines,
             artifact=artifact_config,
+            steering=steering_config,
         )
 
 
@@ -813,6 +1031,7 @@ class TaskRuntime:
     last_check_timed_out: bool = False
     last_check_output: str = ""
     last_worker_command: list[str] = field(default_factory=list)
+    steering: dict[str, Any] | None = None
 
     def elapsed_s(self, now: float) -> float:
         if self.started_at_monotonic is None:
@@ -986,43 +1205,44 @@ class StateWriter:
                 log_tail_full = tail_lines(runtime.log_path, line_count=40)
                 engine = self.engines.get(runtime.task.engine)
                 process_name = engine.process_name if engine else runtime.task.engine
-                tasks.append(
-                    {
-                        "key": runtime.task.key,
-                        "status": runtime.status,
-                        "verdict": runtime.final_verdict,
-                        "engine": runtime.task.engine,
-                        "model": (
-                            runtime.task.model
-                            or (engine.model_default if engine else "")
-                            or effective_model_from_command(runtime.last_worker_command)
-                        ),
-                        "spec": runtime.task.spec,
-                        "spec_short": runtime.spec_short,
-                        "verified": runtime.task.verified,
-                        "check": runtime.task.check,
-                        "check_returncode": runtime.last_check_returncode,
-                        "check_timed_out": runtime.last_check_timed_out,
-                        "check_output_tail": shorten(runtime.last_check_output, 4000),
-                        "timeout_s": runtime.task.timeout_s,
-                        "taskdir": str(runtime.taskdir),
-                        "log_path": str(runtime.log_path),
-                        "report_paths": {
-                            name: str(path) for name, path in runtime.report_paths.items()
-                        },
-                        "deliverables": [dict(item) for item in runtime.deliverables],
-                        "deliverable_notes": list(runtime.deliverable_notes),
-                        "activity": worker_activity(runtime.log_path, log_tail),
-                        "elapsed_s": round(runtime.elapsed_s(now), 1),
-                        "tokens": runtime.tokens,
-                        "attempts": runtime.attempts,
-                        "children": ProcessTree.count_named_descendants(
-                            runtime.worker_pid, children, commands, process_name
-                        ),
-                        "log_tail": log_tail,
-                        "log_tail_full": log_tail_full,
-                    }
-                )
+                task_state = {
+                    "key": runtime.task.key,
+                    "status": runtime.status,
+                    "verdict": runtime.final_verdict,
+                    "engine": runtime.task.engine,
+                    "model": (
+                        runtime.task.model
+                        or (engine.model_default if engine else "")
+                        or effective_model_from_command(runtime.last_worker_command)
+                    ),
+                    "spec": runtime.task.spec,
+                    "spec_short": runtime.spec_short,
+                    "verified": runtime.task.verified,
+                    "check": runtime.task.check,
+                    "check_returncode": runtime.last_check_returncode,
+                    "check_timed_out": runtime.last_check_timed_out,
+                    "check_output_tail": shorten(runtime.last_check_output, 4000),
+                    "timeout_s": runtime.task.timeout_s,
+                    "taskdir": str(runtime.taskdir),
+                    "log_path": str(runtime.log_path),
+                    "report_paths": {
+                        name: str(path) for name, path in runtime.report_paths.items()
+                    },
+                    "deliverables": [dict(item) for item in runtime.deliverables],
+                    "deliverable_notes": list(runtime.deliverable_notes),
+                    "activity": worker_activity(runtime.log_path, log_tail),
+                    "elapsed_s": round(runtime.elapsed_s(now), 1),
+                    "tokens": runtime.tokens,
+                    "attempts": runtime.attempts,
+                    "children": ProcessTree.count_named_descendants(
+                        runtime.worker_pid, children, commands, process_name
+                    ),
+                    "log_tail": log_tail,
+                    "log_tail_full": log_tail_full,
+                }
+                if runtime.steering is not None:
+                    task_state["steering"] = dict(runtime.steering)
+                tasks.append(task_state)
             pass_count = sum(1 for item in tasks if item["status"] == "pass")
             fail_count = sum(1 for item in tasks if item["status"] == "fail")
             running_count = sum(
@@ -7109,6 +7329,50 @@ class RingerRunner:
             engine_args=runtime.task.engine_args,
             model=runtime.task.model,
         )
+        if self.config.steering.dir is not None:
+            original_cmd = cmd
+            steering_state: dict[str, Any] = {
+                "profile": None,
+                "version": None,
+                "rule_ids": [],
+            }
+            steering_line = "[ringer.py] steering: no profile matched\n"
+            try:
+                resolved_model = resolved_task_model(runtime.task, engine, cmd)
+                profile = resolve_steering_profile(self.config.steering.dir, resolved_model)
+                injected_spec, rule_ids = inject_steering_spec(
+                    spec,
+                    profile,
+                    inject_candidates=self.config.steering.inject_candidates,
+                )
+                if profile is not None:
+                    steering_state = {
+                        "profile": profile.slug,
+                        "version": profile.profile_version,
+                        "rule_ids": list(rule_ids),
+                    }
+                    shown_rules = ", ".join(rule_ids) if rule_ids else "(none)"
+                    steering_line = (
+                        f"[ringer.py] steering: profile={profile.slug} "
+                        f"version={profile.profile_version} rule_ids={shown_rules}\n"
+                    )
+                if injected_spec != spec:
+                    cmd = build_worker_command(
+                        engine,
+                        taskdir=runtime.taskdir,
+                        spec=injected_spec,
+                        full_access=runtime.task.full_access,
+                        engine_args=runtime.task.engine_args,
+                        model=runtime.task.model,
+                    )
+            except Exception:
+                cmd = original_cmd
+                steering_state = {"profile": None, "version": None, "rule_ids": []}
+                steering_line = "[ringer.py] steering: no profile matched\n"
+            with self.lock:
+                runtime.steering = steering_state
+            with contextlib.suppress(Exception):
+                append_text(log_path, steering_line)
         with self.lock:
             runtime.last_worker_command = list(cmd)
         append_text(
@@ -7216,6 +7480,16 @@ class RingerRunner:
             notes_parts.append(f"missing_expect_files={json.dumps(list(verify.missing_files))}")
         notes_parts.append("raw_check_output_first_2000_chars:")
         notes_parts.append(verify.raw_output_excerpt)
+        with contextlib.suppress(Exception):
+            self._write_steering_observation(
+                runtime,
+                resolved_model=resolved_model,
+                retrying=retrying,
+                worker=worker,
+                verify=verify,
+                verdict=verdict,
+                duration_ms=duration_ms,
+            )
         self.logger.log_attempt(
             {
                 "run_id": self.run_id,
@@ -7235,6 +7509,65 @@ class RingerRunner:
                 "retry": retrying,
             }
         )
+
+    def _write_steering_observation(
+        self,
+        runtime: TaskRuntime,
+        *,
+        resolved_model: str,
+        retrying: bool,
+        worker: WorkerResult,
+        verify: VerifyResult,
+        verdict: str,
+        duration_ms: int,
+    ) -> None:
+        steering_dir = self.config.steering.dir
+        if steering_dir is None:
+            return
+        try:
+            steering_state = runtime.steering
+            if steering_state is None:
+                profile = resolve_steering_profile(steering_dir, resolved_model)
+                steering_state = {
+                    "profile": profile.slug if profile else None,
+                    "version": profile.profile_version if profile else None,
+                    "rule_ids": [],
+                }
+                with self.lock:
+                    runtime.steering = steering_state
+            now = datetime.now(timezone.utc)
+            row = {
+                "ts": now.isoformat(),
+                "source": "ringer.py",
+                "run_id": self.run_id,
+                "run_name": self.manifest.run_name,
+                "task_key": runtime.task.key,
+                "task_type": runtime.task.task_type,
+                "engine": runtime.task.engine,
+                "model": resolved_model,
+                "profile": steering_state.get("profile"),
+                "profile_version": steering_state.get("version"),
+                "rules_injected": list(steering_state.get("rule_ids", [])),
+                "attempt": runtime.attempts,
+                "retry": retrying,
+                "verdict": verdict,
+                "duration_ms": duration_ms,
+                "worker_tokens": worker.tokens,
+                "check_excerpt": verify.raw_output_excerpt[:500],
+            }
+            path = (
+                steering_dir
+                / "observations"
+                / "ringer"
+                / f"{now.strftime('%Y-%m-%d')}.jsonl"
+            )
+            append_text(path, json.dumps(row, sort_keys=True) + "\n")
+        except Exception as exc:
+            with contextlib.suppress(Exception):
+                append_text(
+                    runtime.log_path,
+                    f"[ringer.py] steering: observation write failed {exc}\n",
+                )
 
     def _task_runtime(self, task: TaskSpec) -> TaskRuntime:
         taskdir = self._taskdir(task)
@@ -7402,6 +7735,18 @@ def effective_model_from_command(command: list[str]) -> str:
     return ""
 
 
+def resolved_task_model(
+    task: TaskSpec,
+    engine: EngineConfig | None,
+    command: list[str] | None = None,
+) -> str:
+    return (
+        task.model
+        or (engine.model_default if engine else "")
+        or effective_model_from_command(command or [])
+    )
+
+
 def build_worker_command(
     engine: EngineConfig,
     *,
@@ -7437,6 +7782,52 @@ def build_worker_command(
             .replace("{model}", resolved_model)
         )
     return command
+
+
+def print_steering_notes(manifest: Manifest, config: AppConfig) -> None:
+    """Surface driver-audience guidance once per resolved model. Never raise."""
+    try:
+        if config.steering.dir is None:
+            return
+        seen_models: set[str] = set()
+        for task in manifest.tasks:
+            try:
+                engine = config.engines.get(task.engine)
+                command: list[str] = []
+                if engine is not None:
+                    command = build_worker_command(
+                        engine,
+                        taskdir=(manifest.workdir / task.key).resolve(),
+                        spec=task.spec,
+                        full_access=task.full_access,
+                        engine_args=task.engine_args,
+                        model=task.model,
+                    )
+                model = resolved_task_model(task, engine, command)
+                if not model or model in seen_models:
+                    continue
+                seen_models.add(model)
+                profile = resolve_steering_profile(config.steering.dir, model)
+                if profile is None:
+                    continue
+                rules = tuple(
+                    rule
+                    for rule in profile.rules
+                    if rule.audience == "driver"
+                    and rule.status in {"confirmed", "candidate", "stale-pending-reverify"}
+                )
+                if not rules:
+                    continue
+                print(
+                    f"Steering notes for {model} (v{profile.profile_version}) "
+                    "— apply when writing specs/feedback:"
+                )
+                for rule in rules:
+                    print(f"- ({rule.status}) {rule.inject}")
+            except Exception:
+                continue
+    except Exception:
+        return
 
 
 ENGINE_INSTALL_HINTS = {
@@ -8292,6 +8683,8 @@ def main(argv: list[str] | None = None) -> int:
         else:
             manifest_path = args.manifest
         manifest = Manifest.from_path(manifest_path).with_max_parallel(args.max_parallel)
+        with contextlib.suppress(Exception):
+            print_steering_notes(manifest, config)
         print_lint_findings(lint_manifest(manifest, include_model_log_nudges=True))
         validate_manifest_engines(manifest, config)
         identity_start_paths = [manifest.workdir]
