@@ -184,6 +184,12 @@ class AppConfig:
     eval: EvalConfig
     engines: dict[str, EngineConfig]
     artifact: ArtifactConfig
+    # When false, the engine's on-PASS deliverable harvest is skipped so a
+    # supervisor outside the worker UID can own a symlink-safe copy-out (run
+    # evidence stays root-owned, outside the worker-writable output dir). The
+    # harvest that does run is symlink-safe regardless — see
+    # _harvest_deliverables_on_pass.
+    harvest_deliverables: bool = True
 
     @classmethod
     def load(cls, path: Path | None = None) -> "AppConfig":
@@ -210,6 +216,7 @@ class AppConfig:
         eval_config = load_eval_config(data.get("eval"), state_dir)
         engines = load_engines(data.get("engines"))
         artifact_config = load_artifact_config(data.get("artifact"), state_dir)
+        harvest_deliverables = bool(data.get("harvest_deliverables", True))
         return cls(
             path=config_path if config_path.exists() else None,
             identity_default=identity_default,
@@ -221,6 +228,7 @@ class AppConfig:
             eval=eval_config,
             engines=engines,
             artifact=artifact_config,
+            harvest_deliverables=harvest_deliverables,
         )
 
 
@@ -6921,6 +6929,11 @@ class RingerRunner:
                 return
 
     def _harvest_deliverables_on_pass(self, runtime: TaskRuntime) -> None:
+        if not self.config.harvest_deliverables:
+            # A supervisor outside the worker UID owns the (symlink-safe)
+            # copy-out so deliverables and run evidence land root-owned outside
+            # the worker-writable output dir. Skip the engine's own harvest.
+            return
         harvested: list[dict[str, Any]] = []
         notes: list[str] = []
         target_dir = artifact_deliverables_dir(
@@ -6941,6 +6954,7 @@ class RingerRunner:
                 path.name
                 for path in runtime.taskdir.glob("*")
                 if path.is_file()
+                and not path.is_symlink()
                 and not path.name.startswith(".")
                 and path.suffix.lower() in FALLBACK_HARVEST_SUFFIXES
             )
@@ -6953,6 +6967,25 @@ class RingerRunner:
             expect_files = tuple(candidates)
         for expect_path in expect_files:
             source = Verifier._expect_file_path(runtime.taskdir, expect_path)
+            # Symlink-safe harvest (rig containment, probe 12): the worker's only
+            # writable path is its taskdir, so a "deliverable" that is — or
+            # resolves through — a symlink can point at a secret outside the
+            # sandbox, and shutil.copy2 follows symlinks. Copy regular files
+            # only; for in-tree (relative) deliverables also require the real
+            # path to stay beneath the taskdir (rejects escape via a symlinked
+            # directory component).
+            if source.is_symlink():
+                notes.append(f"{source.name} was not copied: it is a symlink (skipped for safety).")
+                continue
+            if not Path(expect_path).expanduser().is_absolute():
+                real = os.path.realpath(source)
+                taskdir_real = os.path.realpath(runtime.taskdir)
+                if os.path.commonpath((real, taskdir_real)) != taskdir_real:
+                    notes.append(
+                        f"{source.name} was not copied: it resolves outside the task "
+                        "directory via a symlink (skipped for safety)."
+                    )
+                    continue
             try:
                 stat = source.stat()
             except OSError:

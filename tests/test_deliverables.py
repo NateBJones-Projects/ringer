@@ -273,6 +273,85 @@ class DeliverableTests(unittest.TestCase):
         self.assertTrue(copied.exists())
         self.assertEqual("<h1>done</h1>\n", copied.read_text(encoding="utf-8"))
 
+    def test_harvest_refuses_symlinked_deliverable(self) -> None:
+        # A worker whose only writable path is its taskdir can name a symlink
+        # like a deliverable and point it at a secret outside the sandbox.
+        # shutil.copy2 follows symlinks, so stock harvest would copy the target
+        # out. Harvest must copy regular files only and skip symlinks (note it).
+        secret = self.root / "outside-sandbox" / "provider.auth"
+        secret.parent.mkdir(parents=True)
+        secret.write_text("SECRET-PROVIDER-KEY\n", encoding="utf-8")
+        task = TaskSpec(
+            key="task-one",
+            spec="Create the requested outputs.",
+            check="true",
+            engine="mock",
+            expect_files=("out.css",),
+        )
+        runner, runtime = self.runtime_for(task)
+        (runtime.taskdir / "out.css").symlink_to(secret)
+
+        runner._harvest_deliverables_on_pass(runtime)
+
+        dest = self.artifacts_dir / "deliverables" / runner.run_id / "task-one" / "out.css"
+        self.assertFalse(
+            dest.exists() and "SECRET-PROVIDER-KEY" in dest.read_text(encoding="utf-8"),
+            "harvest exfiltrated a symlink target",
+        )
+        self.assertNotIn("out.css", [item["name"] for item in runtime.deliverables])
+        self.assertTrue(
+            any("symlink" in note.lower() for note in runtime.deliverable_notes),
+            runtime.deliverable_notes,
+        )
+
+    def test_harvest_refuses_deliverable_escaping_via_symlinked_dir(self) -> None:
+        # The escape also works one level up: symlink a *directory* component so
+        # a relative expect_file resolves outside the taskdir. Resolve-beneath
+        # must reject it.
+        secret = self.root / "outside-sandbox" / "provider.auth"
+        secret.parent.mkdir(parents=True)
+        secret.write_text("SECRET-PROVIDER-KEY\n", encoding="utf-8")
+        task = TaskSpec(
+            key="task-one",
+            spec="Create the requested outputs.",
+            check="true",
+            engine="mock",
+            expect_files=("sub/provider.auth",),
+        )
+        runner, runtime = self.runtime_for(task)
+        (runtime.taskdir / "sub").symlink_to(secret.parent)
+
+        runner._harvest_deliverables_on_pass(runtime)
+
+        self.assertEqual([], runtime.deliverables)
+        self.assertTrue(
+            any("symlink" in note.lower() for note in runtime.deliverable_notes),
+            runtime.deliverable_notes,
+        )
+
+    def test_harvest_disabled_is_a_noop(self) -> None:
+        # With harvest_deliverables=false a supervisor owns the copy-out; the
+        # engine must not harvest at all.
+        import dataclasses
+
+        task = TaskSpec(
+            key="task-one",
+            spec="Create the requested outputs.",
+            check="true",
+            engine="mock",
+            expect_files=("site-final.html",),
+        )
+        runner, runtime = self.runtime_for(task)
+        (runtime.taskdir / "site-final.html").write_text("<h1>done</h1>\n", encoding="utf-8")
+        runner.config = dataclasses.replace(self.config, harvest_deliverables=False)
+
+        runner._harvest_deliverables_on_pass(runtime)
+
+        self.assertEqual([], runtime.deliverables)
+        self.assertFalse(
+            (self.artifacts_dir / "deliverables" / runner.run_id / "task-one" / "site-final.html").exists()
+        )
+
     def harvested_state(self) -> dict[str, object]:
         run_id = "run-123"
         task_key = "task-one"
