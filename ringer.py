@@ -4192,7 +4192,6 @@ class PersistentHudServer:
                 if path.startswith("/api/open-folder"):
                     query = urllib.parse.urlparse(path).query
                     params = urllib.parse.parse_qs(query)
-                    name = (params.get("artifact") or [""])[0]
                     run_id = (params.get("run") or [""])[0]
                     artifact_root_dir = (state_dir / "artifacts").resolve()
                     target = artifact_root_dir / "deliverables"
