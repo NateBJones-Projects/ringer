@@ -37,6 +37,46 @@ ACTIONABLE = {"todo", "in_progress", "in_review", "blocked"}
 MAX_TASKS = int(os.environ.get("PAPERCLIP_SYNC_MAX_TASKS", "24"))
 
 
+def _needs_human_action(issue):
+    """Conservatively identify blocked work that needs operator attention."""
+    if issue.get("status") != "blocked":
+        return False
+    attention = issue.get("blockerAttention") or {}
+    if attention.get("state") == "needs_attention":
+        return True
+    text = " ".join(str(issue.get(k) or "") for k in ("title", "description")).lower()
+    return any(marker in text for marker in ("authorization", "oauth", "human action", "permission required"))
+
+
+def rank_actionable(issues):
+    """Return actionable issues with urgent blocked/human work first."""
+    prio_rank = {"critical": 0, "high": 1, "medium": 2, "low": 3, None: 4}
+    status_rank = {"blocked": 0, "in_progress": 1, "in_review": 2, "todo": 3}
+    return sorted(
+        issues,
+        key=lambda i: (
+            0 if _needs_human_action(i) else 1,
+            prio_rank.get(i.get("priority"), 4),
+            status_rank.get(i.get("status"), 4),
+            i.get("identifier", ""),
+        ),
+    )
+
+
+def project_actionable_issue(issue, proj_by_id):
+    attention = issue.get("blockerAttention") or {}
+    return {
+        "identifier": issue.get("identifier"),
+        "title": issue.get("title"),
+        "status": issue.get("status"),
+        "priority": issue.get("priority"),
+        "project": (proj_by_id.get(issue.get("projectId")) or {}).get("name"),
+        "needs_human_action": _needs_human_action(issue),
+        "attention_state": attention.get("state"),
+        "assignee_agent_id": issue.get("assigneeAgentId"),
+    }
+
+
 def _get(path):
     url = f"{PAPERCLIP}{path}"
     with urllib.request.urlopen(url, timeout=15) as r:
@@ -106,12 +146,7 @@ def build():
         })
 
     actionable = [i for i in issues if i.get("status") in ACTIONABLE]
-    # rank: priority (high>medium>low), then blocked/in_progress first
-    prio_rank = {"high": 0, "medium": 1, "low": 2, None: 3}
-    status_rank = {"in_progress": 0, "in_review": 1, "todo": 2, "blocked": 3}
-    actionable.sort(key=lambda i: (prio_rank.get(i.get("priority"), 3),
-                                   status_rank.get(i.get("status"), 4),
-                                   i.get("identifier", "")))
+    actionable = rank_actionable(actionable)
 
     fleet = {
         "synced_at": now,
@@ -126,16 +161,7 @@ def build():
             "projects": len(projects),
         },
         "projects": sorted(project_dir, key=lambda x: -x["actionable"]),
-        "actionable_issues": [
-            {
-                "identifier": i.get("identifier"),
-                "title": i.get("title"),
-                "status": i.get("status"),
-                "priority": i.get("priority"),
-                "project": (proj_by_id.get(i.get("projectId")) or {}).get("name"),
-            }
-            for i in actionable
-        ],
+        "actionable_issues": [project_actionable_issue(i, proj_by_id) for i in actionable],
     }
     return fleet, actionable, proj_by_id, now
 
