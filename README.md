@@ -183,6 +183,8 @@ opencode auth login   # select OpenRouter, paste the key
 
 Route with per-task `"engine": "opencode"`, pick the model with per-task `"model": "openrouter/<any-model>"`, and set reasoning effort via `engine_args`: `["--variant", "low|high|max"]`. A sensible split: mechanical or tightly-specced tasks on the cheap lane, gnarly ones on your frontier engine — the executed check catches shortfalls either way, and `swarm_runs` rows tell you whether the cheap lane's pass rate holds.
 
+If you run several lanes, it helps to give the tiers stable local names. The shipped Ringer skill references three optional aliases — **Sol** (frontier: decomposition, architecture, rescues), **Terra** (workhorse: implementation, debugging, review), and **Luna** (cheap: mechanical edits, tests, verification with an exact check) — but these are operator-defined: names you choose to map to your own engine and `model` values in `~/.config/ringer/config.toml`, not shipped model IDs. Ringer does not resolve them, and the skill's alias guidance applies only if your local configuration defines them; without the aliases, apply the same tier split with explicit `engine`/`model` values.
+
 ### The plan lane: Grok Build CLI
 
 If you already pay for SuperGrok or X Premium Plus, Grok Build is a second flat-rate worker lane — no per-token bill:

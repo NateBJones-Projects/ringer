@@ -236,12 +236,19 @@ per task via the manifest `engine` field. Defaults are deliberate:
   retry rescues. Then read `docs/MODEL-NOTES.md` (in the ringer repo) for
   the judgment the numbers can't carry. Routing is grounded in performance,
   not vibes (Jon directive 2026-07-06).
-- **Use the local Sol/Terra/Luna lanes explicitly.** Put the model in the
-  manifest `model` field and put reasoning effort in `engine_args`.
-  Use Sol for decomposition, architecture, check design, synthesis, and an
-  explicit rescue after a cheaper lane fails. Use Terra by default for
-  implementation, debugging, integration, and invariant-heavy review. Use
-  Luna only for bounded mechanical edits, renderer work, tests, and
+- **Use the Sol/Terra/Luna lane aliases explicitly — when your local
+  config defines them.** Sol, Terra, and Luna are optional
+  operator-defined aliases: local names an operator maps to their own
+  frontier, workhorse, and cheap model tiers in their engine/model
+  configuration. They are not shipped model IDs — never guess what they
+  resolve to; if your config doesn't define them, skip this bullet and
+  apply the same tier split with explicit `engine`/`model` values. Put the
+  model in the manifest `model` field and put reasoning effort in
+  `engine_args`. Use Sol (frontier tier) for decomposition, architecture,
+  check design, synthesis, and an explicit rescue after a cheaper lane
+  fails. Use Terra (workhorse tier) by default for implementation,
+  debugging, integration, and invariant-heavy review. Use Luna (cheap
+  tier) only for bounded mechanical edits, renderer work, tests, and
   verification with an exact check. If Luna appears to need high effort,
   move the task to Terra instead. Recommended defaults are Sol xhigh, Terra
   high, and Luna medium; lower effort only when the task and check make the
