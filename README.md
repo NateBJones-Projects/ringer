@@ -136,9 +136,13 @@ It installs the Ringer skill at the universal `.agents` path, keeps Claude Code 
 A Bash hook notices model-calling or harness commands running outside a live Ringer run, and an edit-loop hook notices batch editing without a run.
 Each hook nudges once per session, pointing the agent at the skill.
 
+The hook script is installed as a copy (`~/.local/share/ringer/hooks/` for user scope, `./.agents/ringer/hooks/` with `--project`), so the hooks keep working even if the clone moves.
+Re-run `./ringer.py install-agent` after updating the repo; it refreshes the copy and replaces any stale hook registrations in place.
+
 The hooks never block anything. A user who says "just do it inline" is obeyed; uninstall with `./ringer.py uninstall-agent`.
 
 For CI and evals, `config.sample.toml` includes `[engines.mock]` so the enforcement stack can be tested without an API bill.
+The repo's own CI (`.github/workflows/test.yml`) runs the Python test suite and a Ringside `cargo check` on every pull request and push to `main`; run the tests locally with `python3 -m unittest discover -s tests -p 'test_*.py'`.
 
 ## Engines are pluggable
 
