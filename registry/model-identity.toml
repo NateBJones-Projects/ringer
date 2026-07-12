@@ -54,8 +54,8 @@ last_verified = 2026-07-12
 [engines.cursor.models."grok-4.5-fast-high"]
 display = "Grok 4.5 Medium Fast"
 lab = "xAI"
-confidence = "listed-only"
-source = "authenticated model list; named run blocked on current Free tier"
+confidence = "verified"
+source = "authenticated Cursor Agent stream-json init event and executed Ringer probe"
 last_verified = 2026-07-12
 
 [engines.claude]

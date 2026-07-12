@@ -171,6 +171,16 @@ checks and raw logs support — no vibes, no worker self-reports.
   to k2.7.
 
 
+## grok-4.5-fast-high (Cursor Agent, Cursor Pro)
+
+- 2026-07-12 — Pro entitlement probe: PASS attempt 1 in 7.8s. Cursor's
+  stream-json init event reported `Cursor Grok 4.5 Medium Fast`; the worker
+  wrote `solution.py`, and both Ringer's check and an independent execution
+  printed the exact `RINGER_GROK_PRO_OK` marker. The same slug had been blocked
+  when the account was on Free; after the Pro upgrade it is a verified Cursor
+  lane. Route it with `engine = "cursor"` and `model = "grok-4.5-fast-high"`.
+
+
 ## grok-build (Grok CLI engine, flat plan)
 
 - 2026-07-10 — identity correction (Jon): the Grok Build CLI is a HARNESS

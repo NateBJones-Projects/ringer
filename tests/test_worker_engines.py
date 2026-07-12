@@ -108,6 +108,8 @@ class CursorEngineContractTests(unittest.TestCase):
             ("Grok 4.5 Medium Fast", "xAI", "Cursor Agent", "Cursor account"),
             (grok.model_display, grok.lab, grok.harness, grok.access),
         )
+        self.assertEqual("verified", grok.confidence)
+        self.assertIn("executed Ringer probe", grok.source)
 
 
 class ClaudeEngineContractTests(unittest.TestCase):
