@@ -138,10 +138,19 @@ model_report_regex = "(?m)^model:[ \\t]*([^ \\t\\r\\n]+)[ \\t]*\\r?$"
 # ~/.local/share/opencode/auth.json ({"openrouter": {"type": "api", "key": "..."}});
 # confirm the path with your installed CLI.
 # Per-task engine_args can set reasoning effort ("--variant", "low|high|max").
+# spawn_stagger_s: every OpenCode process shares one SQLite state DB
+# (~/.local/share/opencode/opencode.db), and parallel cold starts collide on
+# it — one worker wins the lock, the rest die in ~2s with "database is locked"
+# (or a generic "Unexpected server error") before spending a single token, and
+# ringer's simultaneous retries reproduce the collision. A minimum gap between
+# spawns of this engine lets each cold start claim the DB before the next
+# begins. Applies per attempt (retries stagger too); 0 disables. Engines
+# without shared state (codex) don't need it.
 # Uncomment and set an absolute path for `bin` to enable.
 # [engines.opencode]
 # bin = "/absolute/path/to/ringer/engines/opencode-sandboxed.sh"
 # model_default = "openrouter/z-ai/glm-5.2"
+# spawn_stagger_s = 2.0
 # args_template = [
 #   "{taskdir}",
 #   "{access_args}",

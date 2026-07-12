@@ -40,6 +40,7 @@ from html import escape as html_escape
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from collections.abc import Awaitable, Callable
 from typing import Any, Iterable
 
 
@@ -118,6 +119,14 @@ class EngineConfig:
     # its own "model" — this is what makes a harness engine (OpenCode) model
     # agnostic instead of hard-coding one model into the command line.
     model_default: str = ""
+    # Minimum seconds between consecutive worker spawns of THIS engine.
+    # Engines whose instances share local state (OpenCode: one SQLite state
+    # DB for every process) fail their cold start when several workers launch
+    # in the same instant — one wins the lock, the rest die in seconds with
+    # "database is locked" before spending a single token, and simultaneous
+    # retries reproduce the collision. 0 (the default) preserves the current
+    # spawn-all-at-once behavior.
+    spawn_stagger_s: float = 0.0
 
     @property
     def process_name(self) -> str:
@@ -608,6 +617,18 @@ def load_engines(raw: Any) -> dict[str, EngineConfig]:
         model_default = str(
             section.get("model_default", base.model_default if base else "")
         ).strip()
+        stagger_raw = section.get(
+            "spawn_stagger_s", base.spawn_stagger_s if base else 0.0
+        )
+        if isinstance(stagger_raw, bool) or not isinstance(stagger_raw, (int, float)):
+            raise ValueError(
+                f"engines.{clean_name}.spawn_stagger_s must be a number of seconds"
+            )
+        spawn_stagger_s = float(stagger_raw)
+        if spawn_stagger_s < 0:
+            raise ValueError(
+                f"engines.{clean_name}.spawn_stagger_s must not be negative"
+            )
         engines[clean_name] = EngineConfig(
             name=clean_name,
             bin=bin_path,
@@ -617,6 +638,7 @@ def load_engines(raw: Any) -> dict[str, EngineConfig]:
             token_regex=token_regex,
             model_report_regex=model_report_regex,
             model_default=model_default,
+            spawn_stagger_s=spawn_stagger_s,
         )
     return engines
 
@@ -7354,6 +7376,40 @@ class Verifier:
         return proc.returncode, timed_out, output
 
 
+class SpawnGate:
+    """Spaces worker spawns of the same engine at least stagger_s apart.
+
+    Slot reservation: each caller claims the next free slot for its engine and
+    sleeps until then, so concurrent waiters spawn stagger_s apart in claim
+    order instead of colliding on shared engine state. Engines with
+    spawn_stagger_s = 0 pass through untouched. The bookkeeping between
+    reading and writing _next_free has no await points, so it is atomic on
+    the event loop — keep it that way.
+
+    now/sleep are injectable for deterministic tests.
+    """
+
+    def __init__(
+        self,
+        now: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
+        self._now = now
+        self._sleep = sleep
+        self._next_free: dict[str, float] = {}
+
+    async def wait_turn(self, engine_name: str, stagger_s: float) -> float:
+        if stagger_s <= 0:
+            return 0.0
+        now = self._now()
+        slot = max(now, self._next_free.get(engine_name, now))
+        self._next_free[engine_name] = slot + stagger_s
+        wait = slot - now
+        if wait > 0:
+            await self._sleep(wait)
+        return wait
+
+
 class RingerRunner:
     def __init__(
         self,
@@ -7396,6 +7452,7 @@ class RingerRunner:
         self.logger = EvalLogger(config.eval)
         self.verifier = Verifier()
         self.semaphore = asyncio.Semaphore(manifest.max_parallel)
+        self.spawn_gate = SpawnGate()
         self.active_processes: dict[int, asyncio.subprocess.Process] = {}
 
     async def run(self) -> int:
@@ -7665,6 +7722,14 @@ class RingerRunner:
                     "but config allow_full_access is false"
                 ),
             )
+        waited = await self.spawn_gate.wait_turn(engine.name, engine.spawn_stagger_s)
+        if waited > 0:
+            with contextlib.suppress(Exception):
+                append_text(
+                    log_path,
+                    f"[ringer.py] spawn stagger: waited {waited:.1f}s "
+                    f"(engines.{engine.name}.spawn_stagger_s = {engine.spawn_stagger_s:g})\n",
+                )
         cmd = build_worker_command(
             engine,
             taskdir=runtime.taskdir,
