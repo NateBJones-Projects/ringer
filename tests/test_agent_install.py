@@ -3,18 +3,31 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
-import tempfile
 import unittest
+import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
+class WorkspaceTemporaryDirectory:
+    def __init__(self) -> None:
+        root = ROOT / ".test-tmp"
+        root.mkdir(exist_ok=True)
+        self.path = root / f"agent-install-{uuid.uuid4().hex}"
+        self.path.mkdir()
+        self.name = str(self.path)
+
+    def cleanup(self) -> None:
+        shutil.rmtree(self.path, ignore_errors=True)
+
+
 class AgentInstallTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = WorkspaceTemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.home = Path(self.tmp.name) / "home"
         self.ringer_home = Path(self.tmp.name) / "ringer-home"
@@ -23,6 +36,7 @@ class AgentInstallTests(unittest.TestCase):
     def run_cli(self, *args: str, cwd: Path = ROOT) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
         env["HOME"] = str(self.home)
+        env["USERPROFILE"] = str(self.home)
         env["RINGER_HOME"] = str(self.ringer_home)
         return subprocess.run(
             [sys.executable, "ringer.py", *args],
@@ -37,6 +51,10 @@ class AgentInstallTests(unittest.TestCase):
     def read_settings(self, root: Path | None = None) -> dict[str, object]:
         base = self.home if root is None else root
         return json.loads((base / ".claude" / "settings.json").read_text(encoding="utf-8"))
+
+    def read_codex_hooks(self, root: Path | None = None) -> dict[str, object]:
+        base = self.home if root is None else root
+        return json.loads((base / ".codex" / "hooks.json").read_text(encoding="utf-8"))
 
     def ringer_handlers(self, settings: dict[str, object]) -> list[dict[str, object]]:
         handlers: list[dict[str, object]] = []
@@ -72,6 +90,63 @@ class AgentInstallTests(unittest.TestCase):
         self.assertEqual("Edit|Write", hooks["PostToolUse"][0]["matcher"])
         self.assertIn("ringer_nudge.py", hooks["PostToolUse"][0]["hooks"][0]["command"])
         self.assertTrue(hooks["PostToolUse"][0]["hooks"][0]["command"].endswith(" post-edit"))
+
+    def test_codex_install_uses_agents_skill_and_codex_hooks(self) -> None:
+        result = self.run_cli("install-agent", "--agent", "codex")
+        self.assertEqual(0, result.returncode, result.stderr)
+
+        skill = self.home / ".agents" / "skills" / "ringer" / "SKILL.md"
+        self.assertTrue(skill.exists())
+        metadata = skill.parent / "agents" / "openai.yaml"
+        self.assertTrue(metadata.exists())
+        self.assertEqual(
+            (ROOT / ".claude" / "skills" / "ringer" / "agents" / "openai.yaml").read_text(),
+            metadata.read_text(),
+        )
+        hooks = self.read_codex_hooks()["hooks"]
+        pre_handler = hooks["PreToolUse"][0]["hooks"][0]
+        post_handler = hooks["PostToolUse"][0]["hooks"][0]
+        self.assertEqual("Bash", hooks["PreToolUse"][0]["matcher"])
+        self.assertEqual("Edit|Write", hooks["PostToolUse"][0]["matcher"])
+        self.assertIn("ringer_nudge.py", pre_handler["command"])
+        self.assertIn("ringer_nudge.py", pre_handler["commandWindows"])
+        self.assertIn("py -3", pre_handler["commandWindows"])
+        self.assertIn("ringer_nudge.py", post_handler["commandWindows"])
+
+    def test_codex_install_and_uninstall_preserve_unrelated_hooks(self) -> None:
+        codex = self.home / ".codex"
+        codex.mkdir()
+        hooks_path = codex / "hooks.json"
+        hooks_path.write_text(
+            json.dumps(
+                {
+                    "custom": {"keep": True},
+                    "hooks": {
+                        "PreToolUse": [
+                            {
+                                "matcher": "Bash",
+                                "hooks": [{"type": "command", "command": "echo keep-me"}],
+                            }
+                        ]
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        first = self.run_cli("install-agent", "--agent", "codex")
+        second = self.run_cli("install-agent", "--agent", "codex")
+        self.assertEqual(0, first.returncode, first.stderr)
+        self.assertEqual(0, second.returncode, second.stderr)
+        installed = self.read_codex_hooks()
+        self.assertEqual(2, len(self.ringer_handlers(installed)))
+
+        uninstall = self.run_cli("uninstall-agent", "--agent", "codex")
+        self.assertEqual(0, uninstall.returncode, uninstall.stderr)
+        after = self.read_codex_hooks()
+        self.assertEqual({"keep": True}, after["custom"])
+        self.assertEqual([], self.ringer_handlers(after))
+        self.assertFalse((self.home / ".agents" / "skills" / "ringer").exists())
 
     def test_second_install_is_idempotent(self) -> None:
         first = self.run_cli("install-agent")
@@ -170,6 +245,23 @@ class AgentInstallTests(unittest.TestCase):
         self.assertFalse((project / ".claude" / "skills" / "ringer").exists())
         settings = self.read_settings(project)
         self.assertEqual([], self.ringer_handlers(settings))
+
+    def test_codex_project_variant_writes_under_temp_cwd(self) -> None:
+        project = Path(self.tmp.name) / "codex-project"
+        project.mkdir()
+        os.symlink(ROOT / "ringer.py", project / "ringer.py")
+
+        install = self.run_cli("install-agent", "--agent", "codex", "--project", cwd=project)
+        self.assertEqual(0, install.returncode, install.stderr)
+        self.assertTrue((project / ".agents" / "skills" / "ringer" / "SKILL.md").exists())
+        self.assertTrue((project / ".codex" / "hooks.json").exists())
+        self.assertFalse((self.home / ".agents").exists())
+
+        uninstall = self.run_cli("uninstall-agent", "--agent", "codex", "--project", cwd=project)
+        self.assertEqual(0, uninstall.returncode, uninstall.stderr)
+        self.assertFalse((project / ".agents" / "skills" / "ringer").exists())
+        hooks = self.read_codex_hooks(project)
+        self.assertEqual([], self.ringer_handlers(hooks))
 
 
 if __name__ == "__main__":

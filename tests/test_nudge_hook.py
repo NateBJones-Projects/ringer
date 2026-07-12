@@ -3,16 +3,31 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
-import tempfile
 import unittest
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
 HOOK = ROOT / "hooks" / "ringer_nudge.py"
+
+
+class WorkspaceTemporaryDirectory:
+    def __init__(self) -> None:
+        root = ROOT / ".test-tmp"
+        root.mkdir(exist_ok=True)
+        self.path = root / f"nudge-hook-{uuid.uuid4().hex}"
+        self.path.mkdir()
+        self.name = str(self.path)
+
+    def cleanup(self) -> None:
+        shutil.rmtree(self.path, ignore_errors=True)
+
+
 NUDGE_TEXT = (
     "Ringer routing check: this looks like swarm-shaped work happening inline "
     "(model call/harness/edit loop outside a live Ringer run). Load the ringer "
@@ -23,7 +38,7 @@ NUDGE_TEXT = (
 
 class NudgeHookTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.temp = tempfile.TemporaryDirectory()
+        self.temp = WorkspaceTemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.home = Path(self.temp.name) / "home"
         self.ringer_home = Path(self.temp.name) / "ringer"
@@ -63,6 +78,17 @@ class NudgeHookTests(unittest.TestCase):
             "hook_event_name": "PostToolUse",
             "tool_name": tool_name,
             "tool_input": {"file_path": file_path},
+            "tool_response": {"success": True},
+        }
+
+    def codex_patch_payload(self, file_path: str, session_id: str = "codex-session") -> dict[str, object]:
+        return {
+            "session_id": session_id,
+            "hook_event_name": "PostToolUse",
+            "tool_name": "apply_patch",
+            "tool_input": {
+                "command": f"*** Begin Patch\n*** Update File: {file_path}\n@@\n-old\n+new\n*** End Patch"
+            },
             "tool_response": {"success": True},
         }
 
@@ -117,6 +143,19 @@ class NudgeHookTests(unittest.TestCase):
         proc = self.run_hook("pre-bash", self.pre_bash_payload("node probe-simulate.mjs"))
         self.assertSilent(proc)
 
+    @unittest.skipUnless(os.name == "nt", "Windows-specific process probe behavior")
+    def test_live_pid_probe_does_not_terminate_process_on_windows(self) -> None:
+        helper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        try:
+            self.write_active_run(helper.pid)
+            proc = self.run_hook("pre-bash", self.pre_bash_payload("node probe-simulate.mjs"))
+            self.assertSilent(proc)
+            self.assertIsNone(helper.poll(), "liveness probe terminated the process it inspected")
+        finally:
+            if helper.poll() is None:
+                helper.terminate()
+                helper.wait(timeout=5)
+
     def test_pre_bash_dedupes_per_session(self) -> None:
         first = self.run_hook("pre-bash", self.pre_bash_payload("node probe-simulate.mjs"))
         second = self.run_hook("pre-bash", self.pre_bash_payload("curl https://api.openai.com/v1/chat/completions"))
@@ -146,6 +185,15 @@ class NudgeHookTests(unittest.TestCase):
         files = ["/tmp/a.py", "/tmp/b.py", "/tmp/a.py", "/tmp/b.py", "/tmp/a.py", "/tmp/b.py", "/tmp/a.py"]
         for file_path in files:
             self.assertSilent(self.run_hook("post-edit", self.post_edit_payload(file_path, "session-2")))
+
+    def test_codex_apply_patch_paths_trigger_edit_loop_nudge(self) -> None:
+        files = ["a.py", "a.py", "b.py", "b.py", "a.py", "b.py", "a.py", "c.py"]
+        for file_path in files[:-1]:
+            self.assertSilent(self.run_hook("post-edit", self.codex_patch_payload(file_path)))
+        self.assertNudged(
+            self.run_hook("post-edit", self.codex_patch_payload(files[-1])),
+            "PostToolUse",
+        )
 
     def test_malformed_stdin_exits_zero_silently(self) -> None:
         proc = self.run_hook("pre-bash", "{not json")

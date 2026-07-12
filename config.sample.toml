@@ -81,40 +81,41 @@ token_regex = "tokens\\s+used\\s*:?\\s*([0-9][0-9,]*)"
 # default reads the `model:` header; override it here only if that format changes.
 model_report_regex = "(?m)^model:[ \\t]*([^ \\t\\r\\n]+)[ \\t]*\\r?$"
 
-# Grok Build CLI (xAI). Install: curl -fsSL https://x.ai/cli/install.sh | bash
-# (or: npm install -g @xai-official/grok), then `grok login` — OAuth on a
-# SuperGrok or X Premium Plus plan. Headless mode (-p) runs a full agentic
-# loop with tools and exits. Grok brings its own OS sandbox (Seatbelt on
-# macOS): profile "workspace" = read everywhere, write CWD + temp + ~/.grok,
-# network allowed. Models: grok-build, grok-composer-2.5-fast (route with the
-# per-task "model" field). Verified against Grok Build v0.2.81 (2026-07-06).
-# Note: --no-auto-update is accepted but absent from --help in v0.2.81 (grok
-# rejects unknown flags, so this is a hidden flag, not a typo) — it stops the
-# CLI self-updating mid-swarm.
-# Uncomment to enable.
-# [engines.grok]
-# bin = "grok"
-# model_default = "grok-composer-2.5-fast"
-# args_template = [
-#   "--cwd",
-#   "{taskdir}",
-#   "{access_args}",
-#   "-m",
-#   "{model}",
-#   "--always-approve",
-#   "--no-auto-update",
-#   "--output-format",
-#   "json",
-#   "{engine_args}",
-#   "-p",
-#   "{spec}",
-# ]
-# sandbox_args = ["--sandbox", "workspace"]
-# full_access_args = ["--sandbox", "off", "--permission-mode", "bypassPermissions"]
-# Grok's JSON output carries no usage/token fields (verified v0.2.81) — plan
-# CLIs report cost as "included in plan"; regex is a harmless no-match. Its JSON
-# also does not self-report a model, so no model_report_regex is configured.
-# token_regex = "\"total_tokens\"\\s*:\\s*([0-9]+)"
+# Cursor Agent is also built in. Install: curl https://cursor.com/install -fsS | bash
+# then `cursor-agent login`. Cursor exposes Composer, Grok, Claude, OpenAI, and
+# other account-enabled models. Always set a task's "model" field explicitly;
+# `cursor-agent models` prints the exact slugs available to the signed-in account.
+# Free accounts may list named models that the server still rejects; probe first.
+# Headless edits require --force. Sandbox mode remains explicit on every run.
+[engines.cursor]
+bin = "cursor-agent"
+args_template = [
+  "--print",
+  "--output-format",
+  "stream-json",
+  "--trust",
+  "--workspace",
+  "{taskdir}",
+  "--force",
+  "{access_args}",
+  "--model",
+  "{model}",
+  "{engine_args}",
+  "{spec}",
+]
+sandbox_args = ["--sandbox", "enabled"]
+full_access_args = ["--sandbox", "disabled"]
+model_report_regex = '"model"\s*:\s*"([^"]+)"'
+model_report_aliases = { "Composer 2.5 Fast" = "composer-2.5-fast", "Cursor Grok 4.5 Medium Fast" = "grok-4.5-fast-high" }
+
+# Claude Code is built in. Install: curl -fsSL https://claude.ai/install.sh | bash
+# then run `claude auth login --claudeai` to use a Pro or Max subscription.
+# Ringer enables Claude's OS sandbox with failIfUnavailable=true and disables
+# the unsandboxed-command escape hatch. Always set an explicit task model.
+# Linux/WSL2 sandbox prerequisites: bubblewrap and socat.
+# Override only machine-specific fields when needed:
+# [engines.claude]
+# bin = "claude"
 
 # For CI, acceptance evals, and trying Ringer without an API bill.
 # [engines.mock]
@@ -126,39 +127,16 @@ model_report_regex = "(?m)^model:[ \\t]*([^ \\t\\r\\n]+)[ \\t]*\\r?$"
 # sandbox_args = []
 # full_access_args = []
 
-# OpenCode + OpenRouter — the universal model harness. One engine block runs
-# ANY OpenRouter-served model: the {model} placeholder is filled per task from
-# the manifest's "model" field, falling back to model_default below. Example
-# default: GLM-5.2 (z-ai/glm-5.2, roughly $0.74/M input, $2.33/M output as of
-# 2026-07) — the cheap-intelligence lane.
-# OpenCode has no OS sandbox, so `bin` points at engines/opencode-sandboxed.sh
-# (macOS Seatbelt: network + reads open, writes confined to the task dir, a
-# per-run scratch dir, and OpenCode's state/config dirs). Auth: put your
-# OpenRouter key where your OpenCode version expects it — commonly
-# ~/.local/share/opencode/auth.json ({"openrouter": {"type": "api", "key": "..."}});
-# confirm the path with your installed CLI.
-# Per-task engine_args can set reasoning effort ("--variant", "low|high|max").
-# Uncomment and set an absolute path for `bin` to enable.
+# OpenCode + OpenRouter is built in as the universal model harness. Ringer picks
+# engines/opencode-sandboxed-linux.sh on Linux/WSL2 (bubblewrap) and the Seatbelt
+# wrapper on macOS. The Linux wrapper exposes only the task directory read/write,
+# uses an ephemeral HOME, and clears inherited environment variables. Install
+# with `curl -fsSL https://opencode.ai/install | bash`, then `opencode auth login`
+# and choose OpenRouter. Always set an explicit task model such as
+# "openrouter/z-ai/glm-5.2". Per-task engine_args can set `--variant`.
+# To pin a local default instead of requiring explicit task models:
 # [engines.opencode]
-# bin = "/absolute/path/to/ringer/engines/opencode-sandboxed.sh"
 # model_default = "openrouter/z-ai/glm-5.2"
-# args_template = [
-#   "{taskdir}",
-#   "{access_args}",
-#   "run",
-#   "-m",
-#   "{model}",
-#   "--dangerously-skip-permissions",
-#   "--format",
-#   "json",
-#   "{engine_args}",
-#   "--dir",
-#   "{taskdir}",
-#   "{spec}",
-# ]
-# sandbox_args = []
-# full_access_args = ["--no-sandbox"]
-# token_regex = '"tokens":\{"total":([0-9]+)'
 
 [artifact]
 # Zero-LLM, self-contained HTML artifacts rendered directly from state — no model calls, no

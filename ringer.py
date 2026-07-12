@@ -59,6 +59,16 @@ CATALOG_AUTO_REFRESH_MAX_AGE_S = 24 * 60 * 60
 CATALOG_FETCH_TIMEOUT_S = 5
 DEFAULT_TOKEN_REGEX = r"tokens\s+used\s*:?\s*([0-9][0-9,]*)"
 DEFAULT_CODEX_MODEL_REPORT_REGEX = r"(?m)^model:[ \t]*([^ \t\r\n]+)[ \t]*\r?$"
+CLAUDE_SANDBOX_SETTINGS = json.dumps(
+    {
+        "sandbox": {
+            "enabled": True,
+            "failIfUnavailable": True,
+            "allowUnsandboxedCommands": False,
+        }
+    },
+    separators=(",", ":"),
+)
 ACTIVITY_TAIL_BYTES = 2048
 ACTIVITY_TEXT_LIMIT = 80
 ARTIFACT_WRAPPER_TAIL_BYTES = 256 * 1024
@@ -118,6 +128,9 @@ class EngineConfig:
     # its own "model" — this is what makes a harness engine (OpenCode) model
     # agnostic instead of hard-coding one model into the command line.
     model_default: str = ""
+    # Canonicalizes display labels emitted by harnesses that do not report the
+    # same stable slug accepted by their --model option.
+    model_report_aliases: tuple[tuple[str, str], ...] = ()
 
     @property
     def process_name(self) -> str:
@@ -517,6 +530,105 @@ def built_in_codex_engine() -> EngineConfig:
     )
 
 
+def built_in_cursor_engine() -> EngineConfig:
+    resolved = shutil.which("cursor-agent") or "cursor-agent"
+    return EngineConfig(
+        name="cursor",
+        bin=resolved,
+        args_template=(
+            "--print",
+            "--output-format",
+            "stream-json",
+            "--trust",
+            "--workspace",
+            "{taskdir}",
+            "--force",
+            "{access_args}",
+            "--model",
+            "{model}",
+            "{engine_args}",
+            "{spec}",
+        ),
+        full_access_args=("--sandbox", "disabled"),
+        sandbox_args=("--sandbox", "enabled"),
+        token_regex=None,
+        model_report_regex=r'"model"\s*:\s*"([^"]+)"',
+        model_report_aliases=(
+            ("Composer 2.5 Fast", "composer-2.5-fast"),
+            ("Cursor Grok 4.5 Medium Fast", "grok-4.5-fast-high"),
+        ),
+        model_default="",
+    )
+
+
+def built_in_claude_engine() -> EngineConfig:
+    resolved = shutil.which("claude") or "claude"
+    return EngineConfig(
+        name="claude",
+        bin=resolved,
+        args_template=(
+            "--print",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--no-session-persistence",
+            "--no-chrome",
+            "--disable-slash-commands",
+            "--strict-mcp-config",
+            "--mcp-config",
+            '{"mcpServers":{}}',
+            "{access_args}",
+            "--model",
+            "{model}",
+            "{engine_args}",
+            "{spec}",
+        ),
+        full_access_args=("--dangerously-skip-permissions",),
+        sandbox_args=(
+            "--permission-mode",
+            "acceptEdits",
+            "--settings",
+            CLAUDE_SANDBOX_SETTINGS,
+        ),
+        token_regex=None,
+        model_report_regex=r'"model"\s*:\s*"([^"]+)"',
+        model_default="",
+    )
+
+
+def built_in_opencode_engine() -> EngineConfig:
+    wrapper_name = (
+        "opencode-sandboxed.sh"
+        if sys.platform == "darwin"
+        else "opencode-sandboxed-linux.sh"
+    )
+    wrapper = (Path(__file__).resolve().parent / "engines" / wrapper_name).resolve()
+    return EngineConfig(
+        name="opencode",
+        bin=str(wrapper),
+        args_template=(
+            "{taskdir}",
+            "{access_args}",
+            "run",
+            "--pure",
+            "--auto",
+            "--format",
+            "json",
+            "--model",
+            "{model}",
+            "{engine_args}",
+            "--dir",
+            "{taskdir}",
+            "{spec}",
+        ),
+        full_access_args=("--no-sandbox",),
+        sandbox_args=(),
+        token_regex=r'"tokens"\s*:\s*\{\s*"total"\s*:\s*([0-9]+)',
+        model_report_regex=None,
+        model_default="",
+    )
+
+
 def load_eval_config(raw: Any, state_dir: Path) -> EvalConfig:
     if raw is None:
         raw = {}
@@ -553,7 +665,12 @@ def load_hud_port(raw: Any) -> int:
 
 
 def load_engines(raw: Any) -> dict[str, EngineConfig]:
-    engines: dict[str, EngineConfig] = {DEFAULT_ENGINE_NAME: built_in_codex_engine()}
+    engines: dict[str, EngineConfig] = {
+        DEFAULT_ENGINE_NAME: built_in_codex_engine(),
+        "cursor": built_in_cursor_engine(),
+        "claude": built_in_claude_engine(),
+        "opencode": built_in_opencode_engine(),
+    }
     if raw is None:
         return engines
     if not isinstance(raw, dict):
@@ -605,6 +722,25 @@ def load_engines(raw: Any) -> dict[str, EngineConfig]:
                 raise ValueError(
                     f"engines.{clean_name}.model_report_regex must have a capture group"
                 )
+        aliases_raw = section.get("model_report_aliases")
+        if aliases_raw is None:
+            model_report_aliases = base.model_report_aliases if base else ()
+        else:
+            if not isinstance(aliases_raw, dict):
+                raise ValueError(
+                    f"engines.{clean_name}.model_report_aliases must be a TOML table"
+                )
+            alias_items: list[tuple[str, str]] = []
+            for reported_raw, canonical_raw in aliases_raw.items():
+                reported = str(reported_raw).strip()
+                canonical = str(canonical_raw).strip()
+                if not reported or not canonical:
+                    raise ValueError(
+                        f"engines.{clean_name}.model_report_aliases keys and values "
+                        "must not be empty"
+                    )
+                alias_items.append((reported, canonical))
+            model_report_aliases = tuple(alias_items)
         model_default = str(
             section.get("model_default", base.model_default if base else "")
         ).strip()
@@ -616,6 +752,7 @@ def load_engines(raw: Any) -> dict[str, EngineConfig]:
             sandbox_args=sandbox_args,
             token_regex=token_regex,
             model_report_regex=model_report_regex,
+            model_report_aliases=model_report_aliases,
             model_default=model_default,
         )
     return engines
@@ -2054,9 +2191,40 @@ def active_runs_path() -> Path:
     return ringer_home() / "active-runs.json"
 
 
+def pid_is_alive_windows(pid: int) -> bool:
+    import ctypes
+    from ctypes import wintypes
+
+    synchronize = 0x00100000
+    wait_timeout = 0x00000102
+    error_access_denied = 5
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    open_process = kernel32.OpenProcess
+    open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    open_process.restype = wintypes.HANDLE
+    wait_for_single_object = kernel32.WaitForSingleObject
+    wait_for_single_object.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    wait_for_single_object.restype = wintypes.DWORD
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+    close_handle.restype = wintypes.BOOL
+
+    handle = open_process(synchronize, False, pid)
+    if not handle:
+        return ctypes.get_last_error() == error_access_denied
+    try:
+        return wait_for_single_object(handle, 0) == wait_timeout
+    finally:
+        close_handle(handle)
+
+
 def pid_is_alive(pid: int) -> bool:
     if pid <= 0:
         return False
+    if os.name == "nt":
+        # Signal 0 is CTRL_C_EVENT on Windows, not a harmless existence probe.
+        return pid_is_alive_windows(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -7770,7 +7938,11 @@ class RingerRunner:
             self.active_processes.pop(proc.pid, None)
         output_tail = capture.text()
         tokens = parse_token_count(output_tail, engine.token_regex)
-        reported_model = parse_reported_model(output_tail, engine.model_report_regex)
+        reported_model = parse_reported_model(
+            output_tail,
+            engine.model_report_regex,
+            dict(engine.model_report_aliases),
+        )
         if timed_out:
             append_text(log_path, f"\n[ringer.py] worker timed out after {runtime.task.timeout_s}s\n")
         append_text(log_path, f"[ringer.py] attempt {attempt} exited rc={proc.returncode}\n")
@@ -8090,14 +8262,20 @@ def parse_token_count(text: str, token_regex: str | None = DEFAULT_TOKEN_REGEX) 
     return int(matches[-1].replace(",", ""))
 
 
-def parse_reported_model(text: str, model_report_regex: str | None) -> str | None:
+def parse_reported_model(
+    text: str,
+    model_report_regex: str | None,
+    model_report_aliases: dict[str, str] | None = None,
+) -> str | None:
     if not model_report_regex:
         return None
     match = re.search(model_report_regex, text, flags=re.IGNORECASE)
     if match is None or match.lastindex is None:
         return None
     value = match.group(1).strip()
-    return value or None
+    if not value:
+        return None
+    return (model_report_aliases or {}).get(value, value)
 
 
 def effective_model_from_command(command: list[str]) -> str:
@@ -8221,7 +8399,9 @@ def print_steering_notes(manifest: Manifest, config: AppConfig) -> None:
 
 
 ENGINE_INSTALL_HINTS = {
+    "claude": "install it with `curl -fsSL https://claude.ai/install.sh | bash`, then run `claude` and choose Claude App login",
     "codex": "install it with `npm install -g @openai/codex` (or `brew install --cask codex`), then run `codex login`",
+    "cursor": "install it with `curl https://cursor.com/install -fsS | bash`, then run `cursor-agent login`",
     "opencode": "install it with `curl -fsSL https://opencode.ai/install | bash`, then run `opencode auth login`",
 }
 
@@ -8629,21 +8809,21 @@ def create_demo_manifest() -> Path:
         "tasks": [
             {
                 "key": "alpha",
-                "spec": "Create alpha.txt in the current working directory containing exactly: alpha ready. Do not write any other files.",
+                "spec": "Create alpha.txt in the current working directory. Its complete contents must be exactly \"alpha ready\" without the quotation marks. There is no period in the file content. Do not write any other files.",
                 "check": "test \"$(cat alpha.txt 2>/dev/null)\" = \"alpha ready\" || { echo 'FAIL: alpha.txt missing or content is not alpha ready'; exit 1; }",
                 "verified": "alpha.txt exists and contains exactly the expected text",
                 "expect_files": ["alpha.txt"],
             },
             {
                 "key": "bravo",
-                "spec": "Create bravo.txt in the current working directory containing exactly: bravo ready. Do not write any other files.",
+                "spec": "Create bravo.txt in the current working directory. Its complete contents must be exactly \"bravo ready\" without the quotation marks. There is no period in the file content. Do not write any other files.",
                 "check": "test \"$(cat bravo.txt 2>/dev/null)\" = \"bravo ready\" || { echo 'FAIL: bravo.txt missing or content is not bravo ready'; exit 1; }",
                 "verified": "bravo.txt exists and contains exactly the expected text",
                 "expect_files": ["bravo.txt"],
             },
             {
                 "key": "charlie",
-                "spec": "Create charlie.txt in the current working directory containing exactly: charlie ready. Do not write any other files.",
+                "spec": "Create charlie.txt in the current working directory. Its complete contents must be exactly \"charlie ready\" without the quotation marks. There is no period in the file content. Do not write any other files.",
                 "check": "test \"$(cat charlie.txt 2>/dev/null)\" = \"charlie ready\" || { echo 'FAIL: charlie.txt missing or content is not charlie ready'; exit 1; }",
                 "verified": "charlie.txt exists and contains exactly the expected text",
                 "expect_files": ["charlie.txt"],
@@ -8659,17 +8839,34 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parent
 
 
+def agent_base(project: bool) -> Path:
+    return Path.cwd() if project else Path.home()
+
+
 def claude_root(project: bool) -> Path:
-    return (Path.cwd() if project else Path.home()) / ".claude"
+    return agent_base(project) / ".claude"
+
+
+def codex_skill_root(project: bool) -> Path:
+    return agent_base(project) / ".agents"
+
+
+def codex_config_root(project: bool) -> Path:
+    return agent_base(project) / ".codex"
 
 
 def ringer_skill_source() -> Path:
-    return repo_root() / ".claude" / "skills" / "ringer" / "SKILL.md"
+    return repo_root() / ".claude" / "skills" / "ringer"
 
 
 def ringer_hook_command(action: str) -> str:
     hook_path = repo_root() / "hooks" / "ringer_nudge.py"
-    return f"python3 {shlex.quote(str(hook_path))} {action}"
+    return shlex.join(["python3", str(hook_path), action])
+
+
+def ringer_hook_command_windows(action: str) -> str:
+    hook_path = repo_root() / "hooks" / "ringer_nudge.py"
+    return subprocess.list2cmdline(["py", "-3", str(hook_path), action])
 
 
 def backup_file(path: Path) -> Path | None:
@@ -8717,7 +8914,14 @@ def event_has_ringer_hook(groups: Any) -> bool:
     return False
 
 
-def merge_ringer_hook(settings: dict[str, Any], event: str, matcher: str, command: str) -> bool:
+def merge_ringer_hook(
+    settings: dict[str, Any],
+    event: str,
+    matcher: str,
+    command: str,
+    *,
+    command_windows: str | None = None,
+) -> bool:
     hooks = settings.setdefault("hooks", {})
     if not isinstance(hooks, dict):
         raise ValueError("settings hooks field must be a JSON object")
@@ -8726,17 +8930,10 @@ def merge_ringer_hook(settings: dict[str, Any], event: str, matcher: str, comman
         raise ValueError(f"settings hooks.{event} field must be a JSON array")
     if event_has_ringer_hook(groups):
         return False
-    groups.append(
-        {
-            "matcher": matcher,
-            "hooks": [
-                {
-                    "type": "command",
-                    "command": command,
-                }
-            ],
-        }
-    )
+    handler = {"type": "command", "command": command}
+    if command_windows:
+        handler["commandWindows"] = command_windows
+    groups.append({"matcher": matcher, "hooks": [handler]})
     return True
 
 
@@ -8777,16 +8974,26 @@ def remove_ringer_hooks(settings: dict[str, Any]) -> int:
     return removed
 
 
-def install_agent(project: bool = False) -> int:
-    root = claude_root(project)
+def install_agent(project: bool = False, agent: str = "claude") -> int:
+    if agent == "claude":
+        skill_root = claude_root(project)
+        settings_root = skill_root
+        settings_name = "settings.json"
+    elif agent == "codex":
+        skill_root = codex_skill_root(project)
+        settings_root = codex_config_root(project)
+        settings_name = "hooks.json"
+    else:
+        raise ValueError(f"unsupported agent: {agent}")
+
     skill_source = ringer_skill_source()
-    skill_target = root / "skills" / "ringer" / "SKILL.md"
+    skill_target = skill_root / "skills" / "ringer"
     if not skill_source.exists():
         raise ValueError(f"ringer skill source not found: {skill_source}")
     skill_target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(skill_source, skill_target)
+    shutil.copytree(skill_source, skill_target, dirs_exist_ok=True)
 
-    settings_path = root / "settings.json"
+    settings_path = settings_root / settings_name
     settings = load_settings(settings_path)
     changed = False
     changed |= merge_ringer_hook(
@@ -8794,18 +9001,20 @@ def install_agent(project: bool = False) -> int:
         "PreToolUse",
         "Bash",
         ringer_hook_command("pre-bash"),
+        command_windows=ringer_hook_command_windows("pre-bash") if agent == "codex" else None,
     )
     changed |= merge_ringer_hook(
         settings,
         "PostToolUse",
         "Edit|Write",
         ringer_hook_command("post-edit"),
+        command_windows=ringer_hook_command_windows("post-edit") if agent == "codex" else None,
     )
     if changed or not settings_path.exists():
         write_settings(settings_path, settings)
 
     scope = "project" if project else "user"
-    print(f"Installed ringer agent for {scope} scope.")
+    print(f"Installed ringer agent for {agent} ({scope} scope).")
     print(f"Skill: {skill_target}")
     if changed:
         print(f"Hooks: added PreToolUse Bash and PostToolUse Edit|Write in {settings_path}")
@@ -8814,9 +9023,15 @@ def install_agent(project: bool = False) -> int:
     return 0
 
 
-def uninstall_agent(project: bool = False) -> int:
-    root = claude_root(project)
-    settings_path = root / "settings.json"
+def uninstall_agent(project: bool = False, agent: str = "claude") -> int:
+    if agent == "claude":
+        skill_root = claude_root(project)
+        settings_path = skill_root / "settings.json"
+    elif agent == "codex":
+        skill_root = codex_skill_root(project)
+        settings_path = codex_config_root(project) / "hooks.json"
+    else:
+        raise ValueError(f"unsupported agent: {agent}")
     removed_hooks = 0
     if settings_path.exists():
         settings = load_settings(settings_path)
@@ -8824,14 +9039,14 @@ def uninstall_agent(project: bool = False) -> int:
         if removed_hooks:
             write_settings(settings_path, settings)
 
-    skill_dir = root / "skills" / "ringer"
+    skill_dir = skill_root / "skills" / "ringer"
     removed_skill = False
     if skill_dir.exists():
         shutil.rmtree(skill_dir)
         removed_skill = True
 
     scope = "project" if project else "user"
-    print(f"Uninstalled ringer agent for {scope} scope.")
+    print(f"Uninstalled ringer agent for {agent} ({scope} scope).")
     print(f"Hooks removed: {removed_hooks}")
     print(f"Skill removed: {'yes' if removed_skill else 'no'}")
     return 0
@@ -9023,11 +9238,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     demo_parser.add_argument("--dry-run", action="store_true", help="print the demo plan without spawning codex")
 
-    install_parser = subparsers.add_parser("install-agent", help="install the ringer Claude Code skill and hooks")
-    install_parser.add_argument("--project", action="store_true", help="install into ./.claude instead of ~/.claude")
+    install_parser = subparsers.add_parser("install-agent", help="install the ringer orchestrator skill and hooks")
+    install_parser.add_argument("--agent", choices=("claude", "codex"), default="claude", help="orchestrating agent to configure (default: claude)")
+    install_parser.add_argument("--project", action="store_true", help="install at project scope instead of user scope")
 
-    uninstall_parser = subparsers.add_parser("uninstall-agent", help="remove the ringer Claude Code skill and hooks")
-    uninstall_parser.add_argument("--project", action="store_true", help="remove from ./.claude instead of ~/.claude")
+    uninstall_parser = subparsers.add_parser("uninstall-agent", help="remove the ringer orchestrator skill and hooks")
+    uninstall_parser.add_argument("--agent", choices=("claude", "codex"), default="claude", help="orchestrating agent to clean up (default: claude)")
+    uninstall_parser.add_argument("--project", action="store_true", help="remove from project scope instead of user scope")
     return parser
 
 
@@ -9039,9 +9256,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "install-agent":
-            return install_agent(project=args.project)
+            return install_agent(project=args.project, agent=args.agent)
         if args.command == "uninstall-agent":
-            return uninstall_agent(project=args.project)
+            return uninstall_agent(project=args.project, agent=args.agent)
 
         if args.command == "lint":
             manifest = Manifest.from_path(args.manifest)

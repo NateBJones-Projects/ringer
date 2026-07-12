@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ringer Orchestrator"
+  short_description: "Plan and review verified multi-model swarms"
+  default_prompt: "Use $ringer to route this work through a verified Ringer swarm."
