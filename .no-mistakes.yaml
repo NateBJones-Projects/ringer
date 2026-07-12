@@ -1,4 +1,4 @@
 allow_repo_commands: false
 commands:
   test: "python3 -m unittest discover -s tests -p 'test_*.py' && cargo check --locked --manifest-path hud/Cargo.toml"
-  lint: "git diff --check"
+  lint: "git diff --check origin/main...HEAD"
