@@ -10,3 +10,7 @@ hud/dist/
 hud/gen/
 hud/icons/icon.iconset/
 *.log
+.skill_validate_deps/
+.tmp/
+.test-tmp/
+.sandbox-test-root/

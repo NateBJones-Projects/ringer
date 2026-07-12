@@ -21,6 +21,19 @@ description: >-
 
 # Ringer orchestrator playbook
 
+## Codex Sol orchestrator seat
+
+When the user chooses ChatGPT Codex Sol as the orchestrator, keep Sol in the
+planning and review lane. Use Ringer's external CLI workers for implementation;
+do not substitute invisible in-process subagents for the Ringer run. Stamp runs
+with `--identity codex-sol` unless the user supplies a different name.
+
+On Windows, run the Ringer runtime and its POSIX checks inside WSL. The native
+Codex app can still orchestrate by invoking the WSL command line, while Ringside
+remains reachable on `127.0.0.1`. Do not claim a verified swarm until the
+manifest check commands have executed successfully inside that supported
+runtime.
+
 ## Read this first — the four rules that actually get broken
 
 1. **You review; workers type.** Your lane: specs, checks, pattern choice,

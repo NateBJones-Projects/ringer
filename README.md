@@ -45,12 +45,25 @@ git clone https://github.com/NateBJones-Projects/ringer && cd ringer
 mkdir -p ~/.config/ringer && cp config.sample.toml ~/.config/ringer/config.toml   # optional — sane defaults without it
 ```
 
-3. Teach your agent to route work through Ringer:
+3. Teach your orchestrating agent to route work through Ringer:
 
 ```bash
-# optional but recommended: teach your agent to route work through ringer
+# Claude Code (backward-compatible default)
 ./ringer.py install-agent
+
+# ChatGPT Codex / Codex CLI / IDE
+./ringer.py install-agent --agent codex
 ```
+
+On Windows, install the Codex integration from PowerShell against the Windows
+checkout so it reaches the native Codex profile:
+
+```powershell
+py -3 .\ringer.py install-agent --agent codex
+```
+
+Run Ringer itself inside WSL. Running `install-agent` from WSL would configure
+the Linux user's profile, not the native Windows Codex app.
 
 4. Run the demo:
 
@@ -129,12 +142,23 @@ Between swarms, agents drift back to invisible inline work. Reminders decay, so 
 Run one command:
 
 ```bash
-./ringer.py install-agent
+./ringer.py install-agent                  # Claude Code
+./ringer.py install-agent --agent codex    # ChatGPT Codex / Codex CLI / IDE
 ```
 
-It installs the ringer skill — the orchestrator playbook — user-level for Claude Code, and registers two gentle hooks: a Bash hook that notices model-calling or harness commands running outside a live Ringer run, and an edit-loop hook that notices batch editing without a run. Each hook nudges ONCE per session, pointing the agent at the skill.
+It installs the ringer skill — the orchestrator playbook — user-level for Claude Code by default, or for ChatGPT Codex with `--agent codex`. It also registers two gentle hooks: a Bash hook that notices model-calling or harness commands running outside a live Ringer run, and an edit-loop hook that notices batch editing without a run. Each hook nudges ONCE per session, pointing the agent at the skill.
 
-The hooks never block anything. A user who says "just do it inline" is obeyed; uninstall with `./ringer.py uninstall-agent`.
+Codex installs the skill under `~/.agents/skills/ringer` and its hooks under
+`~/.codex/hooks.json`, matching Codex's documented user-level discovery paths.
+On Windows, hook entries include a native `commandWindows` override; Ringer
+itself still runs in WSL because manifests and process control are POSIX-based.
+Codex treats these as non-managed hooks: review and trust them in the Hooks
+settings (or with `/hooks` in the CLI) before they can run. A changed hook
+definition is skipped until it is trusted again.
+
+The hooks never block anything. A user who says "just do it inline" is obeyed;
+uninstall Claude with `./ringer.py uninstall-agent`, or Codex with
+`./ringer.py uninstall-agent --agent codex`.
 
 For CI and evals, `config.sample.toml` includes `[engines.mock]` so the enforcement stack can be tested without an API bill.
 
