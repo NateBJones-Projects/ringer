@@ -1,0 +1,20 @@
+{
+  "run_name": "{{RUN_SLUG}}",
+  "workdir": "{{WORKDIR}}",
+  "max_parallel": 4,
+  "tasks": [
+    {
+      "key": "verify-{{FINDING_ID}}-{{REFUTER_LABEL}}",
+      "engine": "opencode",
+      "model": "{{REFUTER_MODEL}}",
+      "task_type": "verify",
+      "timeout_s": 1200,
+      "expect_files": [
+        "report.md"
+      ],
+      "spec": "You are a hostile verification worker in a verify swarm. Another AI reviewer produced the finding below. Your only job is to try to REFUTE it by direct inspection of the actual sources. You are read-only; you own only ./report.md in your current working directory; never modify the repo, the doc, or anything else.\n\nSUBJECT (read-only): {{SUBJECT_PATHS}}\n\nFINDING {{FINDING_ID}} (verbatim, as its author claimed it):\n<<<\n{{FINDING_TEXT}}\n>>>\n\nHOW TO VERIFY: open every file and line the finding cites and read the surrounding code yourself. Test each load-bearing claim independently: does the cited code exist, does it do what the finding says, and does the claimed consequence actually follow. A finding that cites lines that do not exist, misquotes code, or claims a consequence the code prevents is refuted.\n\nOUTPUT CONTRACT: write ./report.md with three sections. ## Verdict: exactly one line, 'Verdict: CONFIRMED' if every load-bearing claim held up under your own inspection, or 'Verdict: REFUTED' if any load-bearing claim failed. ## Evidence: the file:line citations YOU inspected, each with a short verbatim quote of what is actually there. ## Reasoning: which claims you tested and what you found.\n\nHARD RULES: confirm or refute only from what you actually read, never from plausibility. If you cannot locate the finding's cited evidence, the verdict is REFUTED and that failure IS your evidence. A partially-true finding whose core claim fails is REFUTED (note any salvageable part in Reasoning). No 'partially confirmed': pick one verdict. Do not edit any file.",
+      "check": "python3 '{{KIT_DIR}}/checks/check_verdict.py' --file report.md",
+      "verified": "the report contains a single CONFIRMED or REFUTED verdict backed by file:line evidence the verifier itself inspected."
+    }
+  ]
+}
