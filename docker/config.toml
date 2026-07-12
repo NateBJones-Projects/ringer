@@ -1,0 +1,44 @@
+# Ringer config for the docker worker container (mounted read-only at
+# ~/.config/ringer/config.toml inside the container by docker/run.sh).
+# Container-specific deltas from the host config: opencode is on PATH from the
+# image's global npm install, and only the opencode engine exists in-container
+# (codex/claude/grok are host installs — route those tasks outside docker).
+
+state_dir = "~/.ringer"
+dashboard_port_base = 8787
+allow_full_access = false
+
+[eval]
+backend = "jsonl"
+jsonl_path = "~/.ringer/runs.jsonl"
+
+# OpenCode + OpenRouter. No OS sandbox flags here: the container IS the
+# sandbox (read-only repo mount, writes confined to the ~/.ringer volume).
+# Auth: OPENROUTER_API_KEY env var only — no auth.json exists in-container.
+# Flag note: opencode 1.17.18 dropped --dangerously-skip-permissions; --auto
+# is the auto-approve flag. Reasoning effort via per-task engine_args
+# ("--variant", "low|high|max").
+[engines.opencode]
+bin = "opencode"
+model_default = "openrouter/z-ai/glm-5.2"
+args_template = [
+  "run",
+  "-m",
+  "{model}",
+  "--auto",
+  "--format",
+  "json",
+  "{engine_args}",
+  "--dir",
+  "{taskdir}",
+  "{spec}",
+]
+sandbox_args = []
+full_access_args = []
+token_regex = '"tokens":\{"total":([0-9]+)'
+
+[artifact]
+enabled = true
+out = "~/.ringer/artifacts/{run_id}.html"
+report_out = "~/.ringer/artifacts/{run_id}-report.html"
+index_out = "~/.ringer/artifacts/index.html"
