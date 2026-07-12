@@ -154,6 +154,16 @@ checks and raw logs support — no vibes, no worker self-reports.
   attempt 1, ~83k tokens. First real outing; promising for review work.
   (Ran through an ad-hoc copy of the opencode engine block — the per-task
   `model` field now makes that unnecessary.)
+- 2026-07-12 — code-review (gx design-doc adversarial panel, desk.lan docker
+  lane): PASS attempt 2, 117k tokens, 324s. Strongest concurrency instincts of
+  the 3-model panel — the proposal-dir lock/TOCTOU gap and the apply-idempotency
+  gap were its finds, both orchestrator-confirmed as real design input. All 3
+  panel models needed attempt 2 (opencode warm-up pattern again — budget for it).
+- 2026-07-12 — verify (gx verify swarm, 4 tasks): 3 clean verdicts incl. killing
+  the canary, but 1 silent no-op FAIL: attempt 2 exited rc=0 with ~35 output
+  tokens and no report.md after 5.4k reasoning tokens. Same failure shape as
+  GPT-5.5's persona-review no-writes — reasoned, then never used the write tool.
+  Watch for it on small single-file-deliverable tasks.
 
 ## kimi-k2.6 (`moonshotai/kimi-k2.6`, subject-model evidence via OpenRouter)
 
@@ -311,3 +321,28 @@ checks and raw logs support — no vibes, no worker self-reports.
 
 ## opencode / z-ai glm-5.2 (via openrouter)
 - 2026-07-09 (aicred-invoice-downloads, 4 code-fix tasks + 1 follow-up, worktrees+npm ci checks): systematic attempt-1 NO-OP — all 4 parallel workers produced zero edits and no summary on first attempt, then completed cleanly on attempt 2 after retry-prompt injection (34k-69k tokens each). Follow-up single task passed attempt 1. Suspect first-invocation session warm-up in opencode-sandboxed under parallel spawn; budget for 2 attempts on parallel GLM batches. Output quality on Next.js/Stripe route+test work: solid, spec-faithful, one boss-caught design gap (used user-scoped supabase client where RLS demanded service role — spec didn't say explicitly; say it explicitly).
+- 2026-07-12 (probe, glm-lane-probe, first run on desk.lan Linux via new docker worker container): PASS attempt 1, 8.5k tokens, 45s, ~$0.004. Clean tool use (bash + read-back + file write), honest transcript separating assumptions from observed facts. The scoreboard's 2 probe FAIL rows from the same day are HARNESS errors, not GLM: docker bind-mounted a config under the tmpfs HOME, so docker pre-created a root-owned ~/.config and opencode died on mkdir EACCES before the model ever saw the task. Fixed in docker/run.sh (config now rides the read-only repo mount via --config). Discount those two rows when routing.
+- 2026-07-12 (code-review, gx design-doc adversarial panel): PASS attempt 2, 80k tokens, 529s. Most findings and sharpest citations of the panel BUT one flatly false claim: asserted src/undo.rs state_label lacked a Proposed match arm and "would not compile" (medium confidence) — the arm exists; the tree builds. GLM review output needs per-finding verification before acting; never auto-apply its P0/P1s. Good at doc-vs-code drift detection otherwise (blast-radius-skip find was real and confirmed).
+
+## deepseek-v4-pro via opencode (`openrouter/deepseek/deepseek-v4-pro`)
+
+- 2026-07-12 — code-review (gx design-doc adversarial panel, desk.lan docker
+  lane): PASS attempt 2, 188k tokens (panel's highest), 809s (slowest, needed
+  its retry after a thin attempt 1). Fewest findings (4) but deepest state-machine
+  tracing: the mark_proposed/update_overall_status stuck-InProgress gap was its
+  find, orchestrator-confirmed line by line. Also the only reviewer to catch the
+  missing Config.mcp field vs deny_unknown_fields interaction. High signal, low
+  noise; slow — give it the long-timeout lanes.
+- 2026-07-12 — verify (gx verify swarm, 4 tasks): 3 clean verdicts (incl. killing
+  the canary) but 1 double TIMEOUT at 1200s on the one finding that required
+  tracing lock usage across files. Slowest model in both rounds; verify tasks for
+  deepseek need timeout_s >= 1800, or route its slots to faster models when the
+  finding spans multiple subsystems.
+
+## qwen3-coder-next via opencode (`openrouter/qwen/qwen3-coder-next`)
+
+- 2026-07-12 — verify (gx verify swarm, first audition, 3 tasks): 3/3 checks
+  passed (2 first-try), verdicts agreed with the partner refuter on both
+  unanimous findings and took the defensible side of the one split. Cheap
+  ($0.11/$0.80 per M) and fast. Promising for the verify lane; needs volume
+  for promotion per the --explore ladder.
