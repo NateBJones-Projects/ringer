@@ -166,7 +166,7 @@ For CI and evals, `config.sample.toml` includes `[engines.mock]` so the enforcem
 
 ![Identical workers, each under its own light](docs/engines.png)
 
-Ringer ships with three worker lanes: **Codex CLI** is the built-in default, and `config.sample.toml` carries verified engine blocks for **Grok Build CLI** (works as-is once you `grok login`) and **OpenCode + OpenRouter** (one edit: point `bin` at the sandbox wrapper in your clone). Anything else with a headless CLI is a config block away:
+Ringer ships with four built-in worker harnesses: **Codex CLI** is the default; **Cursor Agent** routes account-enabled models such as Composer and Grok; **Claude Code** uses a Claude subscription; and **OpenCode** routes explicit OpenRouter models. Anything else with a headless CLI is a config block away:
 
 ```toml
 [engines.mymodel]
@@ -176,47 +176,45 @@ args_template = ["run", "{spec}", "--dir", "{taskdir}"]
 
 Per-task `"engine": "mymodel"` routes work to it — the invariants (stdin closed, process-group kill, executed verification, raw logs) apply to every engine identically.
 
+### Cursor account lane: Composer and Grok
+
+Install the native CLI in the same Linux or WSL environment that runs Ringer, then authenticate it:
+
+```bash
+curl https://cursor.com/install -fsS | bash
+cursor-agent login
+cursor-agent models
+```
+
+Route a task with `"engine": "cursor"` and an explicit model slug from `cursor-agent models`. For example, `"model": "composer-2.5-fast"` selects Cursor's fast Composer lane and `"model": "grok-4.5-fast-high"` names its Grok 4.5 medium-effort fast lane. A listed slug is not proof of account entitlement: Cursor Free accounts can list named models that the server still rejects, so run a one-task probe before assigning a batch. Ringer invokes Cursor headlessly with structured output, `--force`, an explicit workspace, and `--sandbox enabled`; full access switches to `--sandbox disabled` only when both the task and Ringer config allow it.
+
+### Claude subscription lane
+
+Claude Code can use a Claude Pro or Max subscription without an Anthropic API key:
+
+```bash
+curl -fsSL https://claude.ai/install.sh | bash
+claude auth login --claudeai
+
+# Linux/WSL2 prerequisites for Claude's OS sandbox
+sudo apt-get install bubblewrap socat
+```
+
+Route a task with `"engine": "claude"` and an explicit model, such as the full model reported by a prior run. Ringer enables Claude's OS sandbox, sets `failIfUnavailable=true`, disables its unsandboxed-command escape hatch, uses structured output, and records the model from Claude's init event. Full access uses Claude's explicit permission bypass only when both Ringer gates allow it.
+
 ### The universal harness: OpenCode + OpenRouter
 
-Unless a model ships its own first-class harness (Codex does), OpenCode is the harness that runs it — one engine block covers every OpenRouter-served model. `config.sample.toml` includes a ready-to-uncomment engine whose `{model}` placeholder is filled per task from the manifest's `"model"` field, with `model_default` as the fallback. The shipped default is OpenRouter's `z-ai/glm-5.2` — roughly $0.74/M input and $2.33/M output (2026-07), about 20-30x cheaper output than frontier coding models; a complete write-code-and-pass-the-check task lands around a penny.
+OpenCode covers OpenRouter-served models through one engine. The task's `"model"` field is passed directly to the harness, so model selection remains explicit rather than drifting with a CLI default.
 
-OpenCode ships no OS sandbox, so the engine's `bin` points at an absolute path to `engines/opencode-sandboxed.sh` (ringer does not resolve engine bins relative to the repo): a macOS Seatbelt wrapper that leaves network and reads open but confines writes to the task dir, a per-run scratch dir (wired as the agent's `TMPDIR`/`XDG_CACHE_HOME`), and OpenCode's own state/config dirs. Its `--dangerously-skip-permissions` flag only silences OpenCode's interactive prompts; Seatbelt is the actual containment. Task paths reach the profile as `sandbox-exec -D` parameters rather than string interpolation, so a task dir with quotes or parens can't inject sandbox rules. `--no-sandbox` is wired as the engine's `full_access_args`, so ringer's `allow_full_access` gate still governs escapes. Non-macOS installs need their own sandbox (or full-access mode).
-
-Setting it up takes about five minutes:
+OpenCode does not supply its own OS boundary, so Ringer does. On Linux and WSL2, `engines/opencode-sandboxed-linux.sh` uses bubblewrap: only the task directory is mapped read/write, the system runtime is read-only, `HOME` is ephemeral, inherited environment variables are cleared, and the OpenCode credential is copied into that temporary home with owner-only permissions. On macOS, Ringer selects the Seatbelt wrapper. `--no-sandbox` remains behind Ringer's two-part full-access gate.
 
 ```bash
-# 1) Install the OpenCode CLI (pick one)
 curl -fsSL https://opencode.ai/install | bash
-# or: npm install -g opencode-ai
-# or: brew install anomalyco/tap/opencode
-
-# 2) Connect OpenRouter — create a key at https://openrouter.ai/settings/keys
-opencode auth login   # select OpenRouter, paste the key
-
-# 3) In ~/.config/ringer/config.toml, uncomment [engines.opencode] and set
-#    bin to the ABSOLUTE path of engines/opencode-sandboxed.sh in this clone.
-#    (Linux/WSL: the wrapper is macOS-only — set bin to the opencode binary
-#    itself; there is no OS write-confinement then, so keep manifests scoped.)
+opencode auth login   # select OpenRouter
+opencode models openrouter
 ```
 
-Route with per-task `"engine": "opencode"`, pick the model with per-task `"model": "openrouter/<any-model>"`, and set reasoning effort via `engine_args`: `["--variant", "low|high|max"]`. A sensible split: mechanical or tightly-specced tasks on the cheap lane, gnarly ones on your frontier engine — the executed check catches shortfalls either way, and `swarm_runs` rows tell you whether the cheap lane's pass rate holds.
-
-### The plan lane: Grok Build CLI
-
-If you already pay for SuperGrok or X Premium Plus, Grok Build is a second flat-rate worker lane — no per-token bill:
-
-```bash
-# 1) Install (pick one)
-curl -fsSL https://x.ai/cli/install.sh | bash
-# or: npm install -g @xai-official/grok
-
-# 2) Sign in — OAuth on a SuperGrok or X Premium Plus plan
-grok login
-
-# 3) In ~/.config/ringer/config.toml, uncomment [engines.grok]
-```
-
-Route with per-task `"engine": "grok"` and pick the model with `"model": "grok-build"` or `"model": "grok-composer-2.5-fast"` (the shipped default — the speed pick). Grok brings its own OS sandbox on macOS (profile `workspace`: read everywhere, writes confined to the task dir, temp, and `~/.grok`), and its JSON output exposes no token counts — plan-billed workers report cost as included in plan.
+Route with `"engine": "opencode"`, choose `"model": "openrouter/<provider>/<model>"`, and optionally pass a provider-supported reasoning variant through `engine_args`, for example `["--variant", "high"]`. The wrapper prioritizes the native Linux install at `~/.opencode/bin/opencode`, avoiding an accidental Windows npm shim in WSL.
 
 ## Ringside — mission control
 

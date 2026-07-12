@@ -40,6 +40,45 @@ confidence = "verified"
 source = "https://developers.openai.com/codex/models"
 last_verified = 2026-07-10
 
+[engines.cursor]
+harness = "Cursor Agent"
+access = "Cursor account"
+
+[engines.cursor.models."composer-2.5-fast"]
+display = "Composer 2.5 Fast"
+lab = "Cursor (Anysphere)"
+confidence = "verified"
+source = "authenticated Cursor Agent stream-json init event"
+last_verified = 2026-07-12
+
+[engines.cursor.models."grok-4.5-fast-high"]
+display = "Grok 4.5 Medium Fast"
+lab = "xAI"
+confidence = "listed-only"
+source = "authenticated model list; named run blocked on current Free tier"
+last_verified = 2026-07-12
+
+[engines.claude]
+harness = "Claude Code"
+access = "Claude Pro subscription"
+
+[engines.claude.models."claude-sonnet-5"]
+display = "Claude Sonnet 5"
+lab = "Anthropic"
+confidence = "verified"
+source = "authenticated Claude Code stream-json init event"
+last_verified = 2026-07-12
+
+[engines.claude.models."sonnet"]
+display = "Claude Sonnet (rolling alias)"
+lab = "Anthropic"
+alias = true
+confidence = "verified"
+source = "https://code.claude.com/docs/en/cli-reference"
+last_verified = 2026-07-12
+
+# Legacy identity for historical direct-Grok runs. Grok is not a built-in
+# worker engine; current Cursor-hosted Grok models route through engines.cursor.
 [engines.grok]
 harness = "Grok Build CLI"
 access = "OAuth plan"

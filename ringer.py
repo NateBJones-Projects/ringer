@@ -59,6 +59,16 @@ CATALOG_AUTO_REFRESH_MAX_AGE_S = 24 * 60 * 60
 CATALOG_FETCH_TIMEOUT_S = 5
 DEFAULT_TOKEN_REGEX = r"tokens\s+used\s*:?\s*([0-9][0-9,]*)"
 DEFAULT_CODEX_MODEL_REPORT_REGEX = r"(?m)^model:[ \t]*([^ \t\r\n]+)[ \t]*\r?$"
+CLAUDE_SANDBOX_SETTINGS = json.dumps(
+    {
+        "sandbox": {
+            "enabled": True,
+            "failIfUnavailable": True,
+            "allowUnsandboxedCommands": False,
+        }
+    },
+    separators=(",", ":"),
+)
 ACTIVITY_TAIL_BYTES = 2048
 ACTIVITY_TEXT_LIMIT = 80
 ARTIFACT_WRAPPER_TAIL_BYTES = 256 * 1024
@@ -118,6 +128,9 @@ class EngineConfig:
     # its own "model" — this is what makes a harness engine (OpenCode) model
     # agnostic instead of hard-coding one model into the command line.
     model_default: str = ""
+    # Canonicalizes display labels emitted by harnesses that do not report the
+    # same stable slug accepted by their --model option.
+    model_report_aliases: tuple[tuple[str, str], ...] = ()
 
     @property
     def process_name(self) -> str:
@@ -517,6 +530,105 @@ def built_in_codex_engine() -> EngineConfig:
     )
 
 
+def built_in_cursor_engine() -> EngineConfig:
+    resolved = shutil.which("cursor-agent") or "cursor-agent"
+    return EngineConfig(
+        name="cursor",
+        bin=resolved,
+        args_template=(
+            "--print",
+            "--output-format",
+            "stream-json",
+            "--trust",
+            "--workspace",
+            "{taskdir}",
+            "--force",
+            "{access_args}",
+            "--model",
+            "{model}",
+            "{engine_args}",
+            "{spec}",
+        ),
+        full_access_args=("--sandbox", "disabled"),
+        sandbox_args=("--sandbox", "enabled"),
+        token_regex=None,
+        model_report_regex=r'"model"\s*:\s*"([^"]+)"',
+        model_report_aliases=(
+            ("Composer 2.5 Fast", "composer-2.5-fast"),
+            ("Cursor Grok 4.5 Medium Fast", "grok-4.5-fast-high"),
+        ),
+        model_default="",
+    )
+
+
+def built_in_claude_engine() -> EngineConfig:
+    resolved = shutil.which("claude") or "claude"
+    return EngineConfig(
+        name="claude",
+        bin=resolved,
+        args_template=(
+            "--print",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--no-session-persistence",
+            "--no-chrome",
+            "--disable-slash-commands",
+            "--strict-mcp-config",
+            "--mcp-config",
+            '{"mcpServers":{}}',
+            "{access_args}",
+            "--model",
+            "{model}",
+            "{engine_args}",
+            "{spec}",
+        ),
+        full_access_args=("--dangerously-skip-permissions",),
+        sandbox_args=(
+            "--permission-mode",
+            "acceptEdits",
+            "--settings",
+            CLAUDE_SANDBOX_SETTINGS,
+        ),
+        token_regex=None,
+        model_report_regex=r'"model"\s*:\s*"([^"]+)"',
+        model_default="",
+    )
+
+
+def built_in_opencode_engine() -> EngineConfig:
+    wrapper_name = (
+        "opencode-sandboxed.sh"
+        if sys.platform == "darwin"
+        else "opencode-sandboxed-linux.sh"
+    )
+    wrapper = (Path(__file__).resolve().parent / "engines" / wrapper_name).resolve()
+    return EngineConfig(
+        name="opencode",
+        bin=str(wrapper),
+        args_template=(
+            "{taskdir}",
+            "{access_args}",
+            "run",
+            "--pure",
+            "--auto",
+            "--format",
+            "json",
+            "--model",
+            "{model}",
+            "{engine_args}",
+            "--dir",
+            "{taskdir}",
+            "{spec}",
+        ),
+        full_access_args=("--no-sandbox",),
+        sandbox_args=(),
+        token_regex=r'"tokens"\s*:\s*\{\s*"total"\s*:\s*([0-9]+)',
+        model_report_regex=None,
+        model_default="",
+    )
+
+
 def load_eval_config(raw: Any, state_dir: Path) -> EvalConfig:
     if raw is None:
         raw = {}
@@ -553,7 +665,12 @@ def load_hud_port(raw: Any) -> int:
 
 
 def load_engines(raw: Any) -> dict[str, EngineConfig]:
-    engines: dict[str, EngineConfig] = {DEFAULT_ENGINE_NAME: built_in_codex_engine()}
+    engines: dict[str, EngineConfig] = {
+        DEFAULT_ENGINE_NAME: built_in_codex_engine(),
+        "cursor": built_in_cursor_engine(),
+        "claude": built_in_claude_engine(),
+        "opencode": built_in_opencode_engine(),
+    }
     if raw is None:
         return engines
     if not isinstance(raw, dict):
@@ -605,6 +722,25 @@ def load_engines(raw: Any) -> dict[str, EngineConfig]:
                 raise ValueError(
                     f"engines.{clean_name}.model_report_regex must have a capture group"
                 )
+        aliases_raw = section.get("model_report_aliases")
+        if aliases_raw is None:
+            model_report_aliases = base.model_report_aliases if base else ()
+        else:
+            if not isinstance(aliases_raw, dict):
+                raise ValueError(
+                    f"engines.{clean_name}.model_report_aliases must be a TOML table"
+                )
+            alias_items: list[tuple[str, str]] = []
+            for reported_raw, canonical_raw in aliases_raw.items():
+                reported = str(reported_raw).strip()
+                canonical = str(canonical_raw).strip()
+                if not reported or not canonical:
+                    raise ValueError(
+                        f"engines.{clean_name}.model_report_aliases keys and values "
+                        "must not be empty"
+                    )
+                alias_items.append((reported, canonical))
+            model_report_aliases = tuple(alias_items)
         model_default = str(
             section.get("model_default", base.model_default if base else "")
         ).strip()
@@ -616,6 +752,7 @@ def load_engines(raw: Any) -> dict[str, EngineConfig]:
             sandbox_args=sandbox_args,
             token_regex=token_regex,
             model_report_regex=model_report_regex,
+            model_report_aliases=model_report_aliases,
             model_default=model_default,
         )
     return engines
@@ -7801,7 +7938,11 @@ class RingerRunner:
             self.active_processes.pop(proc.pid, None)
         output_tail = capture.text()
         tokens = parse_token_count(output_tail, engine.token_regex)
-        reported_model = parse_reported_model(output_tail, engine.model_report_regex)
+        reported_model = parse_reported_model(
+            output_tail,
+            engine.model_report_regex,
+            dict(engine.model_report_aliases),
+        )
         if timed_out:
             append_text(log_path, f"\n[ringer.py] worker timed out after {runtime.task.timeout_s}s\n")
         append_text(log_path, f"[ringer.py] attempt {attempt} exited rc={proc.returncode}\n")
@@ -8121,14 +8262,20 @@ def parse_token_count(text: str, token_regex: str | None = DEFAULT_TOKEN_REGEX) 
     return int(matches[-1].replace(",", ""))
 
 
-def parse_reported_model(text: str, model_report_regex: str | None) -> str | None:
+def parse_reported_model(
+    text: str,
+    model_report_regex: str | None,
+    model_report_aliases: dict[str, str] | None = None,
+) -> str | None:
     if not model_report_regex:
         return None
     match = re.search(model_report_regex, text, flags=re.IGNORECASE)
     if match is None or match.lastindex is None:
         return None
     value = match.group(1).strip()
-    return value or None
+    if not value:
+        return None
+    return (model_report_aliases or {}).get(value, value)
 
 
 def effective_model_from_command(command: list[str]) -> str:
@@ -8252,7 +8399,9 @@ def print_steering_notes(manifest: Manifest, config: AppConfig) -> None:
 
 
 ENGINE_INSTALL_HINTS = {
+    "claude": "install it with `curl -fsSL https://claude.ai/install.sh | bash`, then run `claude` and choose Claude App login",
     "codex": "install it with `npm install -g @openai/codex` (or `brew install --cask codex`), then run `codex login`",
+    "cursor": "install it with `curl https://cursor.com/install -fsS | bash`, then run `cursor-agent login`",
     "opencode": "install it with `curl -fsSL https://opencode.ai/install | bash`, then run `opencode auth login`",
 }
 

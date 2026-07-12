@@ -61,8 +61,8 @@ runtime.
    `--no-dashboard` except in automated tests or when the user explicitly
    asks.
 
-Ringer runs manifest tasks in parallel across cheap CLI workers (Codex,
-OpenCode/GLM, others via config) and verifies every task by **executing a
+Ringer runs manifest tasks in parallel across CLI workers (Codex, Cursor,
+Claude Code, OpenCode/OpenRouter, and custom engines) and verifies every task by **executing a
 check command** — exit 0 is the only PASS. Failed tasks are retried once
 with the check's actual failure output injected into the retry prompt. You —
 the orchestrating model — pay tokens only for specs, orchestration, and
@@ -224,10 +224,12 @@ audition one rung up in adjacent types; repeated first-attempt failures end
 the audition — record the demotion in MODEL-NOTES so the next orchestrator
 doesn't re-run the experiment.
 
-**OpenCode is the harness; the model is a manifest field.** Unless a model
-ships its own first-class harness (Codex does), it runs through the
-`opencode` engine with the task's `"model"` field set to the OpenRouter
-slug — e.g. `"engine": "opencode", "model": "openrouter/moonshotai/kimi-k2.7-code"`.
+**The harness and model are separate manifest fields.** Use first-class
+harnesses when the account provides them: `codex` for OpenAI/Codex access,
+`cursor` for Cursor-enabled models such as Composer and Grok, and `claude`
+for Claude subscription access. Use `opencode` for OpenRouter models with
+the task's `"model"` field set to the full OpenRouter slug — e.g.
+`"engine": "opencode", "model": "openrouter/moonshotai/kimi-k2.7-code"`.
 This holds even when someone — including the user, in the heat of a run —
 says to "call kimi directly" or reach for the model's own CLI: the harness
 is what provides the sandbox, raw logs, token counts, and executed
@@ -237,13 +239,20 @@ what the `model` field is for, and a bakeoff is only real when the MANIFEST
 names each competitor (2026-07-06 lesson: an engine block with a hard-coded
 model ran one model under three competitors' names).
 
-Engines are config blocks (`[engines.<name>]` in config.toml), selectable
-per task via the manifest `engine` field. Defaults are deliberate:
+Built-in engines can be overridden with `[engines.<name>]` in config.toml
+and are selectable per task via the manifest `engine` field. Defaults are deliberate:
 
 - **codex** (default): strongest general worker. Use per-task `engine_args`
   to set reasoning effort — spend it on hard tasks, not boilerplate.
+- **cursor**: the Cursor subscription lane. Pick an exact slug from
+  `cursor-agent models`; use Composer and Grok here rather than inventing a
+  direct Grok engine.
+- **claude**: the Claude subscription lane. Use an explicit model and keep
+  Claude's OS sandbox prerequisites installed (`bubblewrap` + `socat` on
+  Linux/WSL2).
 - **opencode**: the universal lane — any OpenRouter model via the `model`
-  field (engine `model_default` is GLM-5.2, the cheap-intelligence pick).
+  field. There is no built-in model default; name the full slug so routing
+  cannot drift. Linux/WSL2 runs behind Ringer's bubblewrap wrapper.
   Validate a model new to you with a trivial one-task manifest before
   trusting it with a batch.
 - Small/flash-class models are the first to choke on long conversational or
