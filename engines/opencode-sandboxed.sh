@@ -3,9 +3,10 @@
 #
 # OpenCode has no OS-level sandbox of its own — its --dangerously-skip-permissions
 # flag (required for headless runs) disables ALL of its interactive approval
-# prompts. This wrapper supplies the real containment: full network and reads,
-# writes confined to the task dir, a per-run scratch/cache dir, and OpenCode's
-# own state dirs.
+# prompts. This wrapper supplies the real containment: full network, reads open
+# outside the run workdir, reads inside the run confined to the current task,
+# and writes confined to the task dir, a per-run scratch/cache dir, and
+# OpenCode's own state dirs.
 #
 # Usage (as a ringer engine bin):
 #   opencode-sandboxed.sh <taskdir> [--no-sandbox] <opencode args...>
@@ -38,6 +39,7 @@ if [ ! -x /usr/bin/sandbox-exec ]; then
 fi
 
 TASKDIR_REAL="$(cd "$TASKDIR" && pwd -P)"
+WORKDIR_REAL="$(dirname "$TASKDIR_REAL")"
 
 # Per-run scratch root — becomes both TMPDIR and XDG_CACHE_HOME for OpenCode, so
 # we never have to open all of /private/tmp or ~/.cache to the sandboxed agent.
@@ -53,6 +55,12 @@ trap cleanup EXIT
 cat > "$PROFILE" <<'SBEOF'
 (version 1)
 (allow default)
+(deny file-read* (subpath (param "WORKDIR")))
+; Node resolves an entry module by statting its direct parent. Metadata on the
+; workdir root is sufficient for that resolution but does not permit sibling
+; file content reads.
+(allow file-read-metadata (literal (param "WORKDIR")))
+(allow file-read* (subpath (param "TASKDIR")))
 (deny file-write*)
 (allow file-write*
   (subpath (param "TASKDIR"))
@@ -77,6 +85,7 @@ mkdir -p "$XDG_CACHE_HOME"
 set +e
 /usr/bin/sandbox-exec \
   -D "TASKDIR=$TASKDIR_REAL" \
+  -D "WORKDIR=$WORKDIR_REAL" \
   -D "SCRATCH=$SCRATCH" \
   -D "OC_SHARE=$HOME/.local/share/opencode" \
   -D "OC_STATE=$HOME/.local/state/opencode" \

@@ -132,8 +132,9 @@ model_report_regex = "(?m)^model:[ \\t]*([^ \\t\\r\\n]+)[ \\t]*\\r?$"
 # default: GLM-5.2 (z-ai/glm-5.2, roughly $0.74/M input, $2.33/M output as of
 # 2026-07) — the cheap-intelligence lane.
 # OpenCode has no OS sandbox, so `bin` points at engines/opencode-sandboxed.sh
-# (macOS Seatbelt: network + reads open, writes confined to the task dir, a
-# per-run scratch dir, and OpenCode's state/config dirs). Auth: put your
+# (macOS Seatbelt: network + external reads open, run-local reads confined to
+# the current task, and writes confined to the task dir, a per-run scratch dir,
+# and OpenCode's state/config dirs). Auth: put your
 # OpenRouter key where your OpenCode version expects it — commonly
 # ~/.local/share/opencode/auth.json ({"openrouter": {"type": "api", "key": "..."}});
 # confirm the path with your installed CLI.
