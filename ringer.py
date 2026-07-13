@@ -1069,6 +1069,7 @@ class WorkerResult:
     tokens: int | None
     error: str | None = None
     reported_model: str | None = None
+    engine_down_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1268,14 +1269,16 @@ class StateWriter:
                 tasks.append(task_state)
             pass_count = sum(1 for item in tasks if item["status"] == "pass")
             fail_count = sum(1 for item in tasks if item["status"] == "fail")
+            engine_down_count = sum(1 for item in tasks if item["status"] == "engine-down")
             running_count = sum(
                 1 for item in tasks if item["status"] in {"running", "verifying", "retrying"}
             )
             totals = {
                 "running": running_count,
-                "done": pass_count + fail_count,
+                "done": pass_count + fail_count + engine_down_count,
                 "pass": pass_count,
                 "fail": fail_count,
+                "engine_down": engine_down_count,
                 "tokens": sum(int(item["tokens"] or 0) for item in tasks),
             }
             return {
@@ -1307,6 +1310,9 @@ class StateWriter:
             return {
                 "pass": sum(1 for runtime in self.runtimes if runtime.status == "pass"),
                 "fail": sum(1 for runtime in self.runtimes if runtime.status == "fail"),
+                "engine_down": sum(
+                    1 for runtime in self.runtimes if runtime.status == "engine-down"
+                ),
                 "tokens": sum(int(runtime.tokens or 0) for runtime in self.runtimes),
             }
 
@@ -2388,6 +2394,7 @@ STATUS_COLORS = {
     "fail": "var(--fail)",
     "error": "var(--fail)",
     "timeout": "var(--fail)",
+    "engine-down": "var(--waiting)",
     "running": "var(--running)",
     "retrying": "var(--running)",
     "verifying": "var(--running)",
@@ -4813,6 +4820,13 @@ def model_log_row_is_reserved_fixture(row: dict[str, Any]) -> bool:
     return model_log_text(row.get("model")) in RESERVED_FIXTURE_MODELS
 
 
+def model_log_row_is_engine_down(row: dict[str, Any]) -> bool:
+    # A terminal engine-level billing/auth failure isn't the model failing
+    # the task — it never got a fair attempt — so it must not drag down
+    # pass_rate/first_try_pass_rate the way a genuine FAIL would.
+    return model_log_text(row.get("verdict")).upper() == "ENGINE_DOWN"
+
+
 def model_reasoning_effort_keys(rows: list[dict[str, Any]]) -> set[tuple[str, str, bool]]:
     keys: set[tuple[str, str, bool]] = set()
     for row in rows:
@@ -4947,6 +4961,8 @@ def aggregate_model_log_rows(
         first = ordered[0]
         final = ordered[-1]
         if model_log_row_is_reserved_fixture(final):
+            continue
+        if model_log_row_is_engine_down(final):
             continue
         group_engine = model_log_row_engine(final)
         group_model = model_log_row_model(final)
@@ -6191,6 +6207,8 @@ def aggregate_model_scoreboard_rows(
         final = ordered[-1]
         if model_log_row_is_reserved_fixture(final):
             continue
+        if model_log_row_is_engine_down(final):
+            continue
         group_engine = model_log_row_engine(final)
         group_model = model_log_row_model(final)
         group_task_type = model_log_row_task_type(final)
@@ -7397,6 +7415,7 @@ class RingerRunner:
         self.verifier = Verifier()
         self.semaphore = asyncio.Semaphore(manifest.max_parallel)
         self.active_processes: dict[int, asyncio.subprocess.Process] = {}
+        self.engine_down: dict[str, str] = {}
 
     async def run(self) -> int:
         self.manifest.workdir.mkdir(parents=True, exist_ok=True)
@@ -7447,10 +7466,54 @@ class RingerRunner:
             if proc.returncode is None:
                 kill_process_group(proc)
 
+    def _engine_down_reason(self, engine_name: str) -> str | None:
+        with self.lock:
+            return self.engine_down.get(engine_name)
+
+    def _mark_engine_down(self, engine_name: str, reason: str) -> str:
+        with self.lock:
+            existing = self.engine_down.get(engine_name)
+            if existing is not None:
+                return existing
+            self.engine_down[engine_name] = reason
+            return reason
+
+    async def _finalize_engine_down(
+        self,
+        runtime: TaskRuntime,
+        reason: str,
+        *,
+        worker: WorkerResult | None,
+        attempt: int,
+        duration_ms: int,
+    ) -> None:
+        with self.lock:
+            runtime.attempts = attempt
+            runtime.status = "engine-down"
+            runtime.final_verdict = "ENGINE_DOWN"
+            runtime.ended_at_monotonic = time.monotonic()
+        effective_worker = worker or WorkerResult(returncode=None, timed_out=False, tokens=None)
+        verify = VerifyResult(
+            ok=False,
+            check_returncode=None,
+            check_timed_out=False,
+            raw_output_excerpt=(
+                f"[ringer.py] engine '{runtime.task.engine}' unavailable ({reason}); "
+                "task not attempted/verified — skipped, not a model failure."
+            ),
+        )
+        self._log_attempt(
+            runtime, runtime.task.spec, attempt > 1, effective_worker, verify, "ENGINE_DOWN", duration_ms
+        )
+
     async def _run_task(self, runtime: TaskRuntime) -> None:
         async with self.semaphore:
             with self.lock:
                 runtime.started_at_monotonic = time.monotonic()
+            down_reason = self._engine_down_reason(runtime.task.engine)
+            if down_reason is not None:
+                await self._finalize_engine_down(runtime, down_reason, worker=None, attempt=1, duration_ms=0)
+                return
             prepared, prepare_error = await self._prepare_taskdir(runtime)
             if not prepared:
                 await self._record_prepare_error(runtime, prepare_error or "taskdir preparation failed")
@@ -7458,6 +7521,12 @@ class RingerRunner:
             current_spec = runtime.task.spec
             max_attempts = 2
             for attempt in range(1, max_attempts + 1):
+                down_reason = self._engine_down_reason(runtime.task.engine)
+                if down_reason is not None:
+                    await self._finalize_engine_down(
+                        runtime, down_reason, worker=None, attempt=attempt, duration_ms=0
+                    )
+                    return
                 retrying = attempt > 1
                 with self.lock:
                     runtime.attempts = attempt
@@ -7469,6 +7538,13 @@ class RingerRunner:
                     runtime.status = "verifying"
                     if worker.tokens is not None:
                         runtime.tokens = (runtime.tokens or 0) + worker.tokens
+                if worker.engine_down_reason is not None:
+                    reason = self._mark_engine_down(runtime.task.engine, worker.engine_down_reason)
+                    duration_ms = int((time.monotonic() - attempt_started) * 1000)
+                    await self._finalize_engine_down(
+                        runtime, reason, worker=worker, attempt=attempt, duration_ms=duration_ms
+                    )
+                    return
                 verify = await self.verifier.verify(runtime.task, runtime.taskdir)
                 verdict = verdict_for(worker, verify)
                 with self.lock:
@@ -7771,14 +7847,30 @@ class RingerRunner:
         output_tail = capture.text()
         tokens = parse_token_count(output_tail, engine.token_regex)
         reported_model = parse_reported_model(output_tail, engine.model_report_regex)
+        engine_down_reason = (
+            None
+            if timed_out or proc.returncode == 0
+            # Scan only the last stretch of output: a terminal engine error is
+            # the last thing the process prints before it dies. Scanning the
+            # full ~1MB capture would also catch a coding task's own mid-run
+            # narration about payment/auth handling it's implementing.
+            else detect_engine_down_reason(output_tail[-2000:])
+        )
         if timed_out:
             append_text(log_path, f"\n[ringer.py] worker timed out after {runtime.task.timeout_s}s\n")
         append_text(log_path, f"[ringer.py] attempt {attempt} exited rc={proc.returncode}\n")
+        if engine_down_reason is not None:
+            append_text(
+                log_path,
+                f"[ringer.py] engine-down detected ({engine_down_reason}); "
+                f"marking engine '{runtime.task.engine}' down for this run\n",
+            )
         return WorkerResult(
             returncode=proc.returncode,
             timed_out=timed_out,
             tokens=tokens,
             reported_model=reported_model,
+            engine_down_reason=engine_down_reason,
         )
 
     async def _tee_stream(
@@ -8000,6 +8092,49 @@ def verdict_for(worker: WorkerResult, verify: VerifyResult) -> str:
     if verify.ok:
         return "PASS"
     return "FAIL"
+
+
+# Terminal engine-level failures (billing exhausted, auth expired) are not the
+# model's fault and can't be fixed by retrying the same task — unlike a normal
+# FAIL, they mean every other queued task on this engine will fail the same
+# way. Detected from the worker's own stdout/stderr; each tag is a rough
+# classification for the raw log, not something callers branch on.
+ENGINE_DOWN_PATTERNS: tuple[tuple[str, "re.Pattern[str]"], ...] = (
+    ("http_402", re.compile(r'"status"\s*:\s*402\b')),
+    ("http_402", re.compile(r'"code"\s*:\s*402\b')),
+    ("payment_required", re.compile(r"payment required", re.IGNORECASE)),
+    ("balance_exhausted", re.compile(r"balance exhausted", re.IGNORECASE)),
+    (
+        "insufficient_balance",
+        re.compile(r"insufficient (?:balance|credits?|quota|funds)", re.IGNORECASE),
+    ),
+    (
+        "auth_expired",
+        re.compile(
+            r"(?:auth(?:entication|orization)?|token|api[\s_-]?key|session)"
+            r"[^\n]{0,20}\bexpired\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "auth_expired",
+        re.compile(
+            r"\bexpired\b[^\n]{0,20}"
+            r"(?:auth(?:entication|orization)?|token|api[\s_-]?key|session)",
+            re.IGNORECASE,
+        ),
+    ),
+    ("invalid_api_key", re.compile(r"invalid[\s_-]*api[\s_-]?key", re.IGNORECASE)),
+    ("unauthorized", re.compile(r"\b401\b[^\n]{0,40}unauthorized", re.IGNORECASE)),
+    ("unauthorized", re.compile(r"unauthorized[^\n]{0,40}\b401\b", re.IGNORECASE)),
+)
+
+
+def detect_engine_down_reason(output: str) -> str | None:
+    for reason, pattern in ENGINE_DOWN_PATTERNS:
+        if pattern.search(output):
+            return reason
+    return None
 
 
 def build_run_id(run_name: str) -> str:
