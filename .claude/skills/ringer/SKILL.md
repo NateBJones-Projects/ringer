@@ -23,12 +23,11 @@ description: >-
 
 ## Read this first — the four rules that actually get broken
 
-1. **You review; workers type.** Your lane: specs, checks, pattern choice,
-   reading results. If you are typing implementation, running probes, or
-   babysitting a retry loop yourself, you have left your lane.
-2. **A single task is a one-task manifest.** Same verification, zero
-   ceremony. "Too small for Ringer" is how drift starts — the smoke test,
-   the probe script, the three-edit fix are all one-task manifests.
+1. **Classify before acting.** Use the Router below. Ringer is an execution
+   layer, not the default for every request.
+2. **You review; workers type when the work is Ringer-shaped.** Your lane:
+   specs, checks, pattern choice, and reading results. A one-task manifest is
+   valid when it has the same executable verification and no human gate.
 3. **Beware the tiny-edit death spiral.** The named anti-pattern: each step
    is individually small enough to justify inline, and two hours later the
    exception has become the workflow and nothing was verified or visible.
@@ -67,6 +66,33 @@ Full reference: `README.md`. Ready-made manifest skeletons: `templates/`.
 Lint catches unverifiable checks, silent checks, worktree deliverable/commit
 loss, serial fan-out, write collisions, and underspecified specs; `run`
 prints the same findings as non-blocking warnings.
+
+## Router
+
+Classify the requested step before selecting a tool.
+
+- **Ringer-shaped:** a cold, self-contained spec; an executable check;
+  spawn/loop/batch behavior (N=1 counts); and no mid-flight human gate. Use a
+  manifest and keep Ringer as the execution layer.
+- **One-agent-shaped:** judgment, live context, restricted data or outbound
+  sends, or no executable check. Handle it directly or obtain the missing
+  gate; do not manufacture a Ringer run.
+- **Mixed:** split the work by step. Use Ringer only for the self-contained,
+  verifiable execution steps and keep judgment or gated steps outside it.
+
+## Contract kernel
+
+Build the existing manifest spec around these fields: **Why**;
+**capabilities/outcome**; **constraints/invariants**; **non-goals**;
+**success check**; **sources/provenance**; and **permission/human gate**.
+These are concise fields in the existing brief, not a second spec system.
+
+## Artifact-path handoffs
+
+Keep instructions self-contained in the spec. Put large source material,
+diffs, and reports at explicit paths. Workers return compact status plus those
+paths, not pasted history. The on-camera brief and no-pointer-spec invariant
+still apply: a path may supply material, never replace the instructions.
 
 ## One job, one artifact
 
@@ -180,20 +206,16 @@ Pattern-selection judgment:
 
 ## Engine selection
 
-**The engine choice belongs to the human — but the recommendation comes
-from THEIR evidence.** Before the FIRST run of a job: read what's wired up
-(`[engines.<name>]` blocks in `~/.config/ringer/config.toml`), run
-`./ringer.py models --task-type <this job's type>` for the local scoreboard,
-and glance at `./ringer.py catalog --changes` for anything newly free or
-newly cheap. Then ask the user which model should do the typing — top 2–3
-options with the NUMBERS in the pitch and a recommendation, e.g.: *"GLM is
-6/6 first-try on persona work here at ~2¢/task — recommended. Codex is also
-100% but ~8x the tokens. And kimi went free on OpenRouter yesterday — want
-it auditioning one of the small tasks?"* Honor their pick via the per-task
-`engine`/`model` fields; don't re-ask every round of the same job unless
-the mix isn't working. This is per-user by design: the scoreboard learns
-THIS user's workload — never import another machine's conclusions or
-recommend from a different user's numbers.
+**Routine worker routing belongs to the orchestrator.** Within an approved
+harness/model registry and existing credentials, select using task type, local
+first-try evidence, capability, cost, latency, sandbox, and risk. Read the
+local scoreboard and catalog changes first; preserve its exploration discipline
+and keep exploration to a small, low-risk slice. Ask for human approval only
+before a new paid, credentialed, full-access, or untested high-risk lane, or a
+meaningful cost/scope change. Honor an explicit human model choice, but do not
+turn every first worker choice into a gate. This is per-user by design: the
+scoreboard learns THIS user's workload — never import another machine's
+conclusions or recommend from a different user's numbers.
 
 **Explore or the scoreboard fossilizes.** Always recommending the proven
 pick means never learning a new one. In any run of 3+ tasks that has a

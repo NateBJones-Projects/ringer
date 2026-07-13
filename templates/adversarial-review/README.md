@@ -22,6 +22,7 @@ Use this before merging a risky change, publishing a high-visibility artifact, o
 | `{{MODEL_C}}` | Third model slug for the review engine. |
 | `{{REVIEW_ENGINE}}` | Engine name that supports the per-task `model` field, often `opencode`. |
 | `{{REVIEW_FOCUS}}` | Concrete review dimensions, such as auth boundaries, billing writes, data access, regressions, or claim accuracy. |
+| `{{REVIEW_LENS — 'none', Verification-gap, Edge-case path, or a concise risk-specific lens}}` | Optional lens selected by risk after deterministic checks. |
 | `{{REVIEW_SCOPE}}` | Human-readable scope name for the thing under review. |
 | `{{RUN_SLUG}}` | Stable run slug for this review. |
 | `{{WORKDIR}}` | Scratch run directory outside the repo under review. |
@@ -31,6 +32,15 @@ Use this before merging a risky change, publishing a high-visibility artifact, o
 The check validates the review contract. A passing report must have a summary and either an explicit `NO FINDINGS` verdict or one or more findings with `Finding`, `Evidence`, `Impact`, `Fix`, `Priority`, and `Confidence` labels.
 
 This cannot be gamed by a vague review because the validator requires concrete evidence and priority/confidence fields. It also fails reports that claim the reviewer patched or committed changes.
+
+## Review lenses
+
+Run deterministic checks first; select a semantic lens only when the review risk calls for it.
+
+- **Verification-gap:** ask whether changed behavior failing at a real call site would fail verification.
+- **Edge-case path:** trace explicit and implicit branches, states/enums, null/empty/max boundaries, timeout/retry/partial-failure/deletion paths.
+
+Neither lens requires a finding. Reviewers stay read-only, preserve structured evidence, and the orchestrator still dedupes and confirms reports.
 
 ## Mix with
 

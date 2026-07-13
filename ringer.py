@@ -1,4 +1,15 @@
-#!/usr/bin/env python3
+#!/bin/sh
+''':'
+# Prefer a supported interpreter without hard-coding a platform-specific path.
+for ringer_python in python3.14 python3.13 python3.12 python3.11 python3; do
+    command -v "$ringer_python" >/dev/null 2>&1 || continue
+    if "$ringer_python" -c 'import sys; raise SystemExit(sys.version_info < (3, 11))' >/dev/null 2>&1; then
+        exec "$ringer_python" "$0" "$@"
+    fi
+done
+echo "ringer requires Python 3.11+; tried python3.14, python3.13, python3.12, python3.11, and python3." >&2
+exit 1
+':'''
 from __future__ import annotations
 
 import argparse
