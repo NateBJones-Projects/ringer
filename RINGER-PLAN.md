@@ -236,6 +236,11 @@ LLM comes from Feeder.**
   header too, not only per-worker cards; (2) a presentation pass on the "Served by" strip
   (Adam's verdict on v1 styling: weak). Also: per-round session scoping for re-run tasks
   (shared worktrees log spans rounds → a re-run task's block aggregates all rounds).
+- **Telemetry definitions gap (first dogfood, 2026-07-14):** enrich's `failovers` counts
+  success→success transitions; feeder additionally sees the failed ATTEMPTS between them
+  (402 payment-gated, 413 size-limit churn — none 429s). Break out non-429 error counts in
+  the feeder block + strip so provider churn is visible in Ringside. (Feeder-side catalog
+  follow-ups are feeder-claude's lane: MiniMax 402-on-free-tier, github 413 size limits.)
 
 ### Bootstrap & coordination — how Ringer-Claude is born + joins the board (verified pattern)
 Ringer gets its OWN dedicated Claude ("Ringer-Claude") = a Claude Code session with cwd=`~/ringer`,
