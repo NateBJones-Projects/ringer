@@ -1052,6 +1052,10 @@ class TaskRuntime:
     last_check_returncode: int | None = None
     last_check_timed_out: bool = False
     last_check_output: str = ""
+    # Why task setup failed before any worker could spawn (e.g. a stale
+    # worktree from a previous failed run). Without this an ERROR verdict at
+    # 0.0s carries no diagnostics anywhere the operator looks.
+    setup_error: str | None = None
     last_worker_command: list[str] = field(default_factory=list)
     steering: dict[str, Any] | None = None
 
@@ -1245,6 +1249,7 @@ class StateWriter:
                     "check_returncode": runtime.last_check_returncode,
                     "check_timed_out": runtime.last_check_timed_out,
                     "check_output_tail": shorten(runtime.last_check_output, 4000),
+                    "setup_error": runtime.setup_error,
                     "timeout_s": runtime.task.timeout_s,
                     "taskdir": str(runtime.taskdir),
                     "log_path": str(runtime.log_path),
@@ -7565,7 +7570,15 @@ class RingerRunner:
         if self.manifest.worktrees and self.manifest.repo is not None:
             taskdir.parent.mkdir(parents=True, exist_ok=True)
             if taskdir.exists():
-                return False, f"worktree taskdir already exists: {taskdir}"
+                # Failed tasks keep their worktrees for post-mortems, so a
+                # re-run with the same run_name lands here. Name the exact
+                # command that unblocks it — the bare "already exists" cost a
+                # full diagnosis cycle in the field.
+                return False, (
+                    f"worktree taskdir already exists (left by a previous "
+                    f"failed run?): {taskdir} — remove it with "
+                    f"`git worktree remove --force {taskdir}` and re-run"
+                )
             proc = await asyncio.create_subprocess_exec(
                 "git",
                 "-C",
@@ -7635,7 +7648,16 @@ class RingerRunner:
             runtime.attempts = 1
             runtime.status = "fail"
             runtime.final_verdict = "ERROR"
+            runtime.setup_error = error
             runtime.ended_at_monotonic = time.monotonic()
+        # The worker log is where every other surface (HUD activity,
+        # log_tail, post-mortems) looks first — leave the reason there too.
+        with contextlib.suppress(Exception):
+            append_text(
+                runtime.log_path,
+                f"[ringer.py] task setup failed before any worker could "
+                f"spawn: {error}\n",
+            )
         verify = VerifyResult(
             ok=False,
             check_returncode=None,
@@ -8615,6 +8637,11 @@ def print_summary(run_id: str, runtimes: list[TaskRuntime]) -> None:
             f"{(runtime.final_verdict or ''):<8} {runtime.attempts:>8} "
             f"{tokens:>10} {runtime.elapsed_s(now):>10.1f}"
         )
+    setup_failures = [r for r in runtimes if r.setup_error]
+    if setup_failures:
+        print("\nsetup failures (no worker was spawned):")
+        for runtime in setup_failures:
+            print(f"  {runtime.task.key}: {runtime.setup_error}")
 
 
 def create_demo_manifest() -> Path:
