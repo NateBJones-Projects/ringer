@@ -231,16 +231,31 @@ LLM comes from Feeder.**
 
 ## V1 COMPLETE — 2026-07-14. All six phases done, both seams verified live from both sides.
 
-### Post-v1 backlog (parked, Adam 2026-07-14 14:13 — "fix later", not blocking)
-- **Telemetry UX polish:** (1) surface served-model/failover telemetry at the ROUND-summary
-  header too, not only per-worker cards; (2) a presentation pass on the "Served by" strip
-  (Adam's verdict on v1 styling: weak). Also: per-round session scoping for re-run tasks
-  (shared worktrees log spans rounds → a re-run task's block aggregates all rounds).
-- **Telemetry definitions gap (first dogfood, 2026-07-14):** enrich's `failovers` counts
-  success→success transitions; feeder additionally sees the failed ATTEMPTS between them
-  (402 payment-gated, 413 size-limit churn — none 429s). Break out non-429 error counts in
-  the feeder block + strip so provider churn is visible in Ringside — zero feeder change
-  needed (feeder-claude confirmed: /api/requests rows already carry status + error). (Feeder-side catalog
+### POST-V1 JOB 1 — Ringside Observability Pass (SCOPED 2026-07-14, awaiting Adam's approval)
+Adam's verdict after v1: the engine is proven but "the UI makes the tool feel pointless" —
+the backend wins don't land without a working window. One focused session (half day to a day),
+mixed delivery like Phase 4 (green-field scripts to swarm workers; HUD/ringer.py surgery in
+small tight-anchored tasks with orchestrator integration fallback; consider installing the
+codex frontier lane first). Items, headline first:
+1. **Models scoreboard on REAL served models** (Adam's #1b): retire the routed-slug bucket
+   (`feeder/auto/coding [unregistered]`) from the default view; join run states'
+   `task.feeder.served` with feeder's `GET /api/canon` per-canonical scores (which already
+   include OUR graded samples — the visible loop-closure: "deepseek-v3-1 coding 0.95, partly
+   Ringer's own grade"). Mixed-model tasks shown split, not misattributed.
+2. **Live per-worker visibility DURING runs**: HUD polls
+   `GET /api/requests?consumer=ringer&since=<run start>` every few seconds (feeder-confirmed
+   queryable mid-run, zero feeder change) → each worker card shows current served model /
+   last status / latency live. Kills flying-blind-during-run.
+3. **Round-level telemetry header**: aggregate strip at the run header (models used,
+   failovers, churn, tokens) — not only per-worker cards.
+4. **ONE WINDOW**: fold the ephemeral per-run dashboard (:8787) into Ringside (:8700) —
+   Adam found two apps on two ports confusing (verified UX gap, WSL 15:04).
+5. **Presentation pass** on strips + cards (Adam: v1 styling "weak"/"a bit shit").
+6. **Churn breakout**: count non-429 error rows (402 payment-gated, 413 size-limit) per
+   session in the feeder block + strip — zero feeder change (rows carry status + error).
+7. **Smaller**: per-round session scoping for re-run tasks (shared worktrees log spans
+   rounds); "restart the Ringside window after shipping UI changes" in the operating ritual
+   (the stale-server/stale-tab incident, 15:00). (Feeder-side catalog
   follow-ups are feeder-claude's lane: MiniMax 402-on-free-tier, github 413 size limits.)
 
 ### Bootstrap & coordination — how Ringer-Claude is born + joins the board (verified pattern)
