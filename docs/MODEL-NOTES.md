@@ -225,6 +225,19 @@ checks and raw logs support — no vibes, no worker self-reports.
 
 ## Process lessons (cross-model)
 
+- 2026-07-14 — feeder/auto/coding (agent video-wall build): the cheap lane is a strong
+  DRAFTER but not a finisher on intricate green-field. The transcript parser
+  (scripts/transcript.py — a shell single-quote state machine to fence off retries'
+  embedded log reproductions) FAILED both attempts (81.8k tok): it got ~90% there but
+  left a NameError from a botched mid-edit refactor and a wrong 5-char escape length.
+  Orchestrator integrated (rewrote clean, using a more robust "last line ending in
+  `< /dev/null`" events-region rule instead of the fragile deep-escape parse). Lesson:
+  for logic with fiddly string/quote handling, budget for orchestrator integration and
+  keep the acid-test check ruthless — the check caught the break instantly. Contrast:
+  the same lane went 3/3 first-try on the wall-demo (haiku/fizzbuzz/greeting), served by
+  three DIFFERENT models (nvidia/meta/llama-3.1-8b, opencode/north-mini-code-free,
+  kilo/kilo-auto/free) — trivial green-field is squarely in its wheelhouse.
+
 - 2026-07-06 — the orchestrator's CHECKS were the day's top failure source:
   three check bugs (fixture newline join, first-occurrence ordering vs the
   watchlist strip, claim-prefix split on '.' instead of ':') each produced
