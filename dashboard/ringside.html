@@ -561,6 +561,54 @@
       .workers { grid-template-columns: minmax(0, 1fr); }
       .worker-card.expanded { grid-column: auto; }
     }
+
+    /* ============================================================
+       Agent video-wall (FUNCTIONAL / ROUGH). One live screen per
+       agent; click a tile -> it takes over the viewing area; x / Esc
+       -> back to the grid. Styling is deliberately minimal — the
+       data-* attributes (data-role, data-kind, data-tool, data-live,
+       data-outcome) are the contract for a later Claude Design pass.
+       ============================================================ */
+    .worker-card { display: flex; flex-direction: column; position: relative; }
+    /* focus mode: the expanded tile fills the wall, siblings hide */
+    .workers:has(.worker-card.expanded) .worker-card:not(.expanded) { display: none; }
+    .worker-card .served-badge {
+      grid-column: 1 / -1; min-width: 0;
+      font-size: 11px; color: var(--accent);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .worker-card .served-badge[data-live="false"] { color: var(--muted); }
+    .worker-card .served-badge b { font-weight: 650; }
+    .screen-close {
+      position: absolute; top: 8px; right: 8px; z-index: 2;
+      border: 1px solid var(--hairline); background: var(--surface); color: var(--muted);
+      border-radius: 6px; width: 26px; height: 26px; cursor: pointer; font-size: 15px; line-height: 1;
+    }
+    .screen-close:hover { color: var(--fail); border-color: var(--fail); }
+    .tile-body {
+      border-top: 1px solid var(--hairline);
+      padding: 8px 10px; display: flex; flex-direction: column; gap: 6px;
+      max-height: 190px; overflow-y: auto; font-size: 12.5px;
+    }
+    .worker-card.expanded .tile-body { max-height: min(56vh, 640px); }
+    .turn { display: flex; min-width: 0; }
+    .bubble { min-width: 0; max-width: 100%; border-radius: 8px; padding: 6px 9px; border: 1px solid var(--hairline); }
+    .bubble.worker { background: var(--surface); }
+    .bubble.orch, .bubble.tool { width: 100%; background: transparent; }
+    .bubble.orch > summary, .bubble.tool > summary {
+      cursor: pointer; color: var(--muted); font-size: 11.5px; font-weight: 650;
+    }
+    .bubble.tool > summary { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 500; }
+    .bubble.worker.error { border-color: var(--fail); color: var(--fail); }
+    .tile-body pre { margin: 6px 0 0; white-space: pre-wrap; word-break: break-word;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px;
+      max-height: 260px; overflow: auto; }
+    .tile-body pre.tool-out { color: var(--muted); }
+    .attempt-sep { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; padding-top: 4px; }
+    .attempt-sep[data-outcome="failed"] { color: var(--fail); }
+    .attempt-sep[data-outcome="success"] { color: var(--pass); }
+    .turn-step { font-size: 10.5px; color: var(--muted); }
+    .turn-empty { color: var(--muted); font-size: 12px; }
   </style>
 </head>
 <body>
@@ -610,6 +658,9 @@
       tab: normalizeTab(localStorage.getItem(TAB_KEY)) || "live",
       hasStoredTab: Boolean(normalizeTab(localStorage.getItem(TAB_KEY))),
       expanded: new Map(),
+      transcripts: new Map(),
+      liveModel: new Map(),
+      wallTimer: null,
       logTimer: null,
       artifactName: sessionStorage.getItem(ARTIFACT_KEY) || "",
       artifactManual: Boolean(sessionStorage.getItem(ARTIFACT_KEY)),
@@ -1082,6 +1133,12 @@
           meta.textContent = metaParts.join(" · ");
           toggle.setAttribute("aria-label", `${key}, ${taskStateText(kind)}, ${metaParts.join(", ")}`);
           toggle.append(cardHead, taskState, meta);
+          // Realtime "which model is actually serving" badge (from /live-model).
+          const badge = document.createElement("span");
+          badge.className = "served-badge mono";
+          badge.dataset.badgeKey = expandedKey;
+          applyBadge(badge, state.liveModel.get(expandedKey));
+          toggle.appendChild(badge);
           const activityText = taskIsRunning(task) ? (taskActivity(task) || "No activity reported yet.") : "";
           if (activityText) {
             const activity = document.createElement("span");
@@ -1090,6 +1147,25 @@
             toggle.appendChild(activity);
           }
           card.appendChild(toggle);
+
+          if (expanded) {
+            const close = document.createElement("button");
+            close.className = "screen-close";
+            close.type = "button";
+            close.setAttribute("aria-label", "Back to the grid");
+            close.textContent = "✕";
+            close.addEventListener("click", (event) => { event.stopPropagation(); closeWorker(expandedKey); });
+            card.appendChild(close);
+          }
+
+          // Every tile is a live "screen": the readable conversation transcript,
+          // condensed in the grid, full when this tile is focused.
+          const tileBody = document.createElement("div");
+          tileBody.className = "tile-body";
+          tileBody.dataset.transcriptKey = expandedKey;
+          renderTranscript(tileBody, state.transcripts.get(expandedKey), Boolean(expanded));
+          card.appendChild(tileBody);
+          if (!expanded) requestAnimationFrame(() => { tileBody.scrollTop = tileBody.scrollHeight; });
 
           if (expanded) {
             const stream = renderStream(run, task, taskIndex, expanded, expandedKey);
@@ -1212,6 +1288,157 @@
       return panel;
     }
 
+    // ---- agent video-wall: transcript rendering + live-model badge ----
+    function stringify(v) {
+      if (typeof v === "string") return v;
+      try { return JSON.stringify(v, null, 2); } catch (e) { return String(v); }
+    }
+    function toolTitle(turn) {
+      const inp = turn.input;
+      if (inp && typeof inp === "object") return String(inp.filePath || inp.command || inp.path || inp.pattern || "");
+      return "";
+    }
+    function renderTurn(turn) {
+      const el = document.createElement("div");
+      el.className = "turn";
+      el.dataset.role = turn.role || "";
+      el.dataset.kind = turn.kind || "";
+      if (turn.role === "orchestrator") {
+        const det = document.createElement("details");
+        det.className = "bubble orch";
+        const sum = document.createElement("summary");
+        sum.textContent = turn.kind === "retry_reply"
+          ? "Orchestrator ↩ sent it back (previous attempt failed)"
+          : "Orchestrator → the brief";
+        det.appendChild(sum);
+        const pre = document.createElement("pre");
+        pre.textContent = String(turn.text || "");
+        det.appendChild(pre);
+        el.appendChild(det);
+      } else if (turn.kind === "text") {
+        const b = document.createElement("div");
+        b.className = "bubble worker";
+        b.textContent = String(turn.text || "");
+        el.appendChild(b);
+      } else if (turn.kind === "tool") {
+        const det = document.createElement("details");
+        det.className = "bubble worker tool";
+        det.dataset.tool = turn.tool || "";
+        const sum = document.createElement("summary");
+        const title = toolTitle(turn);
+        sum.textContent = `🔧 ${turn.tool || "tool"}${title ? " · " + title : ""}`;
+        det.appendChild(sum);
+        if (turn.input != null && turn.input !== "") {
+          const pi = document.createElement("pre");
+          pi.textContent = stringify(turn.input);
+          det.appendChild(pi);
+        }
+        if (turn.output != null && turn.output !== "") {
+          const po = document.createElement("pre");
+          po.className = "tool-out";
+          po.textContent = stringify(turn.output);
+          det.appendChild(po);
+        }
+        el.appendChild(det);
+      } else if (turn.kind === "step") {
+        const s = document.createElement("div");
+        s.className = "turn-step mono";
+        const tok = turn.tokens && turn.tokens.total ? `${formatTokens(turn.tokens.total)} tok` : "";
+        s.textContent = `· ${turn.reason || "step"}${tok ? " · " + tok : ""}`;
+        el.appendChild(s);
+      } else if (turn.kind === "error") {
+        const b = document.createElement("div");
+        b.className = "bubble worker error";
+        b.textContent = `⚠ ${turn.message || turn.name || "error"}`;
+        el.appendChild(b);
+      }
+      return el;
+    }
+    function renderTranscript(container, transcript, focused) {
+      container.textContent = "";
+      const attempts = transcript && Array.isArray(transcript.attempts) ? transcript.attempts : [];
+      if (!attempts.length) {
+        const empty = document.createElement("p");
+        empty.className = "turn-empty";
+        empty.textContent = transcript && transcript.status === "error"
+          ? "Transcript unavailable."
+          : "Waiting for the conversation…";
+        container.appendChild(empty);
+        return;
+      }
+      attempts.forEach(att => {
+        if (attempts.length > 1) {
+          const sep = document.createElement("div");
+          sep.className = "attempt-sep mono";
+          sep.dataset.outcome = att.outcome || "";
+          sep.textContent = `Attempt ${att.n} · ${att.outcome || ""}${att.rc != null ? ` · rc=${att.rc}` : ""}`;
+          container.appendChild(sep);
+        }
+        (att.turns || []).forEach(turn => container.appendChild(renderTurn(turn)));
+      });
+    }
+    function applyBadge(badge, data) {
+      badge.textContent = "";
+      if (!data || data.live !== true || !data.current) {
+        badge.dataset.live = "false";
+        badge.textContent = data && data.reason === "pending" ? "resolving model…" : "model: —";
+        return;
+      }
+      badge.dataset.live = "true";
+      const label = document.createElement("b");
+      label.textContent = data.current.served_model
+        || `${data.current.platform}/${data.current.model_id}`;
+      badge.append(document.createTextNode("▶ serving "), label);
+      if (data.mixed_models) badge.append(document.createTextNode(" · +failover"));
+    }
+    function updateTileTranscript(key) {
+      const body = [...els.runs.querySelectorAll(".tile-body[data-transcript-key]")]
+        .find(el => el.dataset.transcriptKey === key);
+      if (!body) return;
+      const focused = state.expanded.has(key);
+      const pinned = body.scrollHeight - body.scrollTop - body.clientHeight < 40;
+      renderTranscript(body, state.transcripts.get(key), focused);
+      if (!focused || pinned) requestAnimationFrame(() => { body.scrollTop = body.scrollHeight; });
+    }
+    function updateBadge(key) {
+      const badge = [...els.runs.querySelectorAll(".served-badge[data-badge-key]")]
+        .find(el => el.dataset.badgeKey === key);
+      if (badge) applyBadge(badge, state.liveModel.get(key));
+    }
+    function wallTargets() {
+      const out = [];
+      const selectedName = state.artifactName;
+      const runs = selectedName ? state.runs.filter(r => r.run_name === selectedName) : state.runs;
+      runs.forEach(run => (run.tasks || []).forEach((task, i) => {
+        const tKey = taskKey(task, i);
+        out.push({ runId: run.__id, taskKey: tKey, key: expansionKey(run.__id, tKey), running: taskIsRunning(task) });
+      }));
+      return out;
+    }
+    async function fetchTileTranscript(runId, tKey, key) {
+      try {
+        const r = await fetch(`/transcript/${encodeURIComponent(runId)}/${encodeURIComponent(tKey)}`, {cache: "no-store"});
+        if (!r.ok) return;
+        state.transcripts.set(key, await r.json());
+        updateTileTranscript(key);
+      } catch (e) { /* fail-soft: keep last known transcript */ }
+    }
+    async function fetchTileModel(runId, tKey, key) {
+      try {
+        const r = await fetch(`/live-model/${encodeURIComponent(runId)}/${encodeURIComponent(tKey)}`, {cache: "no-store"});
+        if (!r.ok) return;
+        state.liveModel.set(key, await r.json());
+        updateBadge(key);
+      } catch (e) { /* fail-soft: keep last known badge */ }
+    }
+    function fetchWallData() {
+      wallTargets().forEach(t => {
+        // running tiles poll continuously; finished tiles fetch once (lazy cache).
+        if (t.running || !state.transcripts.has(t.key)) fetchTileTranscript(t.runId, t.taskKey, t.key);
+        if (t.running || !state.liveModel.has(t.key)) fetchTileModel(t.runId, t.taskKey, t.key);
+      });
+    }
+
     function toggleWorker(runIdValue, taskKeyValue) {
       const key = expansionKey(runIdValue, taskKeyValue);
       if (state.expanded.has(key)) {
@@ -1230,6 +1457,9 @@
       renderLive();
       const found = findExpandedTask(state.expanded.get(key));
       if (found && taskIsRunning(found.task)) fetchExpandedLog(key);
+      // make focus snappy: pull this tile's transcript + served model immediately
+      fetchTileTranscript(runIdValue, taskKeyValue, key);
+      fetchTileModel(runIdValue, taskKeyValue, key);
     }
 
     function closeWorker(key) {
@@ -1675,9 +1905,11 @@
     renderArtifacts();
     fetchRuns();
     fetchLibrary();
+    fetchWallData();
     setInterval(tickClock, 1000);
     setInterval(fetchRuns, 1000);
     setInterval(fetchLibrary, 2000);
+    setInterval(fetchWallData, 1200);
   })();
   </script>
 </body>

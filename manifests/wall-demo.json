@@ -1,0 +1,49 @@
+{
+  "run_name": "agent-wall-demo",
+  "workdir": "/tmp/ringer-wall-demo",
+  "max_parallel": 3,
+  "tasks": [
+    {
+      "key": "haiku",
+      "task_type": "creative-writing",
+      "wire_class": "creative_writing",
+      "engine": "opencode",
+      "model": "feeder/auto/creative_writing",
+      "timeout_s": 300,
+      "spec": "Write a single haiku (three lines, 5-7-5 feel) about many small AI agents working in parallel under one orchestrator. Write it to a file named haiku.txt in your current working directory, and write nothing else. The three lines must be plain text, one per line.",
+      "check": "test -f /tmp/ringer-wall-demo/haiku/haiku.txt && lines=$(grep -c . /tmp/ringer-wall-demo/haiku/haiku.txt) && [ \"$lines\" -ge 3 ] && echo \"haiku ok ($lines non-empty lines)\" || { echo \"FAIL: haiku.txt must have at least 3 non-empty lines\"; exit 1; }",
+      "verified": "haiku.txt exists with at least three non-empty lines",
+      "expect_files": [
+        "haiku.txt"
+      ]
+    },
+    {
+      "key": "fizzbuzz",
+      "task_type": "code-feature",
+      "wire_class": "coding",
+      "engine": "opencode",
+      "model": "feeder/auto/coding",
+      "timeout_s": 300,
+      "spec": "Create a file fizzbuzz.py in your current working directory containing a function fizzbuzz(n) that returns the string 'Fizz' if n is divisible by 3, 'Buzz' if divisible by 5, 'FizzBuzz' if divisible by both, and str(n) otherwise. Python 3, stdlib only, include a short docstring. Create no other files.",
+      "check": "cd /tmp/ringer-wall-demo/fizzbuzz && python3 -c \"import fizzbuzz as f; assert f.fizzbuzz(3)=='Fizz'; assert f.fizzbuzz(5)=='Buzz'; assert f.fizzbuzz(15)=='FizzBuzz'; assert f.fizzbuzz(7)=='7'; print('fizzbuzz ok')\" || { echo 'FAIL: fizzbuzz(n) contract not met'; exit 1; }",
+      "verified": "fizzbuzz.py implements the exact Fizz/Buzz/FizzBuzz/number contract (executed)",
+      "expect_files": [
+        "fizzbuzz.py"
+      ]
+    },
+    {
+      "key": "greeting",
+      "task_type": "code-feature",
+      "wire_class": "coding",
+      "engine": "opencode",
+      "model": "feeder/auto/coding",
+      "timeout_s": 300,
+      "spec": "Create a file greeting.json in your current working directory: a JSON object with exactly two keys \u2014 \"tool\" set to the string \"ringer\" and \"message\" set to any short friendly greeting string. Valid JSON, create no other files.",
+      "check": "cd /tmp/ringer-wall-demo/greeting && python3 -c \"import json; d=json.load(open('greeting.json')); assert d['tool']=='ringer'; assert isinstance(d['message'],str) and d['message']; print('greeting ok:', d['message'])\" || { echo 'FAIL: greeting.json must have tool==ringer and a non-empty message'; exit 1; }",
+      "verified": "greeting.json is valid JSON with tool==ringer and a non-empty message (executed)",
+      "expect_files": [
+        "greeting.json"
+      ]
+    }
+  ]
+}
