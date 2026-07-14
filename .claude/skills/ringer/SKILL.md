@@ -333,6 +333,27 @@ someone's untracked scratch files.
    numbers took care of themselves — every attempt already landed in the
    local model log (`./ringer.py models` to see the updated scoreboard).
 
+## Grading rubric — the quality feed (THIS MACHINE, Adam's directive 2026-07-14)
+
+After the post-run review, grade each worker's output 0..1 and feed it to the fleet's
+routing brain: `python3 scripts/quality_feed.py --state ~/.ringer/runs/<run>.json
+--grade <key>=<score> ... --post` (enrich the state first — ritual step 0). The score
+is your considered judgment of BOTH the executed-check result and output quality,
+keyed to the concrete served model. Anchors — stay on them, the EWMA amplifies
+grader drift:
+
+- **1.0** — pass first-try, clean and idiomatic; nothing you'd fix.
+- **0.85** — pass first-try, unremarkable (the ungraded-pass default is 0.8).
+- **0.5** — pass-but-poor: retry-rescued, ugly, overcomplicated, barely scraped
+  through the check.
+- **0.2** — fail, but with salvageable partial work you actually reused.
+- **0.0** — fail, fabrication, or no honest attempt.
+
+Rules: grade the outcome, not the effort; mixed-model attempts are auto-skipped
+(never re-attribute them — the skip count doubles as an anti-affinity health
+metric); backpressured attempts score nobody; grade only what the checks and raw
+logs support.
+
 ## Baked-in invariants (preserve in any change to ringer.py)
 
 Stdin closed (`< /dev/null`); sandbox mode explicit; verification executes
