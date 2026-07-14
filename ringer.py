@@ -42,6 +42,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Iterable
 
+# Agent video-wall data layer. scripts/ resolves via sys.path[0] (this file's dir),
+# so these import regardless of cwd (incl. the detached hud process).
+from scripts import transcript as transcript_mod
+from scripts import feeder_agg as feeder_agg_mod
+
 
 TOOL_NAME = "ringer"
 STATE_DIR_NAME = ".ringer"
@@ -65,6 +70,10 @@ ARTIFACT_WRAPPER_TAIL_BYTES = 256 * 1024
 ARTIFACT_LIBRARY_MAX_VERSIONS = 20
 DELIVERABLE_MAX_BYTES = 20 * 1024 * 1024
 WORKER_LOG_TAIL_BYTES = 64 * 1024
+# The /transcript route parses more of the log than the raw-tail view so full
+# attempts survive; /live-model reads a small tail just to find the latest session.
+TRANSCRIPT_MAX_BYTES = 2 * 1024 * 1024
+LIVE_MODEL_TTL_S = 2.0
 TASK_REPORT_FILENAMES = ("report.md", "report.html")
 TEXT_DELIVERABLE_SUFFIXES = {".md", ".txt", ".log"}
 IMAGE_DELIVERABLE_SUFFIXES = {".avif", ".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp"}
@@ -4427,6 +4436,57 @@ def hud_task_log_path(state_dir: Path, run_id: str, task_key: str) -> Path | Non
     return None
 
 
+_LIVE_MODEL_CACHE: dict[tuple[str, str], tuple[float, dict]] = {}
+_LIVE_MODEL_LOCK = threading.Lock()
+
+
+def _compute_live_model(state_dir: Path, run_id: str, task_key: str) -> dict:
+    """Resolve the model ACTUALLY serving a task right now by finding the worker's
+    latest session id in its log and proxying Feeder's /api/requests. Fail-open:
+    any problem (no log/session yet, Feeder down, empty rows) returns live=False."""
+    log_path = hud_task_log_path(state_dir, run_id, task_key)
+    if log_path is None or not log_path.is_file():
+        return {"served": [], "current": None, "live": False, "reason": "no_log"}
+    try:
+        tail = tail_file_text(log_path, max_bytes=WORKER_LOG_TAIL_BYTES)
+        # session=attempt: retry mints a NEW session id, so the LAST one is current.
+        sids = re.findall(r'"sessionID":"(ses_[^"]+)"', tail)
+        if not sids:
+            return {"served": [], "current": None, "live": False, "reason": "no_session"}
+        latest = sids[-1]
+        rows = feeder_agg_mod.fetch_session_rows(latest)
+        if not rows:
+            return {"served": [], "current": None, "live": False,
+                    "reason": "pending", "session_id": latest}
+        agg = feeder_agg_mod.aggregate_rows(rows)
+        cur = feeder_agg_mod.latest_served(rows)
+        current = None
+        if cur:
+            current = {"platform": cur.get("platform"), "model_id": cur.get("model_id"),
+                       "served_model": cur.get("served_model")
+                       or f"{cur.get('platform')}/{cur.get('model_id')}"}
+        return {"served": agg["served"], "current": current,
+                "mixed_models": agg["mixed_models"], "failovers": agg["failovers"],
+                "session_id": latest, "live": True}
+    except Exception as exc:  # never break the request thread
+        return {"served": [], "current": None, "live": False, "reason": f"error: {exc}"}
+
+
+def live_model_for_task(state_dir: Path, run_id: str, task_key: str) -> dict:
+    """TTL-cached wrapper so the 1s frontend poll (and multiple viewers) don't hammer
+    Feeder — one round-trip per task per LIVE_MODEL_TTL_S regardless of viewer count."""
+    key = (run_id, task_key)
+    now = time.monotonic()
+    with _LIVE_MODEL_LOCK:
+        hit = _LIVE_MODEL_CACHE.get(key)
+        if hit is not None and hit[0] > now:
+            return hit[1]
+    payload = _compute_live_model(state_dir, run_id, task_key)
+    with _LIVE_MODEL_LOCK:
+        _LIVE_MODEL_CACHE[key] = (now + LIVE_MODEL_TTL_S, payload)
+    return payload
+
+
 def serve_artifact_path(handler: BaseHTTPRequestHandler, artifact_root: Path, path: str) -> bool:
     artifact_path = resolve_artifact_http_path(artifact_root, path)
     if artifact_path is None:
@@ -4568,6 +4628,39 @@ class PersistentHudServer:
                         content_type="text/plain; charset=utf-8",
                         no_store=True,
                     )
+                    return
+                if path.startswith("/transcript/"):
+                    relative = path[len("/transcript/") :]
+                    if "/" not in relative:
+                        self.send_error(HTTPStatus.NOT_FOUND)
+                        return
+                    run_id_raw, task_key_raw = relative.split("/", 1)
+                    run_id = urllib.parse.unquote(run_id_raw)
+                    task_key = urllib.parse.unquote(task_key_raw)
+                    log_path = hud_task_log_path(state_dir, run_id, task_key)
+                    if log_path is None or not log_path.is_file():
+                        self.send_error(HTTPStatus.NOT_FOUND)
+                        return
+                    try:
+                        text = tail_file_text(log_path, max_bytes=TRANSCRIPT_MAX_BYTES)
+                        data = transcript_mod.parse_transcript(text)
+                    except Exception as exc:  # fail-open: degrade, never 500
+                        data = {
+                            "schema": 1, "engine": "unknown", "sessions": [],
+                            "status": "error", "attempts": [], "tokens_total": 0,
+                            "parse_warnings": [f"transcript parse failed: {exc}"],
+                        }
+                    send_json_response(self, data)
+                    return
+                if path.startswith("/live-model/"):
+                    relative = path[len("/live-model/") :]
+                    if "/" not in relative:
+                        self.send_error(HTTPStatus.NOT_FOUND)
+                        return
+                    run_id_raw, task_key_raw = relative.split("/", 1)
+                    run_id = urllib.parse.unquote(run_id_raw)
+                    task_key = urllib.parse.unquote(task_key_raw)
+                    send_json_response(self, live_model_for_task(state_dir, run_id, task_key))
                     return
                 self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -7422,16 +7515,10 @@ class RingerRunner:
             max_parallel=manifest.max_parallel,
             artifact=config.artifact,
         )
-        self.dashboard = (
-            Dashboard(
-                state_path=self.state_writer.path,
-                preferred_port=config.dashboard_port_base,
-                hud_app_path=config.hud_app_path,
-                force_browser=force_browser,
-            )
-            if dashboard_enabled
-            else None
-        )
+        # Per-run Dashboard (:8787) is permanently disabled (Adam, 2026-07-14): the
+        # persistent hud (:8700) is the one and only watch surface. We never bind a
+        # per-run server — not even with --browser — so :8787 can never appear.
+        self.dashboard = None
         self.logger = EvalLogger(config.eval)
         self.verifier = Verifier()
         self.semaphore = asyncio.Semaphore(manifest.max_parallel)
