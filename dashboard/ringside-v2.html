@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ringside</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6' fill='%2335d0ff'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="ringside-v2.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.0/chart.umd.min.js"></script>
+</head>
+<body>
+  <!-- Matrix rain canvas (h4 theme only) -->
+  <div class="matrix-overlay">
+    <canvas id="matrix-canvas"></canvas>
+  </div>
+
+  <div class="app">
+    <!-- Sidebar Navigation -->
+    <nav class="sidebar" role="navigation" aria-label="Main">
+      <div class="sidebar-brand">R</div>
+      <button class="nav-icon active" data-page="dashboard" title="Dashboard" aria-label="Dashboard">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      </button>
+      <button class="nav-icon" data-page="analytics" title="Analytics" aria-label="Analytics">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 20V10M12 20V4M6 20v-6"/></svg>
+      </button>
+      <button class="nav-icon" data-page="models" title="Models" aria-label="Models">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+      <button class="nav-icon" data-page="settings" title="Theme designer" aria-label="Theme designer">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a9 9 0 1 0 0 18h1.4a1.8 1.8 0 0 0 1.6-2.6 1.8 1.8 0 0 1 1.6-2.6H18a3 3 0 0 0 3-3A9 9 0 0 0 12 3Z"/><circle cx="7.5" cy="12" r=".8"/><circle cx="10" cy="7.5" r=".8"/><circle cx="15.5" cy="8" r=".8"/></svg>
+      </button>
+      <div class="nav-spacer"></div>
+      <button class="nav-icon" id="theme-toggle-btn" title="Switch theme" aria-label="Switch theme">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+      </button>
+    </nav>
+
+    <!-- Main Content Area -->
+    <div class="main-content">
+      <!-- Top Bar -->
+      <header class="topbar">
+        <div class="brand">RINGSIDE <span class="brand-version">v2</span></div>
+        <div id="live-badge" class="live-badge" hidden>
+          <span class="live-pulse"></span>
+          <span id="live-count">0 SWARMS LIVE</span>
+        </div>
+        <div class="topbar-right">
+          <button id="theme-label" class="theme-toggle" type="button" aria-label="Current theme"></button>
+          <time id="clock" class="clock"></time>
+        </div>
+      </header>
+
+      <!-- Dashboard Page -->
+      <div class="page-panel" data-page="dashboard">
+        <!-- KPI Strip -->
+        <div id="kpi-strip" class="kpi-strip">
+          <div class="kpi">
+            <div class="kpi-label">Active Workers</div>
+            <div class="kpi-value accent" id="kpi-active">0</div>
+            <div class="kpi-sub" id="kpi-active-sub">idle</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">Passed</div>
+            <div class="kpi-value pass" id="kpi-passed">0</div>
+            <div class="kpi-sub" id="kpi-passed-sub">&mdash;</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">Failed</div>
+            <div class="kpi-value fail" id="kpi-failed">0</div>
+            <div class="kpi-sub" id="kpi-failed-sub">&mdash;</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">Tokens</div>
+            <div class="kpi-value" id="kpi-tokens">0</div>
+            <div class="kpi-sub" id="kpi-tokens-sub">&mdash;</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">Elapsed</div>
+            <div class="kpi-value" id="kpi-elapsed">&mdash;</div>
+            <div class="kpi-sub" id="kpi-elapsed-sub">&mdash;</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">Throughput</div>
+            <div class="kpi-value" id="kpi-throughput">&mdash;</div>
+            <div class="kpi-sub" id="kpi-throughput-sub">tasks/min</div>
+          </div>
+        </div>
+
+        <!-- Content Grid -->
+        <div class="content-grid">
+          <!-- Left: Runs -->
+          <div id="runs-container"></div>
+
+          <!-- Right: Artifact + Activity -->
+          <div class="artifact-panel">
+            <div class="glass">
+              <div class="panel-head">
+                <div class="panel-title">Artifact</div>
+                <div id="artifact-status" style="margin-left:auto;color:var(--muted);font-size:11px;"></div>
+              </div>
+              <div class="artifact-controls" style="padding:10px 16px;display:flex;gap:8px;">
+                <select id="artifact-picker" aria-label="Select artifact" style="flex:1;"></select>
+                <select id="artifact-version" aria-label="Artifact version" style="flex:1;"></select>
+              </div>
+              <div id="artifact-preview" class="artifact-preview">
+                <span>No artifacts yet</span>
+              </div>
+            </div>
+
+            <div class="glass">
+              <div class="panel-head">
+                <div class="panel-title">Activity Feed</div>
+              </div>
+              <div id="activity-feed" class="activity-feed"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Bottom Bar -->
+        <div id="bottom-bar" class="bottom-bar"></div>
+      </div>
+
+      <!-- Analytics Page -->
+      <div class="page-panel" data-page="analytics" hidden>
+        <div class="analytics-toolbar glass">
+          <div><span class="eyebrow">Performance intelligence</span><h1>Analytics command center</h1><p>Compare model reliability, throughput, cost proxies, and task fit.</p></div>
+          <div class="analytics-actions"><span id="analytics-data-status" class="data-status"></span></div>
+        </div>
+        <!-- Summary KPI row -->
+        <div id="analytics-summary" class="analytics-kpi-row"></div>
+
+        <!-- Charts row 1: Quality + First-Try Pass -->
+        <div class="analytics-grid-2">
+          <div class="glass analytics-chart-panel">
+            <div class="panel-head"><div class="panel-title">Quality Score by Model</div></div>
+            <div class="chart-wrap"><canvas id="chart-quality"></canvas></div>
+          </div>
+          <div class="glass analytics-chart-panel">
+            <div class="panel-head"><div class="panel-title">First-Try Pass Rate</div></div>
+            <div class="chart-wrap"><canvas id="chart-pass-rate"></canvas></div>
+          </div>
+        </div>
+
+        <!-- Charts row 2: Latency + Request Volume -->
+        <div class="analytics-grid-2">
+          <div class="glass analytics-chart-panel">
+            <div class="panel-head"><div class="panel-title">Avg Latency by Model (ms)</div></div>
+            <div class="chart-wrap"><canvas id="chart-latency"></canvas></div>
+          </div>
+          <div class="glass analytics-chart-panel">
+            <div class="panel-head"><div class="panel-title">Request Volume</div></div>
+            <div class="chart-wrap"><canvas id="chart-requests"></canvas></div>
+          </div>
+        </div>
+
+        <!-- Charts row 3: Task Class Breakdown + Radar -->
+        <div class="analytics-grid-2">
+          <div class="glass analytics-chart-panel">
+            <div class="panel-head"><div class="panel-title">Task Class Distribution</div></div>
+            <div class="chart-wrap chart-wrap-sm"><canvas id="chart-task-dist"></canvas></div>
+          </div>
+          <div class="glass analytics-chart-panel">
+            <div class="panel-head"><div class="panel-title">Model Comparison Radar</div></div>
+            <div class="chart-wrap chart-wrap-sm"><canvas id="chart-radar"></canvas></div>
+          </div>
+        </div>
+
+        <!-- Full-width: Quality vs Latency scatter -->
+        <div class="glass analytics-chart-panel" style="margin-bottom:16px;">
+          <div class="panel-head"><div class="panel-title">Quality vs Latency Trade-off</div></div>
+          <div class="chart-wrap"><canvas id="chart-scatter"></canvas></div>
+        </div>
+
+        <!-- Full scoreboard table -->
+        <div class="glass" style="margin-bottom:16px;">
+          <div class="panel-head"><div class="panel-title">Full Model Scoreboard</div></div>
+          <div id="analytics-table" style="padding:16px;overflow-x:auto;"></div>
+        </div>
+      </div>
+
+      <!-- Models Page (same as analytics, redirects there) -->
+      <div class="page-panel" data-page="models" hidden>
+        <div class="glass">
+          <div class="panel-head"><div class="panel-title">Model Scoreboard</div></div>
+          <div id="models-content" style="padding:16px;">
+            <p style="color:var(--muted);">See Analytics page for full model data.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="page-panel" data-page="settings" hidden>
+        <section class="theme-designer glass">
+          <div class="panel-head"><div><div class="panel-title">Custom Theme Designer</div><p class="panel-copy">Design a personal Ringside skin. Changes preview instantly and are saved in this browser.</p></div><button id="theme-reset" class="control-button" type="button">Reset design</button></div>
+          <div class="theme-designer-grid">
+            <div class="theme-form">
+              <label>Base appearance<select id="designer-base"><option value="dark">Dark</option><option value="light">White</option><option value="grey">Grey</option><option value="black">Black</option></select></label>
+              <label>Accent colour<input id="designer-accent" type="color" value="#35d0ff"></label>
+              <label>Background colour<input id="designer-background" type="color" value="#06090f"></label>
+              <label>Panel overlay<input id="designer-overlay" type="range" min="0" max="100" value="55"><output id="designer-overlay-value">55%</output></label>
+              <label class="upload-control">Background image<input id="designer-upload" type="file" accept="image/*"><span>Upload image</span></label>
+              <button id="designer-clear-image" class="text-button" type="button">Remove background image</button>
+            </div>
+            <div class="theme-preview" id="theme-preview"><div class="preview-orb"></div><span>LIVE PREVIEW</span><strong>Ringside</strong><small>Your dashboard, your signal.</small></div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <script src="ringside-v2.js"></script>
+</body>
+</html>

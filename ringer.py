@@ -99,6 +99,8 @@ CSP_META_TAG = (
 )
 DASHBOARD_HTML_PATH = Path(__file__).resolve().parent / "dashboard" / "dashboard.html"
 RINGSIDE_HTML_PATH = Path(__file__).resolve().parent / "dashboard" / "ringside.html"
+RINGSIDE_V2_HTML_PATH = Path(__file__).resolve().parent / "dashboard" / "ringside-v2.html"
+DASHBOARD_STATIC_DIR = Path(__file__).resolve().parent / "dashboard"
 MINIMAL_DASHBOARD_HTML = """<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><title>ringer dashboard</title></head>
@@ -4299,15 +4301,27 @@ def inject_models_tab_into_ringside_html(html: str) -> str:
 
 
 def read_ringside_html() -> str:
-    try:
-        return inject_models_tab_into_ringside_html(RINGSIDE_HTML_PATH.read_text(encoding="utf-8"))
-    except OSError:
-        return """<!doctype html>
+    for candidate in (RINGSIDE_V2_HTML_PATH, RINGSIDE_HTML_PATH):
+        try:
+            html = candidate.read_text(encoding="utf-8")
+            return html if candidate == RINGSIDE_V2_HTML_PATH else inject_models_tab_into_ringside_html(html)
+        except OSError:
+            continue
+    return """<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><title>Ringside</title></head>
 <body><main id="app">dashboard/ringside.html is missing</main></body>
 </html>
 """
+
+
+def serve_static_dashboard_file(handler: BaseHTTPRequestHandler, filename: str) -> bool:
+    target = DASHBOARD_STATIC_DIR / Path(filename).name
+    content_types = {".css": "text/css; charset=utf-8", ".js": "application/javascript; charset=utf-8"}
+    if not target.is_file() or target.suffix.lower() not in content_types:
+        return False
+    send_response_body(handler, HTTPStatus.OK, target.read_bytes(), content_type=content_types[target.suffix.lower()])
+    return True
 
 
 def send_response_body(
@@ -4320,6 +4334,7 @@ def send_response_body(
 ) -> None:
     handler.send_response(status)
     handler.send_header("Content-Type", content_type)
+    handler.send_header("Access-Control-Allow-Origin", "*")
     if no_store:
         handler.send_header("Cache-Control", "no-store")
     handler.send_header("Content-Length", str(len(body)))
@@ -4603,6 +4618,16 @@ class PersistentHudServer:
                         self,
                         read_json_object(artifact_library_path(state_dir), {"artifacts": {}}),
                     )
+                    return
+                if path.startswith("/static/"):
+                    if serve_static_dashboard_file(self, path[len("/static/") :]):
+                        return
+                    self.send_error(HTTPStatus.NOT_FOUND)
+                    return
+                if path in {"/ringside-v2.css", "/ringside-v2.js"}:
+                    if serve_static_dashboard_file(self, path.lstrip("/")):
+                        return
+                    self.send_error(HTTPStatus.NOT_FOUND)
                     return
                 if path.startswith("/artifacts/"):
                     if not serve_artifact_path(self, artifact_root, path):
