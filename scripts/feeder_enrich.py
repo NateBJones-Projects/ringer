@@ -189,10 +189,14 @@ def main():
             pages = [
                 artifacts_dir / f"{run_id}-report.html",
                 artifacts_dir / "live" / f"{run_name}.html",
+                artifacts_dir / f"{run_id}.html",
             ]
             for page_path in pages:
                 if page_path.exists():
-                    html = renderer.render_final_report_html(state, page_path=page_path)
+                    if page_path.name == f"{run_id}.html":
+                        html = ringer.render_status_html(state, renderer, page_path=page_path)
+                    else:
+                        html = renderer.render_final_report_html(state, page_path=page_path)
                     page_path.write_text(html, encoding="utf-8")
                     print(f"Re-rendered: {page_path}")
                 else:
