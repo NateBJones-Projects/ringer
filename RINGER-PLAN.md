@@ -173,6 +173,14 @@ LLM comes from Feeder.**
   across sessions (an EWMA amplifies grader drift); (ii) sidecar emits samples ONLY for attempts
   whose session actually got served completions — a backpressured/ALL_RATE_LIMITED attempt has no
   served model and must not score anyone.
+  **Lane facts (feeder-claude, code-verified 2026-07-14 12:26):** graded 0..1 already accepted
+  natively (`z.number().min(0).max(1)`, modelPerf.ts:16) — nothing to build feeder-side. Ringer's
+  feed lands in LANE 1 = realtime_quality/task_scores (weight 20, THE loudest routing term,
+  canonical-keyed) — same lane as hermes; the UI thumbs are LANE 2 = response_feedback (weight 6,
+  supplier-keyed, lighter). Two evidence lanes, one routing brain; ringer's judge lane being
+  louder + canonical-keyed serves Adam's "poor models fade" goal better than thumbs. Also
+  confirmed: swarm calls land latency_ms/tokens passively in requests like all traffic — p95
+  health covers swarm models with no extra probing.
 - **Phase 6 — install-agent:** register the orchestrator skill + hooks in `~/.claude`.
 
 ### Bootstrap & coordination — how Ringer-Claude is born + joins the board (verified pattern)
