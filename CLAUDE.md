@@ -53,6 +53,13 @@ node .claude/coordination/coord.js msg "@wsl ..." # post (you appear as @ringer-
   `<(...)` fails the check with rc=2 even when the worker succeeded (learned live 2026-07-14).
 - **Retry-prompt quirk with mock engine:** the injected failure context embeds the attempt-1 log,
   which can re-trigger `MOCK_FILE:` parsing (unterminated block). Harmless for real engines.
+- **OpenCode wire facts (wire-capture probe `probe-opencode-env-session`, 2026-07-14, PASS):**
+  OpenCode 1.17.20 natively stamps `X-Session-Id` (+ `X-Session-Affinity`, same value) on every
+  provider request — stable within one `opencode run` invocation, distinct across invocations, so
+  1 worker attempt = 1 session id for free. `{env:VAR}` in provider `options.headers` does NOT
+  substitute (OpenCode clobbers X-Session-Id with its own). `OPENCODE_CONFIG` env var IS honored
+  (full config replacement); a project `opencode.json` in `--dir` also loads. `options.apiKey`
+  flows as the Bearer token. Rerun the probe manifest after any OpenCode upgrade (no-drift check).
 - **Eval backend stays `jsonl`** (`~/.ringer/runs.jsonl`) — NO Supabase. (Egress discipline: the OB
   Supabase org just blew its free egress cap; never point eval at OB's PostgREST. If cross-machine
   aggregation is ever truly needed: direct libpq on a SEPARATE db, per OB-Claude.)
@@ -82,6 +89,20 @@ node .claude/coordination/coord.js msg "@wsl ..." # post (you appear as @ringer-
    shell-check pass/fail is GROUND-TRUTH quality — cleaner than a judge's opinion — and improves
    routing for the whole fleet. Feeder stays zero-policy; it blends your 0..1 over its arena prior
    (0.6 prior / 0.4 realtime). Confirm a sample row with `judge='ringer'` lands.
+
+## TASK-CLASS CONTRACT — APPROVED (Adam via WSL, 2026-07-14; implementation pending in-repo)
+**Wire vocab = exactly 7 tokens** (both valid wire keys AND equal to their task_scores task_type):
+`coding, math, reasoning, creative_writing, instruction_following, long_query, multi_turn`
+(+ `overall` = implicit default only — never pin it; bare `auto` or unknown class = overall).
+**CRITICAL (feeder-verified):** Feeder does NOT validate the wire class — `auto/<anything>` is
+accepted and an unrecognised class SILENTLY degrades to `overall` in routing AND quality feed.
+Enforcement is 100% Ringer-side. Do NOT use feeder's aliases (code/writing/puzzle/long/...).
+**Mapping design (WSL, resolved):** local manifest `task_type` stays Ringer's native vocabulary
+(local scoreboard); every task ALSO records an explicit `wire_class` (one of the 7, or bare auto)
+in the manifest — orchestrator owns the mapping per task, auditable, never re-guessed at runtime.
+Quality feed to Feeder keys on wire_class; local scoreboard keys on task_type. Validate the vocab
+against `GET /api/canon/task-types` (minus overall) as the no-drift check.
+**Until the validator + rubric are built in-repo: coding-class runs only.**
 
 ## PREREQUISITE STATUS
 Feeder's **quota-bench fix is LIVE** (feeder commit `ca67383`, verified) — a daily/tier-quota 429 now

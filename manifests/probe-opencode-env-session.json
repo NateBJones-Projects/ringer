@@ -1,0 +1,17 @@
+{
+  "run_name": "probe-opencode-env-session",
+  "workdir": "/tmp/ringer-probe-envsession",
+  "max_parallel": 1,
+  "tasks": [
+    {
+      "key": "env-session-probe",
+      "task_type": "probe",
+      "engine": "mock",
+      "spec": "You are a zero-cost mock worker staging a wire-capture probe for the fleet's swarm-allocation design council. The question under test: can OpenCode stamp a PER-INVOCATION session id into provider headers via {env:RINGER_SESSION_ID} substitution? No real model is involved anywhere — the probe points OpenCode at a local capture sink (scripts/probes/header_sink.py) and inspects exactly what reaches the wire. Boundary: you own only probe-note.md in your task directory; the executed check performs the actual probe (scripts/probes/opencode-env-session-probe.sh) and is the sole verdict. Write the marker file below.\nMOCK_FILE: probe-note.md\n# OpenCode env-session probe\nThis task's check runs the wire-capture probe: two `opencode run` invocations with different RINGER_SESSION_ID values against a local header sink; PASS requires both distinct ids to arrive as X-Session-Id headers, substituted, with wire model auto/coding.\nMOCK_END",
+      "check": "sh /home/ajo/ringer/scripts/probes/opencode-env-session-probe.sh",
+      "expect_files": ["probe-note.md"],
+      "timeout_s": 120,
+      "verified": "the capture sink actually received two OpenCode requests whose X-Session-Id headers carry the two distinct per-invocation env values, proving per-worker session stamping is possible client-side"
+    }
+  ]
+}
