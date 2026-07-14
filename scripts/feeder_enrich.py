@@ -15,6 +15,8 @@ def main():
     parser.add_argument("--workdir", required=True, help="Path to task work directory")
     parser.add_argument("--fixture", help="Path to fixture JSON mapping session_id -> [rows]")
     parser.add_argument("--feeder-base", default="http://localhost:3001", help="Feeder base URL")
+    parser.add_argument("--rerender", action="store_true", help="Re-render the artifact pages after enrichment")
+    parser.add_argument("--artifacts-dir", default=os.path.expanduser("~/.ringer/artifacts"), help="Path to artifacts directory (default: ~/.ringer/artifacts)")
     args = parser.parse_args()
 
     try:
@@ -169,6 +171,35 @@ def main():
     except OSError as e:
         print(f"Error: cannot write state JSON: {e}")
         return 1
+
+    if args.rerender:
+        try:
+            import sys
+            from pathlib import Path
+            sys.path.append(str(Path(__file__).resolve().parent.parent))
+            import ringer
+            artifacts_dir = Path(args.artifacts_dir).resolve()
+            run_id = state.get("run_id")
+            run_name = state.get("run_name")
+            if not run_id or not run_name:
+                print("Error: state missing run_id or run_name")
+                return 4
+
+            renderer = ringer.ArtifactRenderer(artifacts_dir / "x.html")
+            pages = [
+                artifacts_dir / f"{run_id}-report.html",
+                artifacts_dir / "live" / f"{run_name}.html",
+            ]
+            for page_path in pages:
+                if page_path.exists():
+                    html = renderer.render_final_report_html(state, page_path=page_path)
+                    page_path.write_text(html, encoding="utf-8")
+                    print(f"Re-rendered: {page_path}")
+                else:
+                    print(f"Skipped (not found): {page_path}")
+        except Exception as e:
+            print(f"Error: rerender failed: {e}")
+            return 4
 
     return 0
 
