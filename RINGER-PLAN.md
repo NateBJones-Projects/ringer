@@ -134,6 +134,11 @@ LLM comes from Feeder.**
   **Key retrieval (verified, feeder-claude 2026-07-14):** the unified key is NOT in Feeder's `.env`;
   it lives in Feeder's DB (settings table, `unified_api_key`) — fetch via `GET /api/settings/api-key`
   → `{apiKey}`, send as `Authorization: Bearer <key>`.
+  **✅ DONE 2026-07-14.** Seam check `phase2-seam-check` passed first-try (OpenCode 1.17.20 →
+  Feeder, wire model `auto/coding`, headers `X-Consumer: ringer` + `X-Augment: off`). Feeder-side
+  CONFIRMED by feeder-claude (board 11:43): requests ids 3859-62, consumer='ringer',
+  task_class='coding', 4/4 success, augment never fired; served by sambanova/DeepSeek-V3.1
+  (canonical `deepseek-v3-1`). **Full --max-parallel ACKED by feeder-claude.**
 - **Phase 3 — Prove Ringer:** `./ringer.py demo` green + Ringside at `127.0.0.1:8700`. (If the demo's
   Codex default isn't available, point the demo engine at the Feeder-backed OpenCode worker.)
 - **Phase 4 — First real manifest:** one small real task, run through the Feeder-backed swarm at low
@@ -141,6 +146,14 @@ LLM comes from Feeder.**
 - **Phase 5 — Quality feedback:** the runs.jsonl → `/api/model-perf/sample` sidecar (body:
   `{model_id, task_class?, quality_score, judge:"ringer"}` — `judge`, not `source`); confirm a
   sample row with `judge='ringer'` lands in Feeder's `task_scores`.
+  **GOTCHA (feeder-claude + verified locally 2026-07-14):** `model_id` must be the CONCRETE served
+  model (e.g. `DeepSeek-V3.1` → canonical `deepseek-v3-1`), NOT `auto/coding` (won't resolve;
+  sample dropped). And OpenCode's `--format json` event stream does NOT carry the served model
+  (verified: zero model fields in the seam worker.log), so runs.jsonl attributes to
+  `feeder/auto/coding` only. The sidecar must therefore get the served model from Feeder — e.g.
+  join runs.jsonl attempts to Feeder's `requests` rows (consumer='ringer') by time window, or a
+  small Feeder facility feeder-claude and I agree at Phase 5. feeder-claude's standing offer: a
+  /api/model-perf/sample smoke test against a throwaway canonical as the Phase-5 dry run.
 - **Phase 6 — install-agent:** register the orchestrator skill + hooks in `~/.claude`.
 
 ### Bootstrap & coordination — how Ringer-Claude is born + joins the board (verified pattern)

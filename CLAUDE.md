@@ -42,8 +42,11 @@ node .claude/coordination/coord.js msg "@wsl ..." # post (you appear as @ringer-
   drift vs the sample config: `--dangerously-skip-permissions` is gone → use `--auto`; no sandbox
   flags at all. Provider wiring lives in `~/.config/opencode/opencode.json` (feeder provider,
   chmod 600, unified key inlined); engine block `[engines.opencode]` in `~/.config/ringer/config.toml`.
-  **Phase-2 seam check PASSED first-try 2026-07-14** (`phase2-seam-check`, 7238 tok, 15.9s, cost 0);
-  Feeder-side row confirmation requested from feeder-claude on the board.
+  **Phase-2 seam check PASSED first-try 2026-07-14** (`phase2-seam-check`, 7238 tok, 15.9s, cost 0)
+  and **CONFIRMED Feeder-side** (requests ids 3859-62: consumer='ringer', task_class='coding',
+  augment off, served by sambanova/DeepSeek-V3.1 = canonical `deepseek-v3-1`). **Full
+  --max-parallel ACKED by feeder-claude (board 2026-07-14 11:43).** Phase-5 note: OpenCode's JSON
+  events don't expose the served model — sidecar must source it from Feeder's requests rows.
 - `engines/mock_worker.py` exists → use it for a **zero-cost mechanics test** of the orchestrator
   before spending on real workers. (Done 2026-07-14: 3/3 first-try PASS, `phase2-mock-mechanics`.)
 - **Checks execute under `/bin/sh` (dash), NOT bash** — write POSIX checks only; a bashism like
