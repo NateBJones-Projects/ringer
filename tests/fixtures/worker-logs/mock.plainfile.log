@@ -1,0 +1,9 @@
+
+[ringer.py] attempt 1 started 2026-07-14T11:34:26.194086+00:00
+[ringer.py] engine: mock
+[ringer.py] command: python3 /home/ajo/ringer/engines/mock_worker.py 'You are a zero-cost mock mechanics worker proving Ringer'"'"'s spawn/check/log loop before any real model spends tokens. Boundary: write only inside your current task directory; never touch anything else. Goal: produce alpha.txt containing exactly one line: '"'"'ringer mechanics alpha ready'"'"'. This spec drives engines/mock_worker.py, which writes the MOCK_FILE block below verbatim into the task directory.
+MOCK_FILE: alpha.txt
+ringer mechanics alpha ready
+MOCK_END' < /dev/null
+mock-worker: wrote 1 file(s): alpha.txt
+[ringer.py] attempt 1 exited rc=0

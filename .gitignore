@@ -10,3 +10,6 @@ hud/dist/
 hud/gen/
 hud/icons/icon.iconset/
 *.log
+
+# Committed test fixtures (deliberate, not transient logs)
+!tests/fixtures/worker-logs/*.log
