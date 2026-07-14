@@ -1,0 +1,26 @@
+{
+  "run_name": "cron-pin-brain-health-monitor-20260713",
+  "workdir": "/tmp/ringer-cron-pin-brain-health-monitor-20260713",
+  "max_parallel": 1,
+  "_purpose": "Narrow repair for one Hermes cron job: explicitly pin brain-health-monitor to the approved current inference route. The job is pinned by its provider/model fields; source semantics intentionally leave its creation snapshots null because snapshots guard only unpinned axes.",
+  "_safety": {
+    "control_plane_authority": "single_job_inference_pin",
+    "target_job_id": "1993d0a05a63",
+    "target_job_name": "brain-health-monitor",
+    "approved_provider": "openai-codex",
+    "approved_model": "gpt-5.6-terra",
+    "forbidden_changes": ["global Hermes config", "daily-fleet-brief", "schedule", "prompt", "script", "no_agent", "enabled", "state", "delivery", "toolsets", "workdir", "base_url", "direct jobs.json writes"]
+  },
+  "tasks": [
+    {
+      "key": "pin_brain_health_monitor",
+      "task_type": "cron-control-plane-repair",
+      "engine": "mock",
+      "timeout_s": 120,
+      "expect_files": ["apply_cron_pin.py"],
+      "spec": "Emit the exact deterministic repair script below.\nMOCK_FILE: apply_cron_pin.py\nimport json\nimport sys\nfrom pathlib import Path\n\nsys.path.insert(0, '/Users/hermes/.hermes/hermes-agent')\nfrom cron.jobs import resolve_job_ref, update_job\n\nJOB_ID = '1993d0a05a63'\nNAME = 'brain-health-monitor'\nPROVIDER = 'openai-codex'\nMODEL = 'gpt-5.6-terra'\n\ndef main():\n    before = resolve_job_ref(JOB_ID)\n    if not before or before.get('id') != JOB_ID or before.get('name') != NAME:\n        raise SystemExit(2)\n    changed = before.get('provider') != PROVIDER or before.get('model') != MODEL\n    updated = update_job(JOB_ID, {'provider': PROVIDER, 'model': MODEL})\n    after = resolve_job_ref(JOB_ID)\n    if not updated or not after or after.get('id') != JOB_ID or after.get('name') != NAME:\n        raise SystemExit(3)\n    if after.get('provider') != PROVIDER or after.get('model') != MODEL or after.get('enabled') is not True or after.get('state') != 'scheduled':\n        raise SystemExit(4)\n    receipt = {k: after.get(k) for k in ('provider_snapshot', 'model_snapshot', 'enabled', 'state', 'schedule_display')}\n    receipt.update({'job_id': JOB_ID, 'name': NAME, 'provider': PROVIDER, 'model': MODEL, 'verification_passed': True, 'changed': changed})\n    Path('cron-pin-receipt.json').write_text(json.dumps(receipt, indent=2) + '\\n', encoding='utf-8')\n\nif __name__ == '__main__':\n    main()\nMOCK_END\n",
+      "check": "/Users/hermes/.hermes/hermes-agent/venv/bin/python3 apply_cron_pin.py && /Users/hermes/.hermes/hermes-agent/venv/bin/python3 -c \"import json,sys; sys.path.insert(0, '/Users/hermes/.hermes/hermes-agent'); from cron.jobs import resolve_job_ref; r=json.load(open('cron-pin-receipt.json')); j=resolve_job_ref('1993d0a05a63'); expected={'job_id':'1993d0a05a63','name':'brain-health-monitor','provider':'openai-codex','model':'gpt-5.6-terra'}; receipt_ok=all(r.get(k)==v for k,v in expected.items()) and r.get('verification_passed') is True and r.get('enabled') is True and r.get('state')=='scheduled' and r.get('provider_snapshot') is None and r.get('model_snapshot') is None; live_ok=(j and j.get('id')=='1993d0a05a63' and j.get('name')=='brain-health-monitor' and j.get('provider')=='openai-codex' and j.get('model')=='gpt-5.6-terra' and j.get('enabled') is True and j.get('state')=='scheduled' and j.get('provider_snapshot') is None and j.get('model_snapshot') is None); (receipt_ok and live_ok) or sys.exit('FAIL: pin verification failed'); print('cron inference pin verified')\"",
+      "verified": "The check invokes the supported cron persistence API, then independently reads the persisted record. It proves the target job is explicitly pinned and scheduled; null snapshots are verified as the expected state for pinned axes under scheduler drift-guard semantics."
+    }
+  ]
+}
