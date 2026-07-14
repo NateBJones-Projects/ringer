@@ -396,6 +396,11 @@ class TaskSpec:
     # engine's {model} placeholder); empty means the engine's model_default.
     model: str = ""
     task_type: str = ""
+    # Cross-link fields for auto-projection (Workstream A).
+    # When present, the post-run hook posts the verdict to the linked
+    # Paperclip issue and/or Beads issue.
+    paperclip_issue: str = ""
+    bead_id: str = ""
 
     @classmethod
     def from_obj(cls, obj: dict[str, Any]) -> "TaskSpec":
@@ -436,6 +441,12 @@ class TaskSpec:
         task_type = obj.get("task_type", "")
         if not isinstance(task_type, str):
             raise ValueError(f"task {key}: task_type must be a string")
+        paperclip_issue = obj.get("paperclip_issue", "")
+        if not isinstance(paperclip_issue, str):
+            raise ValueError(f"task {key}: paperclip_issue must be a string (e.g. 'JAC-3366')")
+        bead_id = obj.get("bead_id", "")
+        if not isinstance(bead_id, str):
+            raise ValueError(f"task {key}: bead_id must be a string (e.g. 'hermes-9zgz')")
         return cls(
             key=key,
             spec=spec,
@@ -448,6 +459,8 @@ class TaskSpec:
             verified=verified.strip(),
             model=model.strip(),
             task_type=task_type.strip(),
+            paperclip_issue=paperclip_issue.strip(),
+            bead_id=bead_id.strip(),
         )
 
 
@@ -7071,6 +7084,35 @@ class RingerRunner:
                     results_page = artifact_live_path(self.state_writer.state_dir, self.manifest.run_name)
                     print(f"\nYour results: {results_page}")
                     print("Open it in a browser, or run './ringer.py hud' for the full Ringside view (http://127.0.0.1:8700).")
+            # Auto-projection hook (Workstream A): if any task carries
+            # paperclip_issue or bead_id, project the verdict to those
+            # surfaces automatically. Failures are non-fatal — they log
+            # to stderr but do not affect the run exit code.
+            with contextlib.suppress(Exception):
+                self._run_projection_hook()
+
+    def _run_projection_hook(self) -> None:
+        """Auto-project verdict to Paperclip/Beads if cross-link fields are present."""
+        has_links = any(
+            task.paperclip_issue or task.bead_id
+            for task in self.manifest.tasks
+        )
+        if not has_links:
+            return
+        hook_path = Path.home() / ".ringer" / "hooks" / "paperclip_projector.py"
+        if not hook_path.is_file():
+            print(f"[projection] Hook script not found at {hook_path}, skipping.", file=sys.stderr)
+            return
+        state_path = self.state_writer.path
+        manifest_path = self.manifest.source_path
+        cmd = [sys.executable, str(hook_path), str(state_path)]
+        if manifest_path and manifest_path.is_file():
+            cmd.append(str(manifest_path))
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.stdout.strip():
+            print(result.stdout.rstrip())
+        if result.returncode != 0 and result.stderr.strip():
+            print(f"[projection] {result.stderr.rstrip()}", file=sys.stderr)
 
     async def kill_all_workers(self) -> None:
         procs = list(self.active_processes.values())
