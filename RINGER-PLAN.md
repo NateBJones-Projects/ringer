@@ -156,9 +156,12 @@ LLM comes from Feeder.**
   attempt can be served by TWO models (alpha/bravo: DeepSeek ×2 calls + Mistral ×1). The graded
   quality sample keys on ONE model — sidecar needs an attribution rule for mixed attempts.
   Options: (a) skip mixed attempts (clean but loses data), (b) attribute to the majority-call
-  model, (c) attribute to the final-call model (it produced the artifact). Decide at Phase 5
-  with feeder-claude; #3 will make mixed attempts rare (spread from first call → fewer
-  failovers) but 429-failover can still occur mid-attempt.
+  model, (c) attribute to the final-call model. **Converged for v1 (feeder-claude concur,
+  12:54): (a) skip-with-count.** Live data killed (c): in this very run the final call was the
+  TRIVIAL one (Mistral, 2 output tokens, after 2 substantive DeepSeek calls) — final-call would
+  misattribute a DeepSeek-built artifact to Mistral. If attribution of a mixed attempt is ever
+  required: dominant-by-OUTPUT-TOKENS beats final-call. Keep the skip-count VISIBLE — after #3
+  ships, mixed-attempt frequency doubles as a #3-effectiveness metric.
 - **Phase 4 — First real manifest:** one small real task, run through the Feeder-backed swarm at low
   parallelism, check passes end-to-end.
 - **Phase 5 — Quality feedback:** the runs.jsonl → `/api/model-perf/sample` sidecar (body:
