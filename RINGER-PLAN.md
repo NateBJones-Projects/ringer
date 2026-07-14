@@ -164,6 +164,15 @@ LLM comes from Feeder.**
   ships, mixed-attempt frequency doubles as a #3-effectiveness metric.
 - **Phase 4 — First real manifest:** one small real task, run through the Feeder-backed swarm at low
   parallelism, check passes end-to-end.
+  **✅ DONE 2026-07-14 (Adam picked the task: surface Feeder telemetry in Ringside).**
+  `phase4-feeder-telemetry`: swarm-built `scripts/feeder_enrich.py` (session→/api/requests join,
+  first-try PASS once infra was fixed) + `render_feeder_strip` in ringer.py. Verified end-to-end:
+  phase3-demo enriched from the LIVE endpoint, all 3 workers show true routing incl. failover
+  chains on Ringside. Honest ledger: 3 rounds of cheap-lane failures on the 9k-line-file edit
+  (orchestrator integrated the reviewed worker helper; lesson in docs/MODEL-NOTES.md), plus two
+  infra fixes found by the swarm: opencode sqlite race (per-invocation XDG_DATA_HOME wrapper,
+  `engines/opencode-feeder.sh`) and stale-failed-worktree collisions on re-runs
+  (`git worktree remove` first).
 - **Phase 5 — Quality feedback:** the runs.jsonl → `/api/model-perf/sample` sidecar (body:
   `{model_id, task_class?, quality_score, judge:"ringer"}` — `judge`, not `source`); confirm a
   sample row with `judge='ringer'` lands in Feeder's `task_scores`.

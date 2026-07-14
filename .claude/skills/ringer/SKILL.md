@@ -312,6 +312,11 @@ someone's untracked scratch files.
 
 ## Post-run review ritual
 
+0. **Enrich Feeder-routed runs first** (this machine): `python3 scripts/feeder_enrich.py
+   --state ~/.ringer/runs/<run_id>.json --workdir <workdir>` pulls each worker's true
+   routing (served models, failovers, latency) from Feeder into the state, and the
+   report pages then show a "Served by" strip per task. Re-render a finished run's
+   pages with ArtifactRenderer if you enriched after it closed.
 1. Read the run JSON in `~/.ringer/runs/` — statuses, retries, durations.
 2. For any retried or failed task, read the raw worker log in
    `<workdir>/logs/` before deciding anything. Retries that passed on
