@@ -7397,6 +7397,14 @@ class RingerRunner:
         self.verifier = Verifier()
         self.semaphore = asyncio.Semaphore(manifest.max_parallel)
         self.active_processes: dict[int, asyncio.subprocess.Process] = {}
+        # Engines that already produced a spawn failure this run. A missing
+        # binary fails identically for every task, so after the first INFRA
+        # verdict the remaining tasks on that engine are failed without
+        # spawning — one broken engine should cost one attempt, not
+        # tasks × attempts. (The startup preflight can't catch every case:
+        # wrapper-script engines resolve fine and then exit 127 when the
+        # binary INSIDE the wrapper is missing.)
+        self.infra_failed_engines: set[str] = set()
 
     async def run(self) -> int:
         self.manifest.workdir.mkdir(parents=True, exist_ok=True)
@@ -7451,6 +7459,24 @@ class RingerRunner:
         async with self.semaphore:
             with self.lock:
                 runtime.started_at_monotonic = time.monotonic()
+                engine_broken = runtime.task.engine in self.infra_failed_engines
+            if engine_broken:
+                # The engine already failed to spawn this run; every further
+                # task on it is doomed the same way. Fail fast, spawn nothing,
+                # log no model row (there is no model evidence).
+                with self.lock:
+                    runtime.status = "fail"
+                    runtime.final_verdict = "INFRA"
+                    runtime.ended_at_monotonic = time.monotonic()
+                with contextlib.suppress(Exception):
+                    append_text(
+                        runtime.log_path,
+                        f"[ringer.py] engine '{runtime.task.engine}' already "
+                        "hit a spawn failure this run — not spawning this "
+                        "task. Fix the engine 'bin'/PATH in the ringer "
+                        "config and re-run.\n",
+                    )
+                return
             prepared, prepare_error = await self._prepare_taskdir(runtime)
             if not prepared:
                 await self._record_prepare_error(runtime, prepare_error or "taskdir preparation failed")
@@ -7486,8 +7512,12 @@ class RingerRunner:
                     await self._cleanup_worktree_on_pass(runtime)
                     return
                 if verdict == "INFRA":
-                    # A retry cannot install a missing binary — skip it and
-                    # tell the operator exactly what to fix.
+                    # A retry cannot install a missing binary — skip it, trip
+                    # the per-engine circuit breaker so queued tasks on this
+                    # engine fail fast instead of spawning, and tell the
+                    # operator exactly what to fix.
+                    with self.lock:
+                        self.infra_failed_engines.add(runtime.task.engine)
                     with contextlib.suppress(Exception):
                         append_text(
                             runtime.log_path,
