@@ -3,10 +3,16 @@ import argparse
 import json
 import os
 import re
-import statistics
+import sys
 import tempfile
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+# Shared aggregation lives in feeder_agg (single source of truth, also used by
+# ringer.py's live /live-model route). scripts/ is on sys.path when run as a script;
+# insert it defensively so imports work regardless of invocation cwd.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import feeder_agg
 
 
 def main():
@@ -106,53 +112,7 @@ def main():
             print(f"Note: task {task_key}: no request rows found, skipping")
             continue
 
-        all_rows_sorted = sorted(all_rows, key=lambda r: r.get("created_at", ""))
-
-        served_by_key = {}
-        served_order = []
-        success_rows = [r for r in all_rows_sorted if r.get("status") == "success"]
-
-        for row in success_rows:
-            key = (row.get("platform"), row.get("model_id"))
-            if key not in served_by_key:
-                served_by_key[key] = {"calls": 0, "output_tokens": 0}
-                served_order.append(key)
-            served_by_key[key]["calls"] += 1
-            served_by_key[key]["output_tokens"] += row.get("output_tokens", 0)
-
-        served = []
-        for key in served_order:
-            served.append({
-                "platform": key[0],
-                "model_id": key[1],
-                "calls": served_by_key[key]["calls"],
-                "output_tokens": served_by_key[key]["output_tokens"],
-            })
-
-        failovers = 0
-        prev_key = None
-        for row in success_rows:
-            key = (row.get("platform"), row.get("model_id"))
-            if prev_key is not None and key != prev_key:
-                failovers += 1
-            prev_key = key
-
-        errors_429 = sum(1 for r in all_rows if str(r.get("status")) == "429")
-
-        latency_values = [r.get("latency_ms", 0) for r in all_rows if "latency_ms" in r]
-        latency_ms_total = sum(latency_values)
-        latency_ms_p50 = statistics.median(latency_values) if latency_values else 0
-
-        task["feeder"] = {
-            "sessions": session_ids,
-            "served": served,
-            "failovers": failovers,
-            "mixed_models": len(served) > 1,
-            "requests": len(all_rows),
-            "errors_429": errors_429,
-            "latency_ms_total": latency_ms_total,
-            "latency_ms_p50": latency_ms_p50,
-        }
+        task["feeder"] = {"sessions": session_ids, **feeder_agg.aggregate_rows(all_rows)}
         print(f"task {task_key}: wrote feeder block with {len(all_rows)} requests")
 
     from datetime import datetime
