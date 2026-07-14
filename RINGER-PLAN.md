@@ -178,7 +178,10 @@ LLM comes from Feeder.**
   feed lands in LANE 1 = realtime_quality/task_scores (weight 20, THE loudest routing term,
   canonical-keyed) — same lane as hermes; the UI thumbs are LANE 2 = response_feedback (weight 6,
   supplier-keyed, lighter). Two evidence lanes, one routing brain; ringer's judge lane being
-  louder + canonical-keyed serves Adam's "poor models fade" goal better than thumbs. Also
+  louder + canonical-keyed serves Adam's "poor models fade" goal better than thumbs.
+  **DECIDED (Adam, 2026-07-14 12:41): KEEP TWO lanes** — the evidence-strength asymmetry is
+  intended; nothing to build. (Also decided: no feeder supervisor for now — feeder stays
+  manual-restart, SPOF risk accepted, revisit later.) Also
   confirmed: swarm calls land latency_ms/tokens passively in requests like all traffic — p95
   health covers swarm models with no extra probing.
 - **Phase 6 — install-agent:** register the orchestrator skill + hooks in `~/.claude`.
