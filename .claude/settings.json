@@ -2,5 +2,17 @@
   "env": {
     "COORD_AGENT": "ringer-claude",
     "TASK_WATCH_AGENT": "ringer-claude"
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh /home/ajo/ringer/scripts/upstream_check.sh"
+          }
+        ]
+      }
+    ]
   }
 }
