@@ -4238,6 +4238,7 @@ def read_json_object(path: Path, default: dict[str, Any]) -> dict[str, Any]:
 
 def scan_hud_run_states(state_dir: Path, *, limit: int = 12) -> list[dict[str, Any]]:
     runs_dir = state_dir / "runs"
+    active = read_active_runs()
     try:
         paths = [path for path in runs_dir.glob("*.json") if path.is_file()]
     except OSError:
@@ -4254,12 +4255,16 @@ def scan_hud_run_states(state_dir: Path, *, limit: int = 12) -> list[dict[str, A
     for path in paths[:limit]:
         data = read_json_object(path, {})
         if data:
+            run_id = str(data.get("run_id", path.stem))
+            if str(data.get("state", "finished" if data.get("finished") else "live")) == "live" and run_id not in active:
+                data = dict(data)
+                data["state"] = "died"
             runs.append(data)
     return runs
 
 
 def read_active_runs_file() -> dict[str, Any]:
-    return read_json_object(active_runs_path(), {})
+    return read_active_runs()
 
 
 def resolve_artifact_http_path(artifact_root: Path, request_path: str) -> Path | None:
