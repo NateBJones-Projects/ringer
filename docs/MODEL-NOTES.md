@@ -30,6 +30,14 @@ checks and raw logs support — no vibes, no worker self-reports.
   316s/~175k tok; final brand+market-test reskin 622s/~184k tok), both passed
   14-assertion content checks on attempt 1, including base64-embedding photos
   and honoring honesty-marker requirements. Codex remains the site-build lane.
+- 2026-07-14 — probe (GitHub Pages deploy post-mortem, canada-ca/systeme-conception):
+  passed attempt 1, ~80k tokens, 428s. Read-only investigation combining git
+  forensics, GitHub API reads, and live-site curls; went beyond the spec's
+  hypothesis list to find the true cause (stale gh-pages branch superseding
+  artifact deploys) and quoted raw evidence throughout. Recovered gracefully
+  from a sandbox write denial (parent-relative tee path) by rerouting output.
+  Note: reasoning effort came out "none" by default — still nailed it; probes
+  don't need effort flags.
 - 2026-07-06 — ringer.py feature batch (task_type field + enriched eval rows
   + `models` scoreboard + hud single-tab fix; ~640-line diff incl. two new
   test suites): substance passed on attempt 1 — its check printed PASS
@@ -72,6 +80,8 @@ checks and raw logs support — no vibes, no worker self-reports.
   check. Review lane found the HIGH that mattered (sync cursor skipping a
   half-written trailing line). Codex is the proven lane for both sides of
   the review->fix loop on this codebase.
+- 2026-07-10 — OUT OF QUOTA: both codex lanes of a doc-review run failed instantly with "You've hit your usage limit... try again at Aug 7th, 2026" (attempts burned on the same wall). Do not route to codex before 2026-08-07; use opencode/GLM 5.2 as the fallback lane.
+- 2026-07-10 — PRD/brief revision (fold 25+ review fixes into two docs, 558 lines out, 40+ assertion executed check, medium reasoning): PASS attempt 1. Clean FR renumbering, consistent cross-doc edits. Quota was reset same day — the Aug 7 lockout note above no longer applies.
 
 ## glm-5.2 via opencode (`openrouter/z-ai/glm-5.2`)
 
@@ -186,6 +196,7 @@ checks and raw logs support — no vibes, no worker self-reports.
   request-time draft fetch — deploy-time behavior needs a deployed-surface
   probe, or specs must pin exact API params. Fixed by orchestrator (1 line)
   and caught only via wrangler deployment tail on the live preview.
+- 2026-07-10 — adversarial doc-review (PRD/brief vs real repos), 3 tasks: 2 first-try passes, 1 pass on retry (attempt 1 produced analysis but never wrote report.md; retry with injected 'report.md not found' fixed it instantly). Reports were evidence-dense and grounded (git commands, file:line cites) at ~0.5¢/task. Doc-review lane: proven; remind GLM of the output file in bold if this recurs.
 
 ## kimi-k2.7 via opencode (`openrouter/moonshotai/kimi-k2.7-code`)
 
@@ -315,6 +326,17 @@ checks and raw logs support — no vibes, no worker self-reports.
 - 2026-07-06 — opencode sqlite "database is locked" again with just 2
   simultaneous opencode spawns (page-news + page-about-faq); retry absorbed it.
 
+- 2026-07-12 docs (cd-parent-meeting round 2, venue-change revision of two
+  approved drafts): 2/2 pass, one retry. parent-email (15 required-fact
+  regexes + 2 banned-stale-fact regexes) passed attempt 1. eo-checklist
+  attempt 1 added all new facts but left the old address in the Goal line —
+  "remove EVERY mention" was applied to the steps it edited, not the whole
+  file. Injected check output ("stale/banned content '435' still present")
+  fixed it on attempt 2. Lesson: on revision tasks, --ban regexes for the
+  outdated facts are what catch partial edits; keep using them whenever a
+  seeded draft must lose old content, and expect glm to need the retry for
+  file-wide removals.
+
 ## codex (2026-07-06, bench-operator-proofing)
 - 8/8 code-feature tasks passed attempt 1 across 3 rounds (worktrees mode, Python harness refactor; 108k-406k tokens/task). Specs embedded the approved architecture doc + exact file ownership; checks built fresh uv venvs and ran the full pytest suite.
 - Lesson (check design, not model): all 3 post-integration bugs were invisible to the checks — a test that passed only because the worker's worktree lacked .env, a `--help`-only assertion missing a runtime importlib/sys.modules bug (py3.12 dataclasses), and bare console-script names failing outside activated venvs. Checks should exercise one real invocation from a cold shell, not just --help.
@@ -325,3 +347,12 @@ checks and raw logs support — no vibes, no worker self-reports.
 
 ## GPT-5.5 (codex) — attribution caveat
 - Scoreboard rows dated before 2026-07-09 may actually be gpt-5.6: codex eval rows logged model="" until the write-time stamping fix (PR #18) and were credited to GPT-5.5 by the registry default at read time, while the machine's codex default had already moved to gpt-5.6-sol at an unknown earlier date. `scripts/backfill_model_from_logs.py` re-stamps rows with surviving command-log evidence; anything it skips is a mixed-model aggregate. Trust post-2026-07-09 rows.
+
+## meta-llama/llama-3.3-70b-instruct:free (opencode)
+- 2026-07-11 copywriting (cd-parent-meeting): 0/1 — both attempts TIMEOUT at 900s with ZERO tokens logged; free endpoint appears to hang, worker never started producing. No raw log content to post-mortem. Demoted from exploration; don't re-audition the :free endpoint — try the paid slug if ever needed.
+
+## GLM 5.2 (opencode) — long-generation 504s
+- 2026-07-12 copywriting (votons-franco-microsite-strategy): draft-content-briefs failed 2/2 attempts with OpenRouter 504 "Upstream idle timeout exceeded" mid-generation — the model correctly planned a ~2000-word single-file write, then the upstream idled out during the one long response. Raw logs ruled FOR the worker. Fix that worked first-try on rerun: spec mandates building the file incrementally (6+ small appends via cat >> heredocs), keeping every individual response short. Apply this spec pattern to any opencode task whose deliverable is a single >1200-word document. Same run: 4 other GLM lanes (2 research with live-URL checks, 2 docs) passed, 3 of 4 first-try.
+
+## nvidia/nemotron-3-super-120b-a12b:free (opencode)
+- 2026-07-12 copywriting (votons-franco keyword-matrix): 1/1 first-try in 40s, 14.6k tokens, $0 — passed a 14-entity French keyword-table task with an entity-presence check. Output was formulaic (identical 10-keyword template stamped per entity) but contract-complete. Probation: fine for templated/mechanical copywriting lanes with strong checks; don't hand it creative or judgment-heavy writing yet.
