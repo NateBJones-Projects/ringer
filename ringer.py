@@ -2359,6 +2359,7 @@ def scan_run_states(state_dir: Path) -> list[dict[str, Any]]:
             continue
         if not isinstance(data, dict):
             continue
+        data = reconcile_dead_run_state(data)
         try:
             mtime = path.stat().st_mtime
         except OSError:
