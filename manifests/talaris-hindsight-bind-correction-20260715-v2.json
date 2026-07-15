@@ -1,0 +1,26 @@
+{
+  "run_name": "talaris-hindsight-bind-correction-20260715-v2",
+  "workdir": "/Users/hermes/ringer/jobs/talaris-hindsight-bind-correction-20260715-v2",
+  "max_parallel": 1,
+  "_purpose": "Correct the failed Hindsight report from talaris-memory-ports-admission-20260715 by forcing explicit reconciliation of process argument, bound socket, and health endpoint evidence.",
+  "_safety": {
+    "control_plane_authority": "read_only",
+    "live_mutation": false,
+    "credential_access": false,
+    "dispatch_rule": "Read the deterministic preflight packet and non-secret metadata only. Do not edit, restart, signal, unload, bootstrap, claim, close, or synchronize anything."
+  },
+  "tasks": [
+    {
+      "key": "hindsight-bind-correction",
+      "task_type": "configuration-audit",
+      "engine": "codex",
+      "model": "gpt-5.6-sol",
+      "timeout_s": 600,
+      "engine_args": ["-c", "model_reasoning_effort=low"],
+      "expect_files": ["hindsight-bind-correction.json"],
+      "spec": "Read /Users/hermes/ringer/artifacts/talaris-memory-ports-preflight-20260715.json. It is a deterministic, non-secret, read-only preflight packet collected immediately before this run. Assess Bead hermes-24i8. You must distinguish three independent facts: (1) configured_port_claim comes only from the live process command-line --port argument; (2) observed_bind_port comes only from lsof LISTEN evidence; (3) healthy_port comes only from a successful curl health response. Do not infer a bound socket from the process argument. If sandbox permits, you may repeat the same read-only SSH probes, but the preflight packet is the evidence source of record. Write ./hindsight-bind-correction.json as valid JSON with schema_version, checked_at, bead, preflight_path, talaris_hostname, configured_port_claim, observed_bind_port, healthy_port, port_9177_listener_present, port_9177_health_success, mismatch_verified, evidence_by_source (process_argument, listener, health), root_cause, runtime_impact, minimal_reversible_fix_proposal, no_change_option, executable_verification_plan, rollback, commands_run, and caveats. Based on the packet, the process argument is 9177 while both actual bind and healthy response are 8888. mismatch_verified must describe that exact disagreement. This is a proposal only; make no changes.",
+      "check": "/Users/hermes/homebrew/bin/python3 -c \"import json,subprocess,sys; d=json.load(open('hindsight-bind-correction.json')); live=json.loads(subprocess.check_output(['ssh','-o','BatchMode=yes','talaris','curl -fsS --max-time 5 http://127.0.0.1:8888/health'],text=True)); l8888=subprocess.check_output(['ssh','-o','BatchMode=yes','talaris','lsof -nP -iTCP:8888 -sTCP:LISTEN'],text=True); p=subprocess.check_output(['ssh','-o','BatchMode=yes','talaris','ps -p 4659 -o command='],text=True); p9177=subprocess.run(['ssh','-o','BatchMode=yes','talaris','lsof -nP -iTCP:9177 -sTCP:LISTEN'],text=True,capture_output=True); req=['schema_version','checked_at','bead','preflight_path','talaris_hostname','configured_port_claim','observed_bind_port','healthy_port','evidence_by_source','root_cause','minimal_reversible_fix_proposal','executable_verification_plan','rollback','commands_run']; miss=[k for k in req if d.get(k) in (None,'',[],{})]; ok=(not miss and str(d.get('configured_port_claim'))=='9177' and str(d.get('observed_bind_port'))=='8888' and str(d.get('healthy_port'))=='8888' and d.get('port_9177_listener_present') is False and d.get('port_9177_health_success') is False and d.get('mismatch_verified') is True and live.get('status')=='healthy' and ':8888' in l8888 and '--port 9177' in p and p9177.returncode!=0); ok or sys.exit('FAIL missing=%r report=%r live=%r l9177_rc=%r' % (miss,{k:d.get(k) for k in ['configured_port_claim','observed_bind_port','healthy_port','port_9177_listener_present','port_9177_health_success','mismatch_verified']},live,p9177.returncode)); print('Hindsight argument/bind mismatch verified live: --port 9177, LISTEN+healthy on 8888, no 9177 listener')\"",
+      "verified": "The corrected report distinguishes requested from effective port and is independently checked against live Talaris process, listener, and health evidence."
+    }
+  ]
+}
