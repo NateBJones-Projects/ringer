@@ -311,3 +311,30 @@ checks and raw logs support — no vibes, no worker self-reports.
 
 ## opencode / z-ai glm-5.2 (via openrouter)
 - 2026-07-09 (aicred-invoice-downloads, 4 code-fix tasks + 1 follow-up, worktrees+npm ci checks): systematic attempt-1 NO-OP — all 4 parallel workers produced zero edits and no summary on first attempt, then completed cleanly on attempt 2 after retry-prompt injection (34k-69k tokens each). Follow-up single task passed attempt 1. Suspect first-invocation session warm-up in opencode-sandboxed under parallel spawn; budget for 2 attempts on parallel GLM batches. Output quality on Next.js/Stripe route+test work: solid, spec-faithful, one boss-caught design gap (used user-scoped supabase client where RLS demanded service role — spec didn't say explicitly; say it explicitly).
+
+## claude — per-engine allow_full_access scoping (2026-07-15, task #43)
+- Task #43 asked, before touching ringer.py, to first check whether the whole
+  problem evaporates on a newer Claude Code build (i.e. whether Seatbelt
+  containment now holds and claude no longer needs full_access at all).
+  Checked `claude --version` (2.1.210) against npm's published latest
+  (`npm view @anthropic-ai/claude-code version` → 2.1.210) — already on
+  latest, and it's the exact build the 2026-07-15 containment finding above
+  was verified against, same day. No newer build exists to re-test against,
+  so the containment re-test was NOT re-run — re-running it would just
+  reproduce the same result on the same binary. If a newer Claude Code build
+  ships later, re-verify with the direct `sandbox-exec` reproduction
+  described above before assuming this is still needed.
+- Implemented the per-engine override anyway, per the task's own framing:
+  "it's still correct defense-in-depth" even if claude's containment gap
+  closes later. `EngineConfig.allow_full_access` (default `False`) plus a
+  shared `full_access_permitted(config, engine)` resolver, checked at both
+  enforcement sites (`RingerRunner._run_worker` and the `dry_run` preview) —
+  see README.md "Full access is scoped, not just gated" and the
+  `[engines.claude]` example in `config.sample.toml`. Resolves the exact gap
+  flagged in the "claude" section above ("FULL_ACCESS IS A CONFIG-WIDE
+  GATE, NOT PER-ENGINE"): the global switch staying `false` still locks out
+  every engine without its own opt-in — this is additive scoping, not a
+  relaxed default. 19 new tests in `tests/test_full_access_scope.py` cover
+  config parsing, the resolver function directly, and both real
+  enforcement sites (denied/allowed/no-leak-to-other-engines/global-on
+  back-compat).

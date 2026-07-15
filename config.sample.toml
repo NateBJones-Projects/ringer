@@ -19,7 +19,11 @@ dashboard_port_base = 8787
 # hud_app_path = "/Applications/Ringside.app"
 
 # Belt-and-suspenders full-access gate. A task with "full_access": true will
-# still fail unless this is true.
+# still fail unless this is true — OR unless its specific engine sets its own
+# allow_full_access = true in its [engines.<name>] block below (see the
+# [engines.claude] example). The global switch staying false still locks out
+# every engine that does NOT set its own override, exactly as if per-engine
+# overrides didn't exist — this is additive scoping, not a relaxed default.
 allow_full_access = false
 
 # Optional model steering. The directory must contain profiles/ with one
@@ -115,6 +119,54 @@ model_report_regex = "(?m)^model:[ \\t]*([^ \\t\\r\\n]+)[ \\t]*\\r?$"
 # CLIs report cost as "included in plan"; regex is a harmless no-match. Its JSON
 # also does not self-report a model, so no model_report_regex is configured.
 # token_regex = "\"total_tokens\"\\s*:\\s*([0-9]+)"
+
+# Claude Code CLI (headless `claude -p`), OAuth harness. Claude Code has no OS
+# sandbox of its own, and macOS Seatbelt (sandbox-exec) does NOT reliably
+# confine its own Bash-tool/Write-tool file writes on this machine — verified
+# 2026-07-15 against Claude Code 2.1.210, reproduced twice with a direct
+# sandbox-exec invocation of the `claude` binary (bypassing any wrapper),
+# while the identical profile correctly confines a plain /bin/sh. So
+# sandbox_args is deliberately empty and every real claude task must set
+# "full_access": true in its manifest. Rather than flipping the top-level
+# allow_full_access on (which would also unblock full access for every OTHER
+# engine sharing this config), this engine opts itself in with its own
+# allow_full_access = true — see "Full access is scoped, not just gated" in
+# README.md. `bin` should point at a wrapper script that refuses to run
+# without an explicit full-access flag rather than silently running
+# unconfined and calling it sandboxed (ringer's own invariant #2). Keep
+# claude tasks scoped to scratch dirs, not live repos, until Seatbelt
+# containment is re-verified against a newer Claude Code build.
+# Uncomment and set an absolute path for `bin` to enable.
+# [engines.claude]
+# bin = "/absolute/path/to/engines/claude-sandboxed.sh"
+# model_default = "sonnet"
+# allow_full_access = true
+# args_template = [
+#   "{taskdir}",
+#   "{access_args}",
+#   "-p",
+#   "{spec}",
+#   "--setting-sources",
+#   "",
+#   "--strict-mcp-config",
+#   "--no-session-persistence",
+#   "--tools",
+#   "Bash,Edit,Read,Write",
+#   "--permission-mode",
+#   "bypassPermissions",
+#   "--output-format",
+#   "text",
+#   "--model",
+#   "{model}",
+#   "{engine_args}",
+# ]
+# sandbox_args = []
+# full_access_args = ["--full-access-ack"]
+# --output-format text prints prose, no "tokens used: N" line — harmless
+# no-match, same as the plan-billed Grok block above. Switch a task to
+# ["--output-format", "json"] via engine_args and this would need a
+# JSON-aware regex against usage.output_tokens to extract anything.
+# token_regex = "tokens\\s+used\\s*:?\\s*([0-9][0-9,]*)"
 
 # For CI, acceptance evals, and trying Ringer without an API bill.
 # [engines.mock]

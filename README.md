@@ -102,7 +102,7 @@ Each task gets its own directory, its own worker, its own log, and its own verdi
 | `timeout_s` | Per-task kill timer (default 900) |
 | `engine_args` | Extra CLI flags for this task's worker, spliced in at the engine's `{engine_args}` placeholder — e.g. `["-c", "model_reasoning_effort=low"]` so the orchestrator picks reasoning depth per task |
 | `verified` | One plain-English sentence saying what the check proves — shown on the results page next to "finished & checked" |
-| `full_access` | Worker runs unsandboxed — required for workers that spawn their own sub-workers; must also be enabled in config |
+| `full_access` | Worker runs unsandboxed — required for workers that spawn their own sub-workers; also requires `allow_full_access = true` globally in config, or `allow_full_access = true` on this task's specific `[engines.<name>]` block (see [Full access is scoped, not just gated](#full-access-is-scoped-not-just-gated)) |
 | `worktrees` (run-level) | Give each task an isolated git worktree of `repo` so parallel workers can't collide |
 
 > **Worktree footgun:** on PASS the task's worktree is removed — including anything written inside it. In worktrees mode, worker logs live outside task worktrees in `workdir/logs/`; have workers write deliverables outside the worktree too, or have your `check` copy artifacts out before it exits 0.
@@ -193,6 +193,33 @@ grok login
 ```
 
 Route with per-task `"engine": "grok"` and pick the model with `"model": "grok-build"` or `"model": "grok-composer-2.5-fast"` (the shipped default — the speed pick). Grok brings its own OS sandbox on macOS (profile `workspace`: read everywhere, writes confined to the task dir, temp, and `~/.grok`), and its JSON output exposes no token counts — plan-billed workers report cost as included in plan.
+
+### Full access is scoped, not just gated
+
+The top-level `allow_full_access = false` in config is a belt-and-suspenders switch: even a task with `"full_access": true` still refuses to run unsandboxed unless this is flipped on. That's the right default when every engine in your config brings real OS-level write confinement.
+
+It stops being the right shape once one engine in the config *can't* be sandboxed at all. Claude Code is the example that forced this: it has no OS sandbox of its own, and macOS Seatbelt (`sandbox-exec`) does not reliably confine its own Bash-tool/Write-tool file writes even under a profile that correctly confines a plain `/bin/sh` (verified 2026-07-15 against Claude Code 2.1.210 — reproduced twice with a direct `sandbox-exec` invocation of the `claude` binary, bypassing any wrapper script). So a `claude` engine's `sandbox_args` has to be empty, and every real `claude` task has to request `full_access`. Flipping the global `allow_full_access` on to unblock claude would also unblock full access for every *other* engine sharing that config — codex and grok don't need that exposure just because claude does.
+
+`allow_full_access` can also be set inside an individual `[engines.<name>]` block. A task's `full_access: true` request is permitted if **either** the global switch is on **or** that task's specific engine has opted in — the global staying `false` still locks out every engine that hasn't explicitly opted in, exactly as before this existed:
+
+```toml
+# Global gate stays at its safe default — codex, grok, and any other engine
+# without their own override stay locked out of full_access.
+allow_full_access = false
+
+[engines.claude]
+bin = "/absolute/path/to/engines/claude-sandboxed.sh"
+# Claude Code has no real OS-level write confinement on this machine (see
+# above) — every claude task must run full_access, so this engine opts
+# itself in rather than requiring the global switch. Keep claude tasks
+# scoped to scratch dirs, not live repos, until Seatbelt containment is
+# re-verified against a newer Claude Code build.
+allow_full_access = true
+sandbox_args = []
+full_access_args = ["--full-access-ack"]
+```
+
+`ringer.py dry_run` (the default before a real run) prints `allowed=True`/`allowed=False` per task using this same resolution, so what you see in the preview is exactly what `_run_worker` will do.
 
 ## Ringside — mission control
 

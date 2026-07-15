@@ -118,6 +118,12 @@ class EngineConfig:
     # its own "model" — this is what makes a harness engine (OpenCode) model
     # agnostic instead of hard-coding one model into the command line.
     model_default: str = ""
+    # Per-engine override of the global allow_full_access switch. A task's
+    # full_access=true request is permitted iff the global config.allow_full_access
+    # is true OR this engine's allow_full_access is true — see full_access_permitted().
+    # Defaults to False: an engine gets no full-access override unless its config
+    # section (or a built-in default for that engine name) opts in explicitly.
+    allow_full_access: bool = False
 
     @property
     def process_name(self) -> str:
@@ -608,6 +614,11 @@ def load_engines(raw: Any) -> dict[str, EngineConfig]:
         model_default = str(
             section.get("model_default", base.model_default if base else "")
         ).strip()
+        engine_allow_full_access = bool(
+            section.get(
+                "allow_full_access", base.allow_full_access if base else False
+            )
+        )
         engines[clean_name] = EngineConfig(
             name=clean_name,
             bin=bin_path,
@@ -617,6 +628,7 @@ def load_engines(raw: Any) -> dict[str, EngineConfig]:
             token_regex=token_regex,
             model_report_regex=model_report_regex,
             model_default=model_default,
+            allow_full_access=engine_allow_full_access,
         )
     return engines
 
@@ -7655,14 +7667,15 @@ class RingerRunner:
                 tokens=None,
                 error=f"unknown worker engine: {runtime.task.engine}",
             )
-        if runtime.task.full_access and not self.config.allow_full_access:
+        if runtime.task.full_access and not full_access_permitted(self.config, engine):
             return WorkerResult(
                 returncode=None,
                 timed_out=False,
                 tokens=None,
                 error=(
                     f"task requested full_access with engine {runtime.task.engine}, "
-                    "but config allow_full_access is false"
+                    "but config allow_full_access is false and "
+                    f"engines.{runtime.task.engine}.allow_full_access is not true"
                 ),
             )
         cmd = build_worker_command(
@@ -8137,6 +8150,21 @@ def resolved_task_model(
     )
 
 
+def full_access_permitted(config: AppConfig, engine: EngineConfig | None) -> bool:
+    """Whether a task's full_access=true request is allowed to proceed.
+
+    Permitted iff the global config.allow_full_access switch is true, OR the
+    task's specific engine has individually opted in via its own
+    allow_full_access=true. The global switch staying false must keep every
+    engine WITHOUT an explicit per-engine override locked out, exactly as
+    before this per-engine override existed — this is additive, not a relaxation
+    of the global default.
+    """
+    if config.allow_full_access:
+        return True
+    return bool(engine is not None and engine.allow_full_access)
+
+
 def build_worker_command(
     engine: EngineConfig,
     *,
@@ -8565,7 +8593,7 @@ def dry_run(
     for task in manifest.tasks:
         taskdir = (manifest.workdir / task.key).resolve()
         engine = config.engines.get(task.engine)
-        full_access_allowed = task.full_access and config.allow_full_access
+        full_access_allowed = task.full_access and full_access_permitted(config, engine)
         cmd = (
             build_worker_command(
                 engine,
@@ -8590,8 +8618,11 @@ def dry_run(
         print(f"    check: {task.check}")
         if engine is None:
             print("    command: ERROR unknown engine")
-        elif task.full_access and not config.allow_full_access:
-            print("    command: ERROR full_access requires allow_full_access=true in config")
+        elif task.full_access and not full_access_permitted(config, engine):
+            print(
+                "    command: ERROR full_access requires allow_full_access=true in "
+                f"config or engines.{task.engine}.allow_full_access=true"
+            )
         else:
             print(f"    command: {shell_command_for_display(cmd)} < /dev/null")
 
