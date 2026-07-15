@@ -22,6 +22,16 @@ dashboard_port_base = 8787
 # still fail unless this is true.
 allow_full_access = false
 
+[update]
+# Check origin/main before command dispatch and let a long-running HUD check
+# again on this interval. Updates apply only as a clean ff-only move on main.
+# Set auto=false to disable both automatic paths; `./ringer.py self-update`
+# remains available as an explicit check.
+# auto = true
+# check_interval_s = 3600
+# For one command, pass --no-self-update. To disable automatic checks in an
+# environment or service, set RINGER_NO_SELF_UPDATE=1.
+
 # Optional model steering. The directory must contain profiles/ with one
 # Markdown profile per model. Ringer creates observations/ringer/ beneath this
 # directory automatically as attempts finish.
