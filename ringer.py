@@ -4298,6 +4298,21 @@ def read_json_object(path: Path, default: dict[str, Any]) -> dict[str, Any]:
     return data if isinstance(data, dict) else default
 
 
+# Derive liveness on read: persisting from an HTTP GET could race a live run's flush.
+# It would also bump mtime and move a ghost to the top of the mtime-ordered feed.
+def reconcile_dead_run_state(data: dict[str, Any]) -> dict[str, Any]:
+    if data.get("state") != "live":
+        return data
+    pid = data.get("pid")
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return data
+    if pid_is_alive(pid):
+        return data
+    reconciled = dict(data)
+    reconciled["state"] = "died"
+    return reconciled
+
+
 def scan_hud_run_states(state_dir: Path, *, limit: int = 12) -> list[dict[str, Any]]:
     runs_dir = state_dir / "runs"
     try:
@@ -4316,7 +4331,7 @@ def scan_hud_run_states(state_dir: Path, *, limit: int = 12) -> list[dict[str, A
     for path in paths[:limit]:
         data = read_json_object(path, {})
         if data:
-            runs.append(data)
+            runs.append(reconcile_dead_run_state(data))
     return runs
 
 

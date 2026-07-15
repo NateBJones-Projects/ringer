@@ -4,6 +4,7 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -119,6 +120,69 @@ class PersistentHudServerTests(unittest.TestCase):
         port = server.start()
         self.addCleanup(server.stop)
         return server, port
+
+    def test_dead_live_run_is_reported_as_died(self) -> None:
+        proc = subprocess.Popen([sys.executable, "-c", "pass"])
+        proc.wait()
+        self.write_run("dead-run", {"run_id": "dead-run", "state": "live", "pid": proc.pid}, 3000.0)
+
+        runs = ringer.scan_hud_run_states(self.state_dir)
+
+        dead_run = next(item for item in runs if item["run_id"] == "dead-run")
+        self.assertEqual("died", dead_run["state"])
+
+    def test_live_run_with_alive_pid_stays_live(self) -> None:
+        self.write_run("alive-run", {"run_id": "alive-run", "state": "live", "pid": os.getpid()}, 3000.0)
+
+        runs = ringer.scan_hud_run_states(self.state_dir)
+
+        alive_run = next(item for item in runs if item["run_id"] == "alive-run")
+        self.assertEqual("live", alive_run["state"])
+
+    def test_finished_run_is_passed_through_untouched(self) -> None:
+        finished_run = {
+            "run_id": "already-finished",
+            "state": "finished",
+            "finished": True,
+            "pid": -1,
+        }
+        self.write_run("already-finished", finished_run, 3000.0)
+
+        runs = ringer.scan_hud_run_states(self.state_dir)
+
+        actual = next(item for item in runs if item["run_id"] == "already-finished")
+        self.assertEqual(finished_run, actual)
+
+    def test_live_run_without_usable_pid_stays_live(self) -> None:
+        cases = {
+            "missing-pid": {"run_id": "missing-pid", "state": "live"},
+            "string-pid": {"run_id": "string-pid", "state": "live", "pid": "123"},
+            "bool-pid": {"run_id": "bool-pid", "state": "live", "pid": False},
+        }
+        for index, (run_id, data) in enumerate(cases.items()):
+            self.write_run(run_id, data, 3000.0 + index)
+
+        runs = ringer.scan_hud_run_states(self.state_dir)
+
+        states = {item["run_id"]: item["state"] for item in runs}
+        for run_id in cases:
+            with self.subTest(run_id=run_id):
+                self.assertEqual("live", states[run_id])
+
+    def test_reading_runs_does_not_modify_run_file(self) -> None:
+        proc = subprocess.Popen([sys.executable, "-c", "pass"])
+        proc.wait()
+        self.write_run("dead-run", {"run_id": "dead-run", "state": "live", "pid": proc.pid}, 3000.0)
+        path = self.runs_dir / "dead-run.json"
+        bytes_before = path.read_bytes()
+        mtime_before = path.stat().st_mtime_ns
+
+        runs = ringer.scan_hud_run_states(self.state_dir)
+
+        dead_run = next(item for item in runs if item["run_id"] == "dead-run")
+        self.assertEqual("died", dead_run["state"])
+        self.assertEqual(bytes_before, path.read_bytes())
+        self.assertEqual(mtime_before, path.stat().st_mtime_ns)
 
     def test_hud_serves_runs_library_artifacts_logs_and_ringside_page(self) -> None:
         _server, port = self.start_server()
