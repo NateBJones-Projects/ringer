@@ -77,6 +77,13 @@ confidence = "verified"
 source = "manifest model field; OpenRouter slug z-ai/glm-5.2"
 last_verified = 2026-07-10
 
+[engines.opencode.models."openrouter/x-ai/grok-4.5"]
+display = "Grok 4.5"
+lab = "xAI"
+confidence = "verified"
+source = "manifest model field; OpenRouter slug x-ai/grok-4.5"
+last_verified = 2026-07-15
+
 [engines.opencode.models."openrouter/moonshotai/kimi-k2.7-code"]
 display = "Kimi K2.7 Code"
 lab = "Moonshot AI"
