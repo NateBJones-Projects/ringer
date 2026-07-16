@@ -227,6 +227,24 @@ Multiple swarms at once is the designed-for case: run three batches under three 
 
 A native desktop build (Tauri, under `hud/`) exists as a v0.1.1 prototype; the web dashboard is currently ahead of it — start there.
 
+## Self-update
+
+Ringer checks `origin/main` at process start, before it dispatches the requested command. Checks are throttled to once per hour by default. You can also run `./ringer.py self-update` for an immediate, human-readable check that ignores the throttle.
+
+An automatic update applies only when the checkout containing `ringer.py` is on `main`, has no tracked changes, and `origin/main` can be reached with a fast-forward-only update. Untracked files do not block it. After applying, Ringer restarts the original invocation so the requested command runs on the new code.
+
+Ringer never creates a merge commit, never rebases, never stashes or deletes changes, and never updates a dirty tracked tree. Regular commands do not update in the middle of a run: their only check happens at process start before dispatch.
+
+The persistent `hud` command is the exception for long-running code. It checks on the configured interval and restarts itself after an ff-only update. It also restarts when the checkout's on-disk HEAD changes after a manual pull. Before restarting it closes the HTTP server, whose socket is configured for immediate reuse. If an update is available but blocked, Ringside keeps serving the running code and shows the reason in a dismissible banner.
+
+Disable automatic checks for one invocation with `--no-self-update`, for an environment or service with `RINGER_NO_SELF_UPDATE=1`, or permanently in config:
+
+```toml
+[update]
+auto = false
+check_interval_s = 3600
+```
+
 ## The eval loop
 
 ![Timed, verified, logged](docs/eval-loop.png)
@@ -234,6 +252,10 @@ A native desktop build (Tauri, under `hud/`) exists as a v0.1.1 prototype; the w
 Every worker attempt — pass, fail, timeout, retry — is logged with its spec, engine, duration, token count, and the raw check output. Local JSONL by default; point `[eval.postgres]` at a database to aggregate across machines. Failure rows are the point: they tell you which spec styles, engines, and task shapes actually work, so the swarm gets better on evidence instead of vibes.
 
 ## Model performance log
+
+### Model identity taxonomy
+
+The scoreboard keeps the trained model, its lab, the invoking harness, the access plan, and any explicit reasoning effort as separate fields. Reserved test names never render, and historical rows without a stamped model are quarantined instead of being credited to an engine default. See the normative [model identity taxonomy](docs/TAXONOMY.md).
 
 Every task attempt is logged **automatically and locally** to `~/.ringer/runs.jsonl` — no setup, no account, nothing leaves your machine. Each row carries the per-attempt verdict straight from the EXECUTED check, plus duration, tokens, the resolved `model`, the task's `task_type` (if the manifest set one), and the `retry` number.
 
@@ -315,6 +337,15 @@ Four rules are baked into every worker invocation. They all cost us real debuggi
 3. **Verification executes the artifact** — an agent's own "done" is not evidence. Exit codes are.
 4. **Raw output only** — logs and eval rows carry verbatim worker output, never a summary. Anything that needs judgment reads the raw data.
 
+## Contributors
+
+Community PRs that made it into main — thank you:
+
+- [@oceanonline](https://github.com/oceanonline) — portable `python3` in template checks + lint quickstart path (#24)
+- [@davekopecek](https://github.com/davekopecek) — committed design-reference fixture so the design-token guard runs everywhere (#30)
+
+Contributions are welcome. Small and scoped merges fastest; PRs keep their author's name on the commit.
+
 ## License
 
 [PolyForm Shield 1.0.0](LICENSE.md) — free to use, modify, and share, including inside your own commercial work. The one thing you can't do is offer Ringer or Ringside (or a derivative that competes with them) as a product or service of your own. Commercial rights to the tool itself belong to Nate Jones Media LLC.
@@ -329,4 +360,4 @@ Four rules are baked into every worker invocation. They all cost us real debuggi
 
 ---
 
-Built by [Jon Edwards](https://limitededitionjonathan.com) and his agent fleet — a Claude orchestrator wrote the specs and reviewed the diffs, Codex swarms wrote the implementation, and this repo's own eval table caught its first three bugs. The tool is its own proof of concept.
+Built by [Nate Jones](https://natejones.com) and maintained by [LEJ](https://limitededitionjonathan.com) — a Claude orchestrator wrote the specs and reviewed the diffs, Codex swarms wrote the implementation, and this repo's own eval table caught its first three bugs. The tool is its own proof of concept.

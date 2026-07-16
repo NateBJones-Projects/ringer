@@ -22,6 +22,16 @@ dashboard_port_base = 8787
 # still fail unless this is true.
 allow_full_access = false
 
+[update]
+# Check origin/main before command dispatch and let a long-running HUD check
+# again on this interval. Updates apply only as a clean ff-only move on main.
+# Set auto=false to disable both automatic paths; `./ringer.py self-update`
+# remains available as an explicit check.
+# auto = true
+# check_interval_s = 3600
+# For one command, pass --no-self-update. To disable automatic checks in an
+# environment or service, set RINGER_NO_SELF_UPDATE=1.
+
 # Optional model steering. The directory must contain profiles/ with one
 # Markdown profile per model. Ringer creates observations/ringer/ beneath this
 # directory automatically as attempts finish.
@@ -76,6 +86,11 @@ full_access_args = ["--dangerously-bypass-approvals-and-sandbox"]
 # First capture group should be the integer token count.
 token_regex = "tokens\\s+used\\s*:?\\s*([0-9][0-9,]*)"
 
+# First capture group should be the model slug self-reported by the harness.
+# Ringer applies this to captured worker output after every attempt. The Codex
+# default reads the `model:` header; override it here only if that format changes.
+model_report_regex = "(?m)^model:[ \\t]*([^ \\t\\r\\n]+)[ \\t]*\\r?$"
+
 # Grok Build CLI (xAI). Install: curl -fsSL https://x.ai/cli/install.sh | bash
 # (or: npm install -g @xai-official/grok), then `grok login` — OAuth on a
 # SuperGrok or X Premium Plus plan. Headless mode (-p) runs a full agentic
@@ -107,7 +122,8 @@ token_regex = "tokens\\s+used\\s*:?\\s*([0-9][0-9,]*)"
 # sandbox_args = ["--sandbox", "workspace"]
 # full_access_args = ["--sandbox", "off", "--permission-mode", "bypassPermissions"]
 # Grok's JSON output carries no usage/token fields (verified v0.2.81) — plan
-# CLIs report cost as "included in plan"; regex is a harmless no-match.
+# CLIs report cost as "included in plan"; regex is a harmless no-match. Its JSON
+# also does not self-report a model, so no model_report_regex is configured.
 # token_regex = "\"total_tokens\"\\s*:\\s*([0-9]+)"
 
 # For CI, acceptance evals, and trying Ringer without an API bill.
