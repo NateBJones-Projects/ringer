@@ -35,6 +35,7 @@ class RingerCliTests(unittest.TestCase):
                 "write_empty": ["-c", ": > out.txt"],
                 "write_wrong_file": ["-c", "printf done > wrong.txt"],
                 "sleep_then_write": ["-c", "echo $$ > worker.pid; sleep 30; printf done > out.txt"],
+                "ignore_term": ["-c", "trap '' TERM; echo $$ > worker.pid; while :; do sleep 1; done"],
                 "spec_shell": ["-c", "{spec}"],
                 "token_printer": ["-c", "printf done > out.txt; echo 'tokens used: 1,234'"],
             }
@@ -106,6 +107,7 @@ class RingerCliTests(unittest.TestCase):
             cmd.append("--no-dashboard")
         env = os.environ.copy()
         env["PYTHONDONTWRITEBYTECODE"] = "1"
+        env["RINGER_NO_SELF_UPDATE"] = "1"
         return subprocess.run(
             cmd,
             cwd=ROOT,
@@ -266,9 +268,13 @@ class RingerCliTests(unittest.TestCase):
             "--identity",
             "test-runner",
         ]
+        env = os.environ.copy()
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        env["RINGER_NO_SELF_UPDATE"] = "1"
         proc = subprocess.Popen(
             cmd,
             cwd=ROOT,
+            env=env,
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -293,6 +299,71 @@ class RingerCliTests(unittest.TestCase):
         self.assertTrue(state["finished"])
         self.assertEqual(state["state"], "finished")
         self.assertEqual(state["summary"]["fail"], 1)
+        self.assertEqual(state["tasks"][0]["status"], "fail")
+
+    def test_second_signal_during_shutdown_does_not_cancel_cleanup(self) -> None:
+        manifest = self.write_manifest(
+            "resignal",
+            self.manifest(
+                "resignal",
+                {
+                    "key": "term",
+                    "engine": "ignore_term",
+                    "spec": "Ignore SIGTERM until killed.",
+                    "expect_files": ["out.txt"],
+                    "timeout_s": 30,
+                    "check": 'test "$(cat out.txt 2>/dev/null)" = done',
+                },
+            ),
+        )
+        cmd = [
+            sys.executable,
+            "-B",
+            str(RINGER_PATH),
+            "--config",
+            str(self.config_path),
+            "run",
+            str(manifest),
+            "--no-dashboard",
+            "--identity",
+            "test-runner",
+        ]
+        env = os.environ.copy()
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        env["RINGER_NO_SELF_UPDATE"] = "1"
+        proc = subprocess.Popen(
+            cmd,
+            cwd=ROOT,
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        worker_pid_path = self.root / "work-resignal" / "term" / "worker.pid"
+        try:
+            deadline = time.time() + 10
+            while time.time() < deadline and not worker_pid_path.exists():
+                time.sleep(0.05)
+            self.assertTrue(worker_pid_path.exists())
+            worker_pid = int(worker_pid_path.read_text(encoding="utf-8").strip())
+            proc.send_signal(signal.SIGTERM)
+            # The worker traps TERM, so cleanup is held in the 1s TERM->KILL
+            # escalation window; a second signal lands mid-cleanup.
+            time.sleep(0.3)
+            proc.send_signal(signal.SIGTERM)
+            stdout, _ = proc.communicate(timeout=15)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                stdout, _ = proc.communicate(timeout=10)
+
+        self.assertEqual(proc.returncode, 130, stdout)
+        self.assertIn("shutdown already in progress", stdout)
+        self.assertNotIn("Traceback", stdout)
+        self.assertFalse(self.pid_is_alive(worker_pid), stdout)
+        state = self.read_final_state()
+        self.assertTrue(state["finished"])
+        self.assertEqual(state["state"], "finished")
         self.assertEqual(state["tasks"][0]["status"], "fail")
 
     def test_custom_shell_engine_substitutes_spec_placeholder(self) -> None:
