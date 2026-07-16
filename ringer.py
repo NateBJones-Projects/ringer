@@ -5,6 +5,7 @@ import argparse
 import asyncio
 import base64
 import contextlib
+import errno
 import json
 import mimetypes
 import os
@@ -4425,6 +4426,10 @@ def serve_artifact_path(handler: BaseHTTPRequestHandler, artifact_root: Path, pa
     return True
 
 
+class BindNotPermittedError(RuntimeError):
+    """The environment forbids socket binding (EPERM), so retrying another port is pointless."""
+
+
 class PersistentHudServer:
     def __init__(
         self,
@@ -4554,6 +4559,16 @@ class PersistentHudServer:
         try:
             self.httpd = ThreadingHTTPServer(("127.0.0.1", preferred_port), Handler)
         except OSError as exc:
+            if exc.errno == errno.EPERM:
+                raise BindNotPermittedError(
+                    f"could not start Ringside on 127.0.0.1:{preferred_port}; "
+                    "socket binding is not permitted in this environment (a sandbox). "
+                    "A different port will not help."
+                ) from exc
+            if exc.errno != errno.EADDRINUSE:
+                raise RuntimeError(
+                    f"could not start Ringside on 127.0.0.1:{preferred_port}: {exc}"
+                ) from exc
             raise RuntimeError(
                 f"could not start Ringside on 127.0.0.1:{preferred_port}; "
                 "that port is already in use. Use --port to choose another port."
@@ -4653,6 +4668,12 @@ class Dashboard:
             try:
                 self.httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
             except OSError as exc:
+                if exc.errno == errno.EPERM:
+                    raise BindNotPermittedError(
+                        f"could not start dashboard on 127.0.0.1:{port}; "
+                        "socket binding is not permitted in this environment (a sandbox). "
+                        "A different port will not help."
+                    ) from exc
                 last_error = exc
                 continue
             self.port = int(self.httpd.server_address[1])

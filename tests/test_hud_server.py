@@ -117,7 +117,10 @@ class PersistentHudServerTests(unittest.TestCase):
 
     def start_server(self) -> tuple[PersistentHudServer, int]:
         server = PersistentHudServer(self.state_dir, preferred_port=0, open_viewer=False)
-        port = server.start()
+        try:
+            port = server.start()
+        except ringer.BindNotPermittedError:
+            self.skipTest("environment forbids socket binding")
         self.addCleanup(server.stop)
         return server, port
 

@@ -247,7 +247,10 @@ class ArtifactLibraryTests(unittest.TestCase):
             preferred_port=0,
             open_viewer=False,
         )
-        port = dashboard.start()
+        try:
+            port = dashboard.start()
+        except ringer.BindNotPermittedError:
+            self.skipTest("environment forbids socket binding")
         self.addCleanup(dashboard.stop)
 
         with urlopen(f"http://127.0.0.1:{port}/artifacts/library.json", timeout=5) as response:
