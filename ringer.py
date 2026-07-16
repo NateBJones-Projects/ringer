@@ -57,6 +57,9 @@ DEFAULT_HUD_PORT = 8700
 DEFAULT_CATALOG_SOURCE = "https://openrouter.ai/api/v1/models"
 CATALOG_AUTO_REFRESH_MAX_AGE_S = 24 * 60 * 60
 CATALOG_FETCH_TIMEOUT_S = 5
+DEFAULT_UPDATE_CHECK_INTERVAL_S = 3600
+SELF_UPDATE_FETCH_TIMEOUT_S = 10
+SELF_UPDATE_STATE_FILE = "self-update.json"
 DEFAULT_TOKEN_REGEX = r"tokens\s+used\s*:?\s*([0-9][0-9,]*)"
 DEFAULT_CODEX_MODEL_REPORT_REGEX = r"(?m)^model:[ \t]*([^ \t\r\n]+)[ \t]*\r?$"
 ACTIVITY_TAIL_BYTES = 2048
@@ -159,6 +162,29 @@ class ArtifactConfig:
 class SteeringConfig:
     dir: Path | None = None
     inject_candidates: bool = True
+
+
+@dataclass(frozen=True)
+class UpdateConfig:
+    auto: bool = True
+    check_interval_s: int = DEFAULT_UPDATE_CHECK_INTERVAL_S
+
+
+@dataclass(frozen=True)
+class SelfUpdateResult:
+    status: str
+    behind: int = 0
+    reason: str | None = None
+    old_head: str | None = None
+    new_head: str | None = None
+
+    @property
+    def blocked(self) -> bool:
+        return self.status == "blocked"
+
+    @property
+    def applied(self) -> bool:
+        return self.status == "applied"
 
 
 @dataclass(frozen=True)
@@ -401,6 +427,7 @@ class AppConfig:
     engines: dict[str, EngineConfig]
     artifact: ArtifactConfig
     steering: SteeringConfig = field(default_factory=SteeringConfig)
+    update: UpdateConfig = field(default_factory=UpdateConfig)
 
     @classmethod
     def load(cls, path: Path | None = None) -> "AppConfig":
@@ -427,6 +454,7 @@ class AppConfig:
         eval_config = load_eval_config(data.get("eval"), state_dir)
         engines = load_engines(data.get("engines"))
         artifact_config = load_artifact_config(data.get("artifact"), state_dir)
+        update_config = load_update_config(data.get("update"))
         try:
             steering_config = load_steering_config(data.get("steering"))
         except Exception:
@@ -445,6 +473,7 @@ class AppConfig:
             engines=engines,
             artifact=artifact_config,
             steering=steering_config,
+            update=update_config,
         )
 
 
@@ -463,6 +492,351 @@ def env_config_path() -> Path | None:
 
 def default_state_dir() -> Path:
     return Path.home() / STATE_DIR_NAME
+
+
+def load_update_config(raw: Any) -> UpdateConfig:
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ValueError("update must be a TOML table")
+    interval = int(raw.get("check_interval_s", DEFAULT_UPDATE_CHECK_INTERVAL_S))
+    if interval <= 0:
+        raise ValueError("update.check_interval_s must be positive")
+    return UpdateConfig(auto=bool(raw.get("auto", True)), check_interval_s=interval)
+
+
+def self_update_state_path(state_dir: Path) -> Path:
+    return state_dir.expanduser().resolve() / SELF_UPDATE_STATE_FILE
+
+
+def _read_self_update_state(path: Path) -> dict[str, Any]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _self_update_timestamp(now: datetime | None = None) -> str:
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    return current.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _record_self_update_state(
+    path: Path,
+    repo_dir: Path,
+    *,
+    behind: int,
+    reason: str | None = None,
+    error: str | None = None,
+    now: datetime | None = None,
+) -> None:
+    try:
+        state = _read_self_update_state(path)
+        state[str(repo_dir.resolve())] = {
+            "last_check": _self_update_timestamp(now),
+            "behind": max(0, int(behind)),
+            "reason": reason,
+            "error": error,
+        }
+        atomic_write_json(path, state)
+    except Exception:
+        pass
+
+
+def _self_update_is_throttled(
+    path: Path,
+    repo_dir: Path,
+    interval_s: int,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    entry = _read_self_update_state(path).get(str(repo_dir.resolve()))
+    if not isinstance(entry, dict):
+        return False
+    try:
+        checked = datetime.fromisoformat(str(entry.get("last_check", "")))
+        if checked.tzinfo is None:
+            checked = checked.replace(tzinfo=timezone.utc)
+        current = now or datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=timezone.utc)
+        return (current.astimezone(timezone.utc) - checked.astimezone(timezone.utc)).total_seconds() < interval_s
+    except (TypeError, ValueError):
+        return False
+
+
+def self_update_dashboard_status(state_dir: Path, repo_dir: Path) -> dict[str, Any] | None:
+    entry = _read_self_update_state(self_update_state_path(state_dir)).get(str(repo_dir.resolve()))
+    if not isinstance(entry, dict):
+        return None
+    try:
+        behind = int(entry.get("behind") or 0)
+    except (TypeError, ValueError):
+        return None
+    reason = str(entry.get("reason") or "").strip()
+    if behind <= 0 or not reason:
+        return None
+    return {"behind": behind, "reason": reason}
+
+
+def decide_self_update(
+    *,
+    behind: int,
+    branch: str,
+    tracked_changes: bool,
+    fast_forward_possible: bool,
+) -> str | None:
+    """Return the concrete block reason, or None when an ff-only update is safe."""
+    if behind <= 0:
+        return None
+    if branch != "main":
+        return f"current branch is {branch or 'detached HEAD'}, not main"
+    if tracked_changes:
+        return "tracked files are modified"
+    if not fast_forward_possible:
+        return "local main has diverged from origin/main"
+    return None
+
+
+def _git_result_text(result: Any) -> str:
+    text = str(getattr(result, "stderr", "") or getattr(result, "stdout", "") or "").strip()
+    return " ".join(text.split())
+
+
+def _run_self_update_git(
+    runner: Any,
+    git_bin: str,
+    repo_dir: Path,
+    *args: str,
+) -> Any:
+    return runner(
+        [git_bin, "-C", str(repo_dir), *args],
+        capture_output=True,
+        text=True,
+        timeout=SELF_UPDATE_FETCH_TIMEOUT_S,
+    )
+
+
+def _self_update_error_reason(action: str, result: Any) -> str:
+    detail = _git_result_text(result)
+    return f"{action} failed" + (f": {detail}" if detail else "")
+
+
+def perform_self_update(
+    *,
+    config: AppConfig,
+    argv: list[str],
+    repo_dir: Path | None = None,
+    script_path: Path | None = None,
+    force: bool = False,
+    allow_reexec: bool = True,
+    warn_blocked: bool = False,
+    runner: Any = subprocess.run,
+    execve: Any = os.execve,
+    environ: dict[str, str] | None = None,
+    now: datetime | None = None,
+) -> SelfUpdateResult:
+    """Fetch origin/main and apply only a clean, main-branch fast-forward."""
+    repo = (repo_dir or Path(__file__).resolve().parent).resolve()
+    script = (script_path or Path(__file__).resolve()).resolve()
+    state_path = self_update_state_path(config.state_dir)
+    known_behind = 0
+    git_bin = shutil.which("git")
+    if not (repo / ".git").exists():
+        return SelfUpdateResult("skipped", reason="not a git checkout")
+    if git_bin is None:
+        return SelfUpdateResult("skipped", reason="git binary not found")
+    if not force and _self_update_is_throttled(
+        state_path, repo, config.update.check_interval_s, now=now
+    ):
+        return SelfUpdateResult("throttled")
+
+    try:
+        fetched = _run_self_update_git(runner, git_bin, repo, "fetch", "--quiet", "origin", "main")
+        if fetched.returncode != 0:
+            reason = _self_update_error_reason("fetch", fetched)
+            _record_self_update_state(state_path, repo, behind=0, error=reason, now=now)
+            return SelfUpdateResult("error", reason=reason)
+
+        behind_result = _run_self_update_git(
+            runner, git_bin, repo, "rev-list", "--count", "HEAD..origin/main"
+        )
+        if behind_result.returncode != 0:
+            reason = _self_update_error_reason("behind check", behind_result)
+            _record_self_update_state(state_path, repo, behind=0, error=reason, now=now)
+            return SelfUpdateResult("error", reason=reason)
+        known_behind = int(str(behind_result.stdout).strip())
+        if known_behind <= 0:
+            _record_self_update_state(state_path, repo, behind=0, reason="up to date", now=now)
+            return SelfUpdateResult("up_to_date")
+
+        branch_result = _run_self_update_git(
+            runner, git_bin, repo, "symbolic-ref", "--quiet", "--short", "HEAD"
+        )
+        if branch_result.returncode == 0:
+            branch = str(branch_result.stdout).strip()
+        elif branch_result.returncode == 1:
+            branch = ""
+        else:
+            reason = _self_update_error_reason("branch check", branch_result)
+            _record_self_update_state(
+                state_path, repo, behind=known_behind, error=reason, now=now
+            )
+            return SelfUpdateResult("error", behind=known_behind, reason=reason)
+        status_result = _run_self_update_git(
+            runner, git_bin, repo, "status", "--porcelain", "--untracked-files=no"
+        )
+        if status_result.returncode != 0:
+            reason = _self_update_error_reason("status check", status_result)
+            _record_self_update_state(
+                state_path, repo, behind=known_behind, error=reason, now=now
+            )
+            return SelfUpdateResult("error", behind=known_behind, reason=reason)
+        ancestor_result = _run_self_update_git(
+            runner, git_bin, repo, "merge-base", "--is-ancestor", "HEAD", "origin/main"
+        )
+        if ancestor_result.returncode not in {0, 1}:
+            reason = _self_update_error_reason("fast-forward check", ancestor_result)
+            _record_self_update_state(
+                state_path, repo, behind=known_behind, error=reason, now=now
+            )
+            return SelfUpdateResult("error", behind=known_behind, reason=reason)
+        reason = decide_self_update(
+            behind=known_behind,
+            branch=branch,
+            tracked_changes=bool(str(status_result.stdout).strip()),
+            fast_forward_possible=ancestor_result.returncode == 0,
+        )
+        if reason is not None:
+            _record_self_update_state(
+                state_path, repo, behind=known_behind, reason=reason, now=now
+            )
+            if warn_blocked:
+                print(
+                    f"[ringer] self-update: {known_behind} commit(s) behind; {reason}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            return SelfUpdateResult("blocked", behind=known_behind, reason=reason)
+
+        old_result = _run_self_update_git(runner, git_bin, repo, "rev-parse", "--short", "HEAD")
+        if old_result.returncode != 0 or not str(old_result.stdout).strip():
+            reason = _self_update_error_reason("current HEAD check", old_result)
+            _record_self_update_state(
+                state_path, repo, behind=known_behind, error=reason, now=now
+            )
+            return SelfUpdateResult("error", behind=known_behind, reason=reason)
+        old_head = str(old_result.stdout).strip()
+        new_result = _run_self_update_git(
+            runner, git_bin, repo, "rev-parse", "--short", "origin/main"
+        )
+        if new_result.returncode != 0 or not str(new_result.stdout).strip():
+            reason = _self_update_error_reason("origin/main HEAD check", new_result)
+            _record_self_update_state(
+                state_path, repo, behind=known_behind, error=reason, now=now
+            )
+            return SelfUpdateResult("error", behind=known_behind, reason=reason)
+        new_head = str(new_result.stdout).strip()
+        merged = _run_self_update_git(runner, git_bin, repo, "merge", "--ff-only", "origin/main")
+        if merged.returncode != 0:
+            failure = _self_update_error_reason("fast-forward", merged)
+            _record_self_update_state(
+                state_path, repo, behind=known_behind, error=failure, now=now
+            )
+            return SelfUpdateResult("error", behind=known_behind, reason=failure)
+        _record_self_update_state(state_path, repo, behind=0, reason="applied", now=now)
+        result = SelfUpdateResult(
+            "applied", behind=known_behind, old_head=old_head, new_head=new_head
+        )
+        if allow_reexec:
+            print(
+                f"[ringer] self-update: applied {known_behind} commit(s) "
+                f"{old_head}..{new_head}; restarting",
+                file=sys.stderr,
+                flush=True,
+            )
+            next_env = dict(environ if environ is not None else os.environ)
+            next_env["RINGER_SELF_UPDATED"] = "1"
+            execve(
+                sys.executable,
+                [sys.executable, str(script), *argv[1:]],
+                next_env,
+            )
+        return result
+    except subprocess.TimeoutExpired:
+        reason = f"git command timed out after {SELF_UPDATE_FETCH_TIMEOUT_S}s"
+    except Exception as exc:
+        reason = str(exc) or exc.__class__.__name__
+    _record_self_update_state(state_path, repo, behind=known_behind, error=reason, now=now)
+    return SelfUpdateResult("error", behind=known_behind, reason=reason)
+
+
+def _config_path_from_argv(argv: list[str]) -> Path | None:
+    for index, value in enumerate(argv[1:]):
+        if value == "--config" and index + 2 < len(argv):
+            return Path(argv[index + 2])
+        if value.startswith("--config="):
+            return Path(value.split("=", 1)[1])
+    return None
+
+
+def _self_update_command_requested(argv: list[str]) -> bool:
+    """Recognize the explicit command without mistaking an argument value for it."""
+    skip_next = False
+    for value in argv[1:]:
+        if skip_next:
+            skip_next = False
+            continue
+        if value == "--config":
+            skip_next = True
+            continue
+        if value == "--no-self-update" or value.startswith("--config="):
+            continue
+        return value == "self-update"
+    return False
+
+
+def maybe_self_update(
+    argv: list[str],
+    *,
+    config: AppConfig | None = None,
+    repo_dir: Path | None = None,
+    script_path: Path | None = None,
+    runner: Any = subprocess.run,
+    execve: Any = os.execve,
+    environ: dict[str, str] | None = None,
+    now: datetime | None = None,
+) -> SelfUpdateResult:
+    """Run the fail-open startup update check before command dispatch."""
+    env = environ if environ is not None else os.environ
+    if env.get("RINGER_SELF_UPDATED") == "1":
+        return SelfUpdateResult("skipped", reason="already restarted")
+    if env.get("RINGER_NO_SELF_UPDATE") == "1":
+        return SelfUpdateResult("skipped", reason="disabled by environment")
+    if "--no-self-update" in argv:
+        return SelfUpdateResult("skipped", reason="disabled for this invocation")
+    if _self_update_command_requested(argv):
+        return SelfUpdateResult("skipped", reason="explicit self-update command")
+    try:
+        resolved_config = config or AppConfig.load(_config_path_from_argv(argv))
+    except Exception:
+        return SelfUpdateResult("skipped", reason="config unavailable")
+    if not resolved_config.update.auto:
+        return SelfUpdateResult("skipped", reason="disabled by config")
+    return perform_self_update(
+        config=resolved_config,
+        argv=argv,
+        repo_dir=repo_dir,
+        script_path=script_path,
+        warn_blocked=True,
+        runner=runner,
+        execve=execve,
+        environ=env,
+        now=now,
+    )
 
 
 def expand_path(value: Any, default: Path) -> Path:
@@ -782,7 +1156,14 @@ class Manifest:
 FILE_TEST_OPS = {"-e", "-f", "-s", "-d", "-r", "-w", "-x", "-L"}
 
 
-def lint_manifest(manifest: Manifest, *, include_model_log_nudges: bool = False) -> list[str]:
+def lint_manifest(
+    manifest: Manifest,
+    *,
+    include_model_log_nudges: bool = False,
+    config: AppConfig | None = None,
+    identity_registry: ModelIdentityRegistry | None = None,
+    allow_noncanonical_route: bool = False,
+) -> list[str]:
     findings: list[str] = []
     if manifest.run_name == MODEL_SCOREBOARD_RUN_NAME:
         findings.append("manifest: run_name model-scoreboard is reserved for the scoreboard page.")
@@ -844,6 +1225,15 @@ def lint_manifest(manifest: Manifest, *, include_model_log_nudges: bool = False)
                 findings.append(
                     f"manifest: write collision on {path}: listed by {', '.join(task_keys)}."
                 )
+
+    if not allow_noncanonical_route:
+        findings.extend(
+            noncanonical_route_findings(
+                manifest,
+                config=config,
+                registry=identity_registry,
+            )
+        )
 
     return findings
 
@@ -2020,15 +2410,17 @@ def print_model_explore(
     for group in groups:
         label = (
             "unranked"
-            if group.get("unattributed")
+            if group.get("unattributed") or group.get("misrouted")
             else ("proven" if proven_model_group(group) else "probation")
         )
         display = (
             f"{group.get('model_display') or UNATTRIBUTED_MODEL_DISPLAY} "
             f"[{group.get('engine') or 'unknown'}]"
             if group.get("unattributed")
-            else str(group["model"])
+            else str(group.get("model_display") or group["model"])
         )
+        if group.get("misrouted"):
+            display = f"{display} [misrouted]"
         print(
             f"  {label:<9} {display} "
             f"task_type={group['task_type']} tasks={group['tasks']} "
@@ -3982,7 +4374,7 @@ def inject_models_tab_into_ringside_html(html: str) -> str:
     .models-table-wrap { overflow: auto; }
     .models-table {
       width: 100%;
-      min-width: 860px;
+      min-width: 1500px;
       border-collapse: collapse;
       font-size: 13px;
     }
@@ -4006,11 +4398,16 @@ def inject_models_tab_into_ringside_html(html: str) -> str:
     .model-row.expanded { background: var(--surface); }
     .model-name-cell { display: grid; gap: 1px; min-width: 220px; }
     .model-display { color: var(--ink); font-weight: 700; }
-    .model-slug,
     .models-meta {
       color: var(--muted);
       font-size: 12px;
     }
+    .model-flag {
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+    }
+    .model-notes { min-width: 280px; }
     .tier-badge {
       display: inline-flex;
       align-items: center;
@@ -4098,6 +4495,17 @@ def inject_models_tab_into_ringside_html(html: str) -> str:
         return Number.isFinite(number) ? `${Math.round(number * 100)}%` : "0%";
       }
 
+      function modelDuration(value) {
+        if (value === null || value === undefined || value === "") return "";
+        const total = Math.max(0, Math.round(numberOrZeroLocal(value) / 1000));
+        const hours = Math.floor(total / 3600);
+        const minutes = Math.floor((total % 3600) / 60);
+        const seconds = total % 60;
+        if (hours) return `${hours}h${String(minutes).padStart(2, "0")}m${String(seconds).padStart(2, "0")}s`;
+        if (minutes) return `${minutes}m${String(seconds).padStart(2, "0")}s`;
+        return `${seconds}s`;
+      }
+
       function modelDate(value) {
         const text = String(value || "").trim();
         if (!text) return "unknown";
@@ -4118,7 +4526,7 @@ def inject_models_tab_into_ringside_html(html: str) -> str:
 
       function groupsFor(bucketId) {
         const groups = Array.isArray(payload?.groups) ? payload.groups : [];
-        return groups.filter(group => String(group?.bucket_id || "") === bucketId);
+        return groups.filter(group => String(group?.display_bucket_id || "") === bucketId);
       }
 
       function breakdown(bucketId) {
@@ -4155,36 +4563,40 @@ def inject_models_tab_into_ringside_html(html: str) -> str:
           return;
         }
         const body = [];
-        let rank = 0;
         rows.forEach((row, index) => {
-          const bucketId = String(row.bucket_id || `${row.engine || ""}|${row.model || ""}`);
+          const bucketId = String(row.display_bucket_id || `bucket-${index}`);
           const expanded = expandedModel === bucketId;
           const tierClass = safeClass(row.tier);
-          if (!row.unattributed) rank += 1;
+          const marker = row.misrouted ? "misrouted" : (row.unregistered ? "unregistered" : "");
+          const tier = row.unattributed || row.misrouted ? "not ranked" : (row.tier || "unknown");
+          const notes = Array.isArray(row.notes) ? row.notes.join("\n\n") : "";
           body.push(
             `<tr class="model-row${expanded ? " expanded" : ""}" data-model="${html(bucketId)}" tabindex="0">`,
-            `<td class="numeric">${row.unattributed ? "—" : rank}</td>`,
             '<td><span class="model-name-cell">',
             `<span class="model-display">${html(row.model_display || row.model || "unknown")}</span>`,
-            `<span class="model-slug mono">${html(row.unattributed ? `engine: ${row.engine || "unknown"}` : (row.model || "unknown"))}</span>`,
+            marker ? `<span class="model-flag">${html(marker)}</span>` : "",
             '</span></td>',
             `<td>${html(row.lab || "(unknown)")}</td>`,
             `<td>${html(row.harness || "unknown")}</td>`,
             `<td>${html(row.access || "unknown")}</td>`,
-            `<td><span class="tier-badge ${html(tierClass)}">${html(row.tier || "unknown")}</span></td>`,
+            `<td><span class="tier-badge ${html(tierClass)}">${html(tier)}</span></td>`,
             `<td class="numeric">${numberOrZeroLocal(row.tasks).toLocaleString()}</td>`,
             `<td class="numeric">${html(percent(row.first_try_pass_rate))}</td>`,
             `<td class="numeric">${html(percent(row.pass_rate))}</td>`,
+            `<td class="numeric">${row.median_tokens === null || row.median_tokens === undefined ? "" : numberOrZeroLocal(row.median_tokens).toLocaleString()}</td>`,
+            `<td>${html(modelDuration(row.median_duration_ms))}</td>`,
             `<td>${html(modelDate(row.last_seen))}</td>`,
+            `<td class="model-notes" title="${html(notes)}">${html(row.latest_note || "")}</td>`,
             '</tr>',
           );
-          if (expanded) body.push(`<tr class="model-breakdown"><td colspan="10">${breakdown(bucketId)}</td></tr>`);
+          if (expanded) body.push(`<tr class="model-breakdown"><td colspan="12">${breakdown(bucketId)}</td></tr>`);
         });
         wrap.innerHTML = [
           '<table class="models-table">',
           '<thead><tr>',
-          '<th class="numeric">Rank</th><th>Model</th><th>Lab</th><th>Harness</th><th>API/Plan</th><th>Tier</th>',
-          '<th class="numeric">Tasks</th><th class="numeric">First-try %</th><th class="numeric">Pass %</th><th>Last used</th>',
+          '<th>Model</th><th>Lab</th><th>Harness</th><th>API/Plan</th><th>Tier</th>',
+          '<th class="numeric">Tasks</th><th class="numeric">First try</th><th class="numeric">Pass</th>',
+          '<th class="numeric">Tokens (median)</th><th>Speed (median)</th><th>Last used</th><th>Notes</th>',
           '</tr></thead>',
           `<tbody>${body.join("")}</tbody>`,
           '</table>',
@@ -4409,6 +4821,10 @@ def serve_artifact_path(handler: BaseHTTPRequestHandler, artifact_root: Path, pa
     return True
 
 
+class ReusableThreadingHTTPServer(ThreadingHTTPServer):
+    allow_reuse_address = True
+
+
 class PersistentHudServer:
     def __init__(
         self,
@@ -4426,6 +4842,8 @@ class PersistentHudServer:
         self.model_log_path: Path | None = None
         self.default_model_log_path: Path = state_dir / "runs.jsonl"
         self.model_db_path: Path | None = None
+        self.model_notes_path: Path | None = None
+        self.update_status: dict[str, Any] | None = None
 
     def start(self) -> int:
         state_dir = self.state_dir
@@ -4451,6 +4869,7 @@ class PersistentHudServer:
                         {
                             "runs": scan_hud_run_states(state_dir),
                             "active": read_active_runs_file(),
+                            "update": server_ref.update_status,
                         },
                     )
                     return
@@ -4460,10 +4879,12 @@ class PersistentHudServer:
                             log_path=server_ref.model_log_path or (state_dir / "runs.jsonl"),
                             default_log_path=server_ref.default_model_log_path,
                             db_path=server_ref.model_db_path,
+                            notes_path=server_ref.model_notes_path,
                         )
                     except Exception as exc:
                         payload = {
                             "generated_at": utc_now_iso(),
+                            "columns": list(MODEL_SCOREBOARD_COLUMNS),
                             "groups": [],
                             "rollup": [],
                             "error": str(exc) or exc.__class__.__name__,
@@ -4536,7 +4957,7 @@ class PersistentHudServer:
                 return
 
         try:
-            self.httpd = ThreadingHTTPServer(("127.0.0.1", preferred_port), Handler)
+            self.httpd = ReusableThreadingHTTPServer(("127.0.0.1", preferred_port), Handler)
         except OSError as exc:
             raise RuntimeError(
                 f"could not start Ringside on 127.0.0.1:{preferred_port}; "
@@ -5052,6 +5473,20 @@ def aggregate_model_log_rows(
 
 MODEL_SCOREBOARD_RUN_NAME = "model-scoreboard"
 MODEL_SCOREBOARD_IDENTITY = "ringer-models"
+MODEL_SCOREBOARD_COLUMNS = (
+    "Model",
+    "Lab",
+    "Harness",
+    "API/Plan",
+    "Tier",
+    "Tasks",
+    "First try",
+    "Pass",
+    "Tokens (median)",
+    "Speed (median)",
+    "Last used",
+    "Notes",
+)
 
 
 def default_model_notes_path() -> Path:
@@ -5088,6 +5523,27 @@ class ModelIdentity:
     source: str = ""
     last_verified: str = ""
     unregistered: bool = False
+    misrouted: bool = False
+    canonical_engine: str = ""
+    canonical_model_key: str = ""
+    canonical_harness: str = ""
+    canonical_access: str = ""
+
+
+@dataclass(frozen=True)
+class NoncanonicalRoute:
+    engine: str
+    model_key: str
+    canonical_engine: str
+    canonical_model_key: str
+    identity: ModelIdentity
+
+    @property
+    def canonical_route(self) -> str:
+        return (
+            f"{self.canonical_engine}:{self.canonical_model_key} via "
+            f"{self.identity.harness} on {self.identity.access}"
+        )
 
 
 @dataclass(frozen=True)
@@ -5095,11 +5551,26 @@ class ModelIdentityRegistry:
     identities: dict[tuple[str, str], ModelIdentity]
     defaults: dict[str, str]
     engine_meta: dict[str, ModelIdentity]
+    noncanonical_routes: dict[tuple[str, str], NoncanonicalRoute]
 
     def resolve(self, engine: str, model_key: str) -> ModelIdentity:
         engine_key = model_log_text(engine)
         raw_model_key = model_log_text(model_key)
         lookup_key = raw_model_key or self.defaults.get(engine_key, "")
+        noncanonical = self.noncanonical_routes.get((engine_key, lookup_key))
+        if noncanonical is not None:
+            actual_meta = self.engine_meta.get(engine_key)
+            canonical = noncanonical.identity
+            return dataclass_replace(
+                canonical,
+                harness=actual_meta.harness if actual_meta else (engine_key or "unknown"),
+                access=actual_meta.access if actual_meta else "unknown",
+                misrouted=True,
+                canonical_engine=noncanonical.canonical_engine,
+                canonical_model_key=noncanonical.canonical_model_key,
+                canonical_harness=canonical.harness,
+                canonical_access=canonical.access,
+            )
         identity = self.identities.get((engine_key, lookup_key))
         if identity is not None:
             return identity
@@ -5137,7 +5608,7 @@ class ModelIdentityRegistry:
         )
 
 
-EMPTY_MODEL_IDENTITY_REGISTRY = ModelIdentityRegistry({}, {}, {})
+EMPTY_MODEL_IDENTITY_REGISTRY = ModelIdentityRegistry({}, {}, {}, {})
 
 
 def load_model_identity_registry(path: Path | None = None) -> ModelIdentityRegistry:
@@ -5153,6 +5624,7 @@ def load_model_identity_registry(path: Path | None = None) -> ModelIdentityRegis
     identities: dict[tuple[str, str], ModelIdentity] = {}
     defaults: dict[str, str] = {}
     engine_meta: dict[str, ModelIdentity] = {}
+    pending_noncanonical: list[tuple[str, str, str]] = []
     for engine_name, raw_engine in engines_raw.items():
         if not isinstance(raw_engine, dict):
             continue
@@ -5191,7 +5663,52 @@ def load_model_identity_registry(path: Path | None = None) -> ModelIdentityRegis
                 source=model_log_text(raw_model.get("source")),
                 last_verified=model_log_text(raw_model.get("last_verified")),
             )
-    return ModelIdentityRegistry(identities, defaults, engine_meta)
+            raw_noncanonical = raw_model.get("noncanonical_slugs", [])
+            if isinstance(raw_noncanonical, list):
+                for value in raw_noncanonical:
+                    route_key = model_log_text(value)
+                    if route_key:
+                        pending_noncanonical.append((engine, model_key, route_key))
+    noncanonical_routes: dict[tuple[str, str], NoncanonicalRoute] = {}
+    for canonical_engine, canonical_model_key, route_key in pending_noncanonical:
+        route_engine, separator, route_model_key = route_key.partition(":")
+        route_engine = route_engine.strip()
+        route_model_key = route_model_key.strip()
+        canonical_identity = identities.get((canonical_engine, canonical_model_key))
+        if not separator or not route_engine or not route_model_key or canonical_identity is None:
+            continue
+        noncanonical_routes[(route_engine, route_model_key)] = NoncanonicalRoute(
+            engine=route_engine,
+            model_key=route_model_key,
+            canonical_engine=canonical_engine,
+            canonical_model_key=canonical_model_key,
+            identity=canonical_identity,
+        )
+    return ModelIdentityRegistry(identities, defaults, engine_meta, noncanonical_routes)
+
+
+def noncanonical_route_findings(
+    manifest: Manifest,
+    *,
+    config: AppConfig | None = None,
+    registry: ModelIdentityRegistry | None = None,
+) -> list[str]:
+    identity_registry = registry or load_model_identity_registry()
+    findings: list[str] = []
+    for task in manifest.tasks:
+        engine = config.engines.get(task.engine) if config is not None else None
+        model_key = task.model or (engine.model_default if engine is not None else "")
+        if not model_key:
+            model_key = identity_registry.defaults.get(task.engine, "")
+        route = identity_registry.noncanonical_routes.get((task.engine, model_key))
+        if route is None:
+            continue
+        findings.append(
+            f"ERROR: {task.key}: {task.engine}:{model_key} is a noncanonical route for "
+            f"{route.identity.model_display}; canonical route is {route.canonical_route}. "
+            "Use --allow-noncanonical-route only for a deliberate bakeoff."
+        )
+    return findings
 
 
 def model_log_row_engine(row: dict[str, Any]) -> str:
@@ -5210,6 +5727,9 @@ def row_identity_fields(row: dict[str, Any], registry: ModelIdentityRegistry) ->
             "alias": False,
             "last_verified": "",
             "unregistered": False,
+            "misrouted": False,
+            "identity_key": "",
+            "canonical_route": "",
         }
     identity = registry.resolve(model_log_row_engine(row), model_log_text(row.get("model")))
     return {
@@ -5220,6 +5740,14 @@ def row_identity_fields(row: dict[str, Any], registry: ModelIdentityRegistry) ->
         "alias": identity.alias,
         "last_verified": identity.last_verified,
         "unregistered": identity.unregistered,
+        "misrouted": identity.misrouted,
+        "identity_key": identity.canonical_model_key or model_log_text(row.get("model")),
+        "canonical_route": (
+            f"{identity.canonical_engine}:{identity.canonical_model_key} via "
+            f"{identity.canonical_harness} on {identity.canonical_access}"
+            if identity.misrouted
+            else ""
+        ),
     }
 
 
@@ -5302,9 +5830,15 @@ def enrich_model_groups_with_identity(
                     "alias": False,
                     "last_verified": "",
                     "unregistered": bool(group.get("model")),
+                    "misrouted": False,
+                    "identity_key": str(group.get("model") or ""),
+                    "canonical_route": "",
                 },
             )
         )
+        if item.get("unregistered") and str(item.get("model") or "").startswith("openrouter/"):
+            if item.get("model_display") == item.get("model"):
+                item["model_display"] = short_model_name(item.get("model"))
         if item.get("show_reasoning_effort") and not item.get("unattributed"):
             effort = item.get("reasoning_effort") or "(effort unrecorded)"
             item["model_display"] = f"{item['model_display']} · {effort}"
@@ -5312,6 +5846,12 @@ def enrich_model_groups_with_identity(
             # The aggregation helper retains the engine as a legacy grouping key.
             # Public payloads must not expose harness branding as a model identity.
             item["model"] = ""
+        if item.get("unattributed") or item.get("misrouted"):
+            item["tier"] = "unranked"
+        elif "tier" not in item:
+            item["tier"] = model_scoreboard_tier(
+                int(item.get("tasks") or 0), float(item.get("first_try_pass_rate") or 0)
+            )
         item["bucket_id"] = "|".join(
             (
                 str(item.get("engine") or ""),
@@ -5320,6 +5860,9 @@ def enrich_model_groups_with_identity(
                 "unattributed" if item.get("unattributed") else "model",
             )
         )
+        item["display_bucket_id"] = "bucket-" + base64.urlsafe_b64encode(
+            item["bucket_id"].encode("utf-8")
+        ).decode("ascii").rstrip("=")
         enriched.append(item)
     return enriched
 
@@ -5869,7 +6412,7 @@ def load_identity_registry_from_db(conn: Any) -> ModelIdentityRegistry:
             confidence="engine",
             source="",
         )
-    return ModelIdentityRegistry(identities, defaults, engine_meta)
+    return ModelIdentityRegistry(identities, defaults, engine_meta, {})
 
 
 def db_attempt_rows(
@@ -6065,11 +6608,59 @@ def model_judgment_notes(model_id: str, notes_sections: dict[str, list[str]]) ->
     return max(matches, key=lambda item: (item[0], item[1], item[2]))[3]
 
 
+def model_judgment_notes_for_row(
+    row: dict[str, Any], notes_sections: dict[str, list[str]]
+) -> list[str]:
+    display = re.sub(
+        r"\s+·\s+(?:[^·]+)$", "", str(row.get("model_display") or "")
+    ).strip()
+    candidates = (
+        str(row.get("identity_key") or "").strip(),
+        display,
+        str(row.get("model") or "").strip(),
+    )
+    for candidate in candidates:
+        if not candidate:
+            continue
+        notes = model_judgment_notes(candidate, notes_sections)
+        if notes:
+            return notes
+    return []
+
+
+def enrich_model_groups_with_notes(
+    groups: list[dict[str, Any]], notes_sections: dict[str, list[str]]
+) -> list[dict[str, Any]]:
+    enriched: list[dict[str, Any]] = []
+    for group in groups:
+        item = dict(group)
+        notes = [
+            scoreboard_safe_note(note)
+            for note in sorted(
+                model_judgment_notes_for_row(item, notes_sections),
+                key=note_date_key,
+                reverse=True,
+            )
+        ]
+        item["notes"] = notes
+        item["latest_note"] = strip_inline_markdown(notes[0]) if notes else ""
+        enriched.append(item)
+    return enriched
+
+
 def strip_inline_markdown(value: str) -> str:
     text = re.sub(r"`([^`]*)`", r"\1", value)
     text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
     text = re.sub(r"[*_]{1,3}([^*_]+)[*_]{1,3}", r"\1", text)
     return re.sub(r"\s+", " ", text).strip()
+
+
+def scoreboard_safe_note(value: str) -> str:
+    return re.sub(
+        r"openrouter/[A-Za-z0-9._/+:-]+",
+        lambda match: short_model_name(match.group(0)),
+        value,
+    )
 
 
 def normalized_judgment_note(item: str) -> tuple[str, str] | None:
@@ -6088,6 +6679,22 @@ def normalized_judgment_note(item: str) -> tuple[str, str] | None:
 def note_date_key(item: str) -> str:
     match = re.search(r"\b\d{4}-\d{2}-\d{2}\b", item)
     return match.group(0) if match else ""
+
+
+def fmt_scoreboard_duration(value_ms: Any) -> str:
+    if value_ms is None:
+        return ""
+    try:
+        total = max(0, int(round(float(value_ms) / 1000.0)))
+    except (TypeError, ValueError):
+        return ""
+    hours, remainder = divmod(total, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m{seconds:02d}s"
+    if minutes:
+        return f"{minutes}m{seconds:02d}s"
+    return f"{seconds}s"
 
 
 def render_notes_list(items: list[str], *, notes_path: Path | None = None, limit: int = 5) -> str:
@@ -6516,13 +7123,11 @@ def humanized_catalog_event_line(event: dict[str, Any], catalog_by_id: dict[str,
 
 
 def watchlist_chip_html(model: dict[str, Any]) -> str:
-    model_id = str(model.get("id") or "").strip()
     label = catalog_model_display_name(model)
     context = compact_context_label(model.get("context_length"))
-    title = model_id or label
     return (
         '<li class="watch-chip">'
-        f'<span data-model="{html_escape(model_id)}" title="{html_escape(title)}">'
+        f'<span title="{html_escape(label)}">'
         f"{html_escape(label)} · {html_escape(context)}</span></li>"
     )
 
@@ -6644,7 +7249,7 @@ MODEL_SCOREBOARD_CSS = """
   }
   .ranked-table {
     width: 100%;
-    min-width: 1040px;
+    min-width: 1500px;
     border-collapse: collapse;
     font-size: 13px;
   }
@@ -6878,8 +7483,6 @@ def render_free_watchlist(
 def render_model_table_pair(
     row: dict[str, Any],
     *,
-    rank: int | None,
-    catalog_model: dict[str, Any] | None,
     notes_sections: dict[str, list[str]],
     notes_path: Path,
 ) -> str:
@@ -6889,24 +7492,30 @@ def render_model_table_pair(
     harness = str(row.get("harness") or "unknown")
     access = str(row.get("access") or "unknown")
     last_verified = str(row.get("last_verified") or "")
-    notes = model_judgment_notes(model_id, notes_sections)
+    notes = list(row.get("notes") or model_judgment_notes_for_row(row, notes_sections))
+    latest_note = str(
+        row.get("latest_note") or (strip_inline_markdown(notes[0]) if notes else "")
+    )
+    notes_title = "\n\n".join(strip_inline_markdown(note) for note in notes)
     if row.get("unattributed"):
         model_id_line = (
             f'<div class="model-id">engine: {html_escape(str(row.get("engine") or "unknown"))} '
             '· quarantined legacy data</div>'
         )
     else:
-        model_id_line = "" if model_id == model_display else f'<div class="model-id">{html_escape(model_id)}</div>'
+        model_id_line = ""
     tier = str(row.get("tier") or "")
-    tier_display = "not ranked" if row.get("unattributed") else tier
-    rank_display = "—" if rank is None else str(rank)
-    row_id = (
-        str(row.get("bucket_id") or model_id)
-        if row.get("show_reasoning_effort") or row.get("unattributed")
-        else model_id
+    tier_display = (
+        "not ranked" if row.get("unattributed") or row.get("misrouted") else tier
     )
+    row_id = str(row.get("display_bucket_id") or "model")
     unregistered_flag = (
         '<span class="identity-flag">unregistered</span>' if row.get("unregistered") else ""
+    )
+    misrouted_flag = (
+        '<span class="identity-flag misrouted">misrouted</span>'
+        if row.get("misrouted")
+        else ""
     )
     verified_date = (
         f'<span class="verified-date">verified {html_escape(last_verified)}</span>'
@@ -6914,8 +7523,7 @@ def render_model_table_pair(
         else ""
     )
     return f"""<tr class="model-row" id="model-{html_escape(sanitize_artifact_name(row_id))}">
-      <td class="rank-cell num">{rank_display}</td>
-      <td class="model-cell"><div class="model-name">{html_escape(model_display)}</div>{model_id_line}{unregistered_flag}</td>
+      <td class="model-cell"><div class="model-name">{html_escape(model_display)}</div>{model_id_line}{unregistered_flag}{misrouted_flag}</td>
       <td>{html_escape(lab)}{verified_date}</td>
       <td>{html_escape(harness)}</td>
       <td>{html_escape(access)}</td>
@@ -6923,11 +7531,13 @@ def render_model_table_pair(
       <td class="num">{fmt_int(row.get("tasks"))}</td>
       <td class="num rate-cell">{rate_cell_html(row.get("first_try_pass_rate"))}</td>
       <td class="num rate-cell">{rate_cell_html(row.get("pass_rate"))}</td>
-      <td class="num">{html_escape(model_task_cost_label(row, catalog_model))}</td>
+      <td class="num">{html_escape(fmt_int(row.get("median_tokens"))) if row.get("median_tokens") is not None else ""}</td>
+      <td>{html_escape(fmt_scoreboard_duration(row.get("median_duration_ms")))}</td>
       <td>{html_escape(humanized_log_date(row.get("last_seen")))}</td>
+      <td class="notes-cell" title="{html_escape(notes_title)}">{html_escape(latest_note)}</td>
     </tr>
     <tr class="detail-row">
-      <td colspan="11">
+      <td colspan="12">
         <details class="model-detail">
           <summary>details for {html_escape(model_display)}</summary>
           <div class="detail-content">
@@ -6966,24 +7576,17 @@ def render_model_scoreboard_html(
     ordered = order_model_scoreboard_rows(rows, catalog_by_id)
     generated = generated_at or datetime.now().astimezone().replace(microsecond=0).isoformat()
     rendered_rows: list[str] = []
-    rank = 0
     for row in ordered:
-        row_rank = None
-        if not row.get("unattributed"):
-            rank += 1
-            row_rank = rank
         rendered_rows.append(
             render_model_table_pair(
                 row,
-                rank=row_rank,
-                catalog_model=catalog_by_id.get(str(row.get("model") or "")),
                 notes_sections=notes_sections,
                 notes_path=notes_path,
             )
         )
     table_rows = "".join(rendered_rows)
     if not table_rows:
-        table_rows = '<tr><td colspan="11" class="muted">No local model evidence matched these filters.</td></tr>'
+        table_rows = '<tr><td colspan="12" class="muted">No local model evidence matched these filters.</td></tr>'
     unregistered_slugs = sorted(
         {str(row.get("model") or "") for row in ordered if row.get("unregistered") and row.get("model")}
     )
@@ -6994,6 +7597,19 @@ def render_model_scoreboard_html(
             "— run the identity procedure in docs/TAXONOMY.md."
         )
         unregistered_pointer = f'<div class="identity-pointer">{html_escape(pointer)}</div>'
+    misrouted_routes = sorted(
+        {
+            f"{row.get('engine')}:{row.get('model')} → {row.get('canonical_route')}"
+            for row in ordered
+            if row.get("misrouted") and row.get("model")
+        }
+    )
+    misrouted_pointer = ""
+    if misrouted_routes:
+        misrouted_pointer = (
+            '<div class="identity-pointer">Noncanonical route(s): '
+            f"{html_escape(', '.join(misrouted_routes))}</div>"
+        )
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -7022,17 +7638,18 @@ def render_model_scoreboard_html(
       <table class="ranked-table">
         <thead>
           <tr>
-            <th>Rank</th>
             <th>Model</th>
             <th>Lab</th>
             <th>Harness</th>
             <th>API/Plan</th>
             <th>Tier</th>
             <th class="num">Tasks</th>
-            <th class="num">First-try</th>
+            <th class="num">First try</th>
             <th class="num">Pass</th>
-            <th class="num">Est. $/task</th>
+            <th class="num">Tokens (median)</th>
+            <th>Speed (median)</th>
             <th>Last used</th>
+            <th>Notes</th>
           </tr>
         </thead>
         <tbody>{table_rows}</tbody>
@@ -7040,8 +7657,9 @@ def render_model_scoreboard_html(
     </div>
   </main>
   <footer class="scoreboard-footer">
-    <span>{fmt_int(rows_read)} rows read, {fmt_int(skipped)} skipped lines. Ranking sorts by evidence tier first: proven n&gt;=3, then probation; ties use first-try pass rate, pass rate, then lower estimated cost. Unattributed legacy rows are quarantined at the bottom and are not ranked or tiered. Cost estimate assumes logged worker_tokens are split 50/50 between prompt and completion tokens, using the catalog $/M in/out blend.</span>
+    <span>{fmt_int(rows_read)} rows read, {fmt_int(skipped)} skipped lines. Ordering sorts by evidence tier first: proven n&gt;=3, then probation; ties use first-try pass rate and pass rate. Misrouted and unattributed legacy rows are not ranked or tiered.</span>
     {unregistered_pointer}
+    {misrouted_pointer}
   </footer>
 </div>
 </body>
@@ -7092,32 +7710,45 @@ def write_model_scoreboard_html(
 
 def print_model_log_table(path: Path, rows_read: int, skipped: int, groups: list[dict[str, Any]]) -> None:
     print(f"Model log: {path} ({rows_read} rows, {skipped} skipped lines)")
-    header = (
-        f"{'task_type':<18} {'model':<32} {'lab':<20} {'harness':<16} {'tasks':>5} "
-        f"{'attempts':>8} {'passed':>6} {'failed':>6} {'pass':>6} "
-        f"{'first':>6} {'dur_ms':>8} {'tokens':>8} {'last_seen'}"
+    widths = (32, 20, 18, 18, 10, 7, 10, 7, 15, 14, 14, 60)
+    header = " | ".join(
+        f"{name:<{width}}" for name, width in zip(MODEL_SCOREBOARD_COLUMNS, widths)
     )
-    print(header)
-    print("-" * len(header))
+    current_task_type: str | None = None
+    if not groups:
+        print(header)
+        print("-" * len(header))
     for group in groups:
-        duration = "" if group["median_duration_ms"] is None else str(group["median_duration_ms"])
-        tokens = "" if group["median_tokens"] is None else str(group["median_tokens"])
+        task_type = str(group.get("task_type") or "(untyped)")
+        if task_type != current_task_type:
+            if current_task_type is not None:
+                print()
+            current_task_type = task_type
+            print(f"Task type: {task_type}")
+            print(header)
+            print("-" * len(header))
         display = str(group.get("model_display") or group["model"])
         if group.get("unattributed"):
-            display = f"{display} [{group.get('engine') or 'unknown'}]"
-        elif display != group["model"]:
-            display = f"{display} ({group['model']})"
+            display = UNATTRIBUTED_MODEL_DISPLAY
+        if group.get("misrouted"):
+            display = f"{display} [misrouted]"
         if group.get("unregistered"):
             display = f"{display} [unregistered]"
-        print(
-            f"{group['task_type']:<18} {shorten(display, 32):<32} "
-            f"{shorten(str(group.get('lab') or '(unknown)'), 20):<20} "
-            f"{shorten(str(group.get('harness') or 'unknown'), 16):<16} "
-            f"{group['tasks']:>5} {group['attempts']:>8} {group['passed']:>6} "
-            f"{group['failed']:>6} {group['pass_rate']:>6.2f} "
-            f"{group['first_try_pass_rate']:>6.2f} {duration:>8} "
-            f"{tokens:>8} {group['last_seen']}"
+        values = (
+            display,
+            str(group.get("lab") or "(unknown)"),
+            str(group.get("harness") or "unknown"),
+            str(group.get("access") or "unknown"),
+            "not ranked" if group.get("tier") == "unranked" else str(group.get("tier") or ""),
+            fmt_int(group.get("tasks")),
+            fmt_percent(group.get("first_try_pass_rate")),
+            fmt_percent(group.get("pass_rate")),
+            "" if group.get("median_tokens") is None else fmt_int(group.get("median_tokens")),
+            fmt_scoreboard_duration(group.get("median_duration_ms")),
+            humanized_log_date(group.get("last_seen")),
+            shorten(str(group.get("latest_note") or ""), 60),
         )
+        print(" | ".join(f"{shorten(value, width):<{width}}" for value, width in zip(values, widths)))
     print("Judgment layer: docs/MODEL-NOTES.md")
     unregistered_slugs = sorted(
         {str(group.get("model") or "") for group in groups if group.get("unregistered") and group.get("model")}
@@ -7127,8 +7758,6 @@ def print_model_log_table(path: Path, rows_read: int, skipped: int, groups: list
             f"Unregistered model slug(s): {', '.join(unregistered_slugs)} "
             "— run the identity procedure in docs/TAXONOMY.md."
         )
-
-
 def build_models_api_payload(
     *,
     log_path: Path,
@@ -7136,6 +7765,7 @@ def build_models_api_payload(
     db_path: Path | None = None,
     catalog_path: Path | None = None,
     registry_path: Path | None = None,
+    notes_path: Path | None = None,
 ) -> dict[str, Any]:
     log_path = log_path.expanduser().resolve()
     default_log_path = (default_log_path or log_path).expanduser().resolve()
@@ -7143,6 +7773,7 @@ def build_models_api_payload(
     resolved_db_path = (db_path or default_read_model_db_path()).expanduser().resolve()
     catalog_path = (catalog_path or default_catalog_path()).expanduser().resolve()
     registry_path = (registry_path or default_model_registry_path()).expanduser().resolve()
+    notes_path = (notes_path or default_model_notes_path()).expanduser().resolve()
     using_db = should_use_read_model_db(
         log_path=log_path,
         default_log_path=default_log_path,
@@ -7158,6 +7789,11 @@ def build_models_api_payload(
                 registry_path=registry_path,
             )
             rows, identity_registry = db_attempt_rows(resolved_db_path)
+            disk_registry = load_model_identity_registry(registry_path)
+            identity_registry = dataclass_replace(
+                identity_registry,
+                noncanonical_routes=disk_registry.noncanonical_routes,
+            )
             catalog_models = db_catalog_models(resolved_db_path)
         except Exception:
             using_db = False
@@ -7169,19 +7805,26 @@ def build_models_api_payload(
     if not using_db:
         with contextlib.suppress(Exception):
             catalog_models = load_catalog_snapshot(catalog_path)
-    groups = enrich_model_groups_with_identity(
-        aggregate_model_log_rows(rows),
-        rows,
-        identity_registry,
-        include_task_type=True,
-        catalog_models=catalog_models,
+    notes_sections = parse_model_notes_sections(notes_path)
+    groups = enrich_model_groups_with_notes(
+        enrich_model_groups_with_identity(
+            aggregate_model_log_rows(rows),
+            rows,
+            identity_registry,
+            include_task_type=True,
+            catalog_models=catalog_models,
+        ),
+        notes_sections,
     )
-    rollup = enrich_model_groups_with_identity(
-        aggregate_model_scoreboard_rows(rows),
-        rows,
-        identity_registry,
-        include_task_type=False,
-        catalog_models=catalog_models,
+    rollup = enrich_model_groups_with_notes(
+        enrich_model_groups_with_identity(
+            aggregate_model_scoreboard_rows(rows),
+            rows,
+            identity_registry,
+            include_task_type=False,
+            catalog_models=catalog_models,
+        ),
+        notes_sections,
     )
     catalog_by_id = catalog_models_by_id(catalog_models)
     ordered_rollup: list[dict[str, Any]] = []
@@ -7191,6 +7834,7 @@ def build_models_api_payload(
         ordered_rollup.append(item)
     return {
         "generated_at": utc_now_iso(),
+        "columns": list(MODEL_SCOREBOARD_COLUMNS),
         "groups": groups,
         "rollup": ordered_rollup,
     }
@@ -7204,6 +7848,7 @@ def run_models_command(config: AppConfig, args: argparse.Namespace) -> int:
     db_path = (getattr(args, "db", None) or default_read_model_db_path()).expanduser().resolve()
     catalog_path = (getattr(args, "catalog_file", None) or default_catalog_path()).expanduser().resolve()
     registry_path = (getattr(args, "registry", None) or default_model_registry_path()).expanduser().resolve()
+    notes_path = (getattr(args, "notes_file", None) or default_model_notes_path()).expanduser().resolve()
     using_db = should_use_read_model_db(
         log_path=log_path,
         default_log_path=default_log_path,
@@ -7219,6 +7864,11 @@ def run_models_command(config: AppConfig, args: argparse.Namespace) -> int:
                 registry_path=registry_path,
             )
             rows, identity_registry = db_attempt_rows(db_path, since=since, engine=args.engine)
+            disk_registry = load_model_identity_registry(registry_path)
+            identity_registry = dataclass_replace(
+                identity_registry,
+                noncanonical_routes=disk_registry.noncanonical_routes,
+            )
             skipped = sync_result.skipped
             catalog_models_from_db = db_catalog_models(db_path)
             catalog_events = db_catalog_events(db_path, limit=6)
@@ -7233,12 +7883,16 @@ def run_models_command(config: AppConfig, args: argparse.Namespace) -> int:
         identity_registry = load_model_identity_registry(registry_path)
         catalog_models_from_db = []
     catalog_models = catalog_models_from_db if using_db else load_catalog_snapshot(catalog_path)
-    groups = enrich_model_groups_with_identity(
-        aggregate_model_log_rows(rows, task_type=args.task_type, model=args.model),
-        rows,
-        identity_registry,
-        include_task_type=True,
-        catalog_models=catalog_models,
+    notes_sections = parse_model_notes_sections(notes_path)
+    groups = enrich_model_groups_with_notes(
+        enrich_model_groups_with_identity(
+            aggregate_model_log_rows(rows, task_type=args.task_type, model=args.model),
+            rows,
+            identity_registry,
+            include_task_type=True,
+            catalog_models=catalog_models,
+        ),
+        notes_sections,
     )
     if args.explore:
         print_model_explore(
@@ -7253,13 +7907,15 @@ def run_models_command(config: AppConfig, args: argparse.Namespace) -> int:
     html_arg = getattr(args, "html", None)
     open_requested = bool(getattr(args, "open", False))
     if html_arg is not None or open_requested:
-        notes_path = (getattr(args, "notes_file", None) or default_model_notes_path()).expanduser().resolve()
-        scoreboard_rows = enrich_model_groups_with_identity(
-            aggregate_model_scoreboard_rows(rows, task_type=args.task_type, model=args.model),
-            rows,
-            identity_registry,
-            include_task_type=False,
-            catalog_models=catalog_models,
+        scoreboard_rows = enrich_model_groups_with_notes(
+            enrich_model_groups_with_identity(
+                aggregate_model_scoreboard_rows(rows, task_type=args.task_type, model=args.model),
+                rows,
+                identity_registry,
+                include_task_type=False,
+                catalog_models=catalog_models,
+            ),
+            notes_sections,
         )
         explicit_path = None
         if html_arg not in {None, ""}:
@@ -7274,7 +7930,7 @@ def run_models_command(config: AppConfig, args: argparse.Namespace) -> int:
             catalog_path=catalog_path,
             catalog_models=catalog_models,
             notes_path=notes_path,
-            notes_sections=parse_model_notes_sections(notes_path),
+            notes_sections=notes_sections,
             catalog_events=catalog_events,
         )
         print(page_path)
@@ -8629,24 +9285,27 @@ def create_demo_manifest() -> Path:
         "tasks": [
             {
                 "key": "alpha",
-                "spec": "Create alpha.txt in the current working directory containing exactly: alpha ready. Do not write any other files.",
+                "spec": "Create alpha.txt in the current working directory containing exactly: alpha ready\nDo not add punctuation. Do not write any other files.",
                 "check": "test \"$(cat alpha.txt 2>/dev/null)\" = \"alpha ready\" || { echo 'FAIL: alpha.txt missing or content is not alpha ready'; exit 1; }",
                 "verified": "alpha.txt exists and contains exactly the expected text",
                 "expect_files": ["alpha.txt"],
+                "task_type": "probe",
             },
             {
                 "key": "bravo",
-                "spec": "Create bravo.txt in the current working directory containing exactly: bravo ready. Do not write any other files.",
+                "spec": "Create bravo.txt in the current working directory containing exactly: bravo ready\nDo not add punctuation. Do not write any other files.",
                 "check": "test \"$(cat bravo.txt 2>/dev/null)\" = \"bravo ready\" || { echo 'FAIL: bravo.txt missing or content is not bravo ready'; exit 1; }",
                 "verified": "bravo.txt exists and contains exactly the expected text",
                 "expect_files": ["bravo.txt"],
+                "task_type": "probe",
             },
             {
                 "key": "charlie",
-                "spec": "Create charlie.txt in the current working directory containing exactly: charlie ready. Do not write any other files.",
+                "spec": "Create charlie.txt in the current working directory containing exactly: charlie ready\nDo not add punctuation. Do not write any other files.",
                 "check": "test \"$(cat charlie.txt 2>/dev/null)\" = \"charlie ready\" || { echo 'FAIL: charlie.txt missing or content is not charlie ready'; exit 1; }",
                 "verified": "charlie.txt exists and contains exactly the expected text",
                 "expect_files": ["charlie.txt"],
+                "task_type": "probe",
             },
         ],
     }
@@ -8884,6 +9543,104 @@ def open_in_browser(url: str) -> None:
         pass
 
 
+def current_repo_head(
+    repo_dir: Path | None = None,
+    *,
+    runner: Any = subprocess.run,
+) -> str | None:
+    repo = (repo_dir or Path(__file__).resolve().parent).resolve()
+    git_bin = shutil.which("git")
+    if git_bin is None or not (repo / ".git").exists():
+        return None
+    try:
+        result = _run_self_update_git(runner, git_bin, repo, "rev-parse", "HEAD")
+    except Exception:
+        return None
+    head = str(result.stdout).strip() if result.returncode == 0 else ""
+    return head or None
+
+
+def hud_should_restart(
+    recorded_running_head: str | None,
+    disk_head: str | None,
+    update_result: SelfUpdateResult | None = None,
+) -> bool:
+    if update_result is not None and update_result.applied:
+        return True
+    return disk_head is not None and disk_head != recorded_running_head
+
+
+def start_hud_update_maintenance(
+    config: AppConfig,
+    server: PersistentHudServer,
+    *,
+    recorded_running_head: str | None,
+    argv: list[str] | None = None,
+    repo_dir: Path | None = None,
+    script_path: Path | None = None,
+    runner: Any = subprocess.run,
+    execve: Any = os.execve,
+    environ: dict[str, str] | None = None,
+) -> threading.Thread | None:
+    repo = (repo_dir or Path(__file__).resolve().parent).resolve()
+    script = (script_path or Path(__file__).resolve()).resolve()
+    invocation = list(argv if argv is not None else sys.argv)
+    env = environ if environ is not None else os.environ
+
+    def worker() -> None:
+        while True:
+            time.sleep(config.update.check_interval_s)
+            try:
+                result: SelfUpdateResult | None = None
+                if (
+                    config.update.auto
+                    and env.get("RINGER_NO_SELF_UPDATE") != "1"
+                    and env.get("RINGER_SELF_UPDATED") != "1"
+                ):
+                    result = perform_self_update(
+                        config=config,
+                        argv=invocation,
+                        repo_dir=repo,
+                        script_path=script,
+                        force=True,
+                        allow_reexec=False,
+                        runner=runner,
+                        environ=env,
+                    )
+                    if result.blocked:
+                        server.update_status = {
+                            "behind": result.behind,
+                            "reason": result.reason or "update is blocked",
+                        }
+                    elif result.status in {"up_to_date", "applied"}:
+                        server.update_status = None
+                disk_head = current_repo_head(repo, runner=runner)
+                if not hud_should_restart(recorded_running_head, disk_head, result):
+                    continue
+                server.stop()
+                next_env = dict(env)
+                next_env["RINGER_SELF_UPDATED"] = "1"
+                execve(
+                    sys.executable,
+                    [sys.executable, str(script), *invocation[1:]],
+                    next_env,
+                )
+                return
+            except Exception:
+                continue
+
+    try:
+        thread = threading.Thread(
+            target=worker,
+            name="ringer-hud-self-update",
+            daemon=True,
+        )
+        thread.start()
+        return thread
+    except Exception:
+        return None
+
+
 def ensure_hud_running(config: AppConfig, *, open_browser: bool) -> None:
     """Make sure the persistent Ringside page is up before a run starts.
 
@@ -8929,7 +9686,16 @@ def run_persistent_hud(config: AppConfig, *, port: int | None, open_viewer: bool
     )
     server.model_log_path = config.eval.jsonl_path
     server.default_model_log_path = config.eval.jsonl_path
+    repo_dir = Path(__file__).resolve().parent
+    running_head = current_repo_head(repo_dir)
+    server.update_status = self_update_dashboard_status(config.state_dir, repo_dir)
     server.start()
+    start_hud_update_maintenance(
+        config,
+        server,
+        recorded_running_head=running_head,
+        repo_dir=repo_dir,
+    )
     try:
         while True:
             time.sleep(3600)
@@ -8951,7 +9717,19 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--config", type=Path, help="path to config.toml (default: XDG config path)")
+    parser.add_argument(
+        "--no-self-update",
+        action="store_true",
+        help="skip the startup self-update check for this invocation",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    update_parser = subparsers.add_parser(
+        "self-update", help="check and apply an ff-only update from origin/main"
+    )
+    update_parser.add_argument(
+        "--config", type=Path, default=argparse.SUPPRESS, help=argparse.SUPPRESS
+    )
 
     run_parser = subparsers.add_parser("run", help="run a ringer manifest")
     run_parser.add_argument("manifest", type=Path, help="path to ringer.json")
@@ -8967,9 +9745,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="disable zero-LLM HTML status/report artifacts (see [artifact] in config.toml)",
     )
     run_parser.add_argument("--dry-run", action="store_true", help="print the plan without spawning codex")
+    run_parser.add_argument(
+        "--allow-noncanonical-route",
+        action="store_true",
+        help="allow a registry-marked noncanonical model route for a deliberate bakeoff",
+    )
 
     lint_parser = subparsers.add_parser("lint", help="lint a ringer manifest")
     lint_parser.add_argument("manifest", type=Path, help="path to ringer.json")
+    lint_parser.add_argument(
+        "--allow-noncanonical-route",
+        action="store_true",
+        help="allow a registry-marked noncanonical model route for a deliberate bakeoff",
+    )
 
     hud_parser = subparsers.add_parser("hud", help="start the persistent Ringside page in your browser")
     hud_parser.add_argument("--config", type=Path, default=argparse.SUPPRESS, help=argparse.SUPPRESS)
@@ -9032,12 +9820,46 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    invocation_argv = list(sys.argv) if argv is None else [str(Path(__file__).resolve()), *argv]
+    maybe_self_update(invocation_argv)
+    # The guard is only for this process start. Clearing it lets a restarted,
+    # long-running HUD discover a later update during its lifetime.
+    os.environ.pop("RINGER_SELF_UPDATED", None)
     # Keep progress lines live when stdout is a pipe (tee, orchestrators).
     with contextlib.suppress(Exception):
         sys.stdout.reconfigure(line_buffering=True)
     parser = build_parser()
-    args = parser.parse_args(argv)
+    parse_argv = [value for value in invocation_argv[1:] if value != "--no-self-update"]
+    args = parser.parse_args(parse_argv)
     try:
+        if args.command == "self-update":
+            config = AppConfig.load(args.config)
+            result = perform_self_update(
+                config=config,
+                argv=invocation_argv,
+                force=True,
+                allow_reexec=False,
+            )
+            if result.status == "up_to_date":
+                print("Ringer is up to date.")
+                return 0
+            if result.applied:
+                print(
+                    f"Applied {result.behind} commit(s) "
+                    f"{result.old_head}..{result.new_head}."
+                )
+                return 0
+            if result.blocked:
+                print(
+                    f"Ringer is {result.behind} commit(s) behind but blocked because "
+                    f"{result.reason}."
+                )
+                return 1
+            if result.status == "error":
+                print(f"Self-update check failed: {result.reason}.")
+                return 0
+            print(f"Self-update skipped: {result.reason or 'not available'}.")
+            return 0
         if args.command == "install-agent":
             return install_agent(project=args.project)
         if args.command == "uninstall-agent":
@@ -9045,7 +9867,10 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "lint":
             manifest = Manifest.from_path(args.manifest)
-            findings = lint_manifest(manifest)
+            findings = lint_manifest(
+                manifest,
+                allow_noncanonical_route=args.allow_noncanonical_route,
+            )
             if findings:
                 print_lint_findings(findings)
                 return 1
@@ -9075,7 +9900,17 @@ def main(argv: list[str] | None = None) -> int:
         manifest = Manifest.from_path(manifest_path).with_max_parallel(args.max_parallel)
         with contextlib.suppress(Exception):
             print_steering_notes(manifest, config)
-        print_lint_findings(lint_manifest(manifest, include_model_log_nudges=True))
+        lint_findings = lint_manifest(
+            manifest,
+            include_model_log_nudges=True,
+            config=config,
+            allow_noncanonical_route=bool(
+                getattr(args, "allow_noncanonical_route", False)
+            ),
+        )
+        print_lint_findings(lint_findings)
+        if any(finding.startswith("ERROR:") for finding in lint_findings):
+            return 1
         validate_manifest_engines(manifest, config)
         identity_start_paths = [manifest.workdir]
         if manifest.source_path is not None:
