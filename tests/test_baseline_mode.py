@@ -204,5 +204,42 @@ class BaselineModeTests(unittest.TestCase):
             )
 
 
+class BaselineContainmentTests(unittest.TestCase):
+    def test_task_key_cannot_escape_baseline_scratch_root(self) -> None:
+        import asyncio
+        import contextlib
+        import importlib.util
+        import io
+
+        spec = importlib.util.spec_from_file_location("ringer_baseline_test", ROOT / "ringer.py")
+        assert spec is not None and spec.loader is not None
+        ringer = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = ringer
+        spec.loader.exec_module(ringer)
+
+        with tempfile.TemporaryDirectory() as temp_root:
+            root = Path(temp_root)
+            manifest = ringer.Manifest.from_obj(
+                {
+                    "run_name": "baseline-escape-test",
+                    "workdir": str(root / "work"),
+                    "tasks": [
+                        {
+                            "key": "../escape",
+                            "spec": "Placeholder; baseline spawns nothing.",
+                            "check": "touch escaped.txt",
+                        }
+                    ],
+                }
+            )
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                rc = asyncio.run(ringer.run_baseline(manifest, config=None))
+            output = buffer.getvalue()
+            self.assertEqual(0, rc, output)
+            self.assertIn("task key escapes the baseline scratch root", output)
+            self.assertIn("0 pass, 0 fail, 1 error of 1 check(s)", output)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

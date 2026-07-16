@@ -9212,9 +9212,16 @@ async def run_baseline(manifest: Manifest, *, config: AppConfig) -> int:
     print(f"Baseline: executing {total} check(s) with no workers spawned.")
     failures = 0
     errors = 0
+    leaked_worktrees: list[str] = []
     try:
         for task in manifest.tasks:
-            taskdir = baseline_root / task.key
+            taskdir = (baseline_root / task.key).resolve()
+            # Same containment rule as the real run path: a key must not
+            # escape its scratch root.
+            if not taskdir.is_relative_to(baseline_root.resolve()) or taskdir == baseline_root.resolve():
+                errors += 1
+                print(f"{task.key:<24} baseline: ERROR (task key escapes the baseline scratch root)")
+                continue
             if worktrees:
                 proc = await asyncio.create_subprocess_exec(
                     "git",
@@ -9266,11 +9273,24 @@ async def run_baseline(manifest: Manifest, *, config: AppConfig) -> int:
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.STDOUT,
                     )
-                    await proc.communicate()
+                    stdout, _ = await proc.communicate()
+                    if proc.returncode != 0:
+                        # A clean summary must not hide leaked worktree state.
+                        leaked_worktrees.append(str(taskdir))
+                        message = stdout.decode("utf-8", errors="replace").strip()
+                        print(f"{task.key:<24} baseline: WARNING (worktree remove failed, leaked {taskdir})")
+                        for line in message.splitlines()[:2]:
+                            print(f"    {line}")
     finally:
         shutil.rmtree(baseline_root, ignore_errors=True)
     passed = total - failures - errors
     print(f"\nbaseline: {passed} pass, {failures} fail, {errors} error of {total} check(s).")
+    if leaked_worktrees:
+        print(
+            f"WARNING: {len(leaked_worktrees)} baseline worktree(s) could not be removed; "
+            f"clean up with `git -C {shlex.quote(str(manifest.repo))} worktree prune` after "
+            "removing the directories above."
+        )
     print(
         "Reading the results: a FAIL is EXPECTED for assertions that demand the\n"
         "NEW behavior workers will build. A FAIL on an assertion about UNCHANGED\n"
