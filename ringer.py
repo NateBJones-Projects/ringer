@@ -1010,6 +1010,7 @@ class TaskSpec:
     # engine's {model} placeholder); empty means the engine's model_default.
     model: str = ""
     task_type: str = ""
+    check_timeout_s: int | None = None
 
     @classmethod
     def from_obj(cls, obj: dict[str, Any]) -> "TaskSpec":
@@ -1050,6 +1051,11 @@ class TaskSpec:
         task_type = obj.get("task_type", "")
         if not isinstance(task_type, str):
             raise ValueError(f"task {key}: task_type must be a string")
+        check_timeout_s = None
+        if "check_timeout_s" in obj:
+            check_timeout_s = int(obj.get("check_timeout_s"))
+            if check_timeout_s <= 0:
+                raise ValueError(f"task {key}: check_timeout_s must be positive")
         return cls(
             key=key,
             spec=spec,
@@ -1062,6 +1068,7 @@ class TaskSpec:
             verified=verified.strip(),
             model=model.strip(),
             task_type=task_type.strip(),
+            check_timeout_s=check_timeout_s,
         )
 
 
@@ -1202,6 +1209,10 @@ def lint_manifest(
                 f"{task.key}: no 'verified' description; a reader of the results page sees "
                 "'checked' but not what the check proves — add one plain-English sentence."
             )
+        if task.check_timeout_s is None and check_boots_infrastructure(task.check):
+            findings.append(
+                f"{task.key}: check appears to boot infrastructure; set check_timeout_s to match the task."
+            )
         if include_model_log_nudges and not task.task_type:
             findings.append(
                 f"{task.key}: no task_type; the model log buckets this as (untyped) — "
@@ -1265,6 +1276,13 @@ def check_cannot_fail(check: str) -> bool:
     if stripped in {"true", ":", "exit 0"}:
         return True
     return consists_only_of_echo_commands(stripped)
+
+
+INFRA_BOOT_CHECK_RE = re.compile(r"(?:\bdocker\b|\bcompose\s+up\b)", re.IGNORECASE)
+
+
+def check_boots_infrastructure(check: str) -> bool:
+    return bool(INFRA_BOOT_CHECK_RE.search(strip_shell_comments(check)))
 
 
 def strip_shell_comments(command: str) -> str:
@@ -7951,7 +7969,11 @@ def run_models_command(config: AppConfig, args: argparse.Namespace) -> int:
 
 class Verifier:
     async def verify(self, task: TaskSpec, taskdir: Path) -> VerifyResult:
-        check_returncode, check_timed_out, output = await self._run_check(task.check, taskdir)
+        check_returncode, check_timed_out, output = await self._run_check(
+            task.check,
+            taskdir,
+            timeout_s=task.check_timeout_s,
+        )
         missing_files = tuple(
             rel for rel in task.expect_files if not self._is_nonempty_file(self._expect_file_path(taskdir, rel))
         )
@@ -7989,7 +8011,13 @@ class Verifier:
         return candidate if candidate.is_absolute() else taskdir / candidate
 
     @staticmethod
-    async def _run_check(command: str, cwd: Path) -> tuple[int | None, bool, str]:
+    async def _run_check(
+        command: str,
+        cwd: Path,
+        timeout_s: int | None = None,
+    ) -> tuple[int | None, bool, str]:
+        effective_timeout_s = timeout_s if timeout_s is not None else CHECK_TIMEOUT_S
+        timeout_source = "task check_timeout_s" if timeout_s is not None else "default"
         proc = await asyncio.create_subprocess_shell(
             command,
             cwd=str(cwd),
@@ -8000,7 +8028,10 @@ class Verifier:
         )
         timed_out = False
         try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=CHECK_TIMEOUT_S)
+            stdout, _ = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=effective_timeout_s,
+            )
         except asyncio.TimeoutError:
             timed_out = True
             terminate_process_group(proc)
@@ -8011,7 +8042,7 @@ class Verifier:
                 stdout, _ = await proc.communicate()
         output = stdout.decode("utf-8", errors="replace") if stdout else ""
         if timed_out:
-            output += f"\n[ringer.py] check timed out after {CHECK_TIMEOUT_S}s\n"
+            output += f"\n[ringer.py] check timed out after {effective_timeout_s}s ({timeout_source})\n"
         return proc.returncode, timed_out, output
 
 
