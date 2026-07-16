@@ -3,18 +3,18 @@ key = "gpt-5.6-luna"
 display = "GPT-5.6 Luna"
 vendor = "OpenAI"
 release_date = "2026-07-09"
-identity_verification = "OpenAI's developer model page for gpt-5.6-luna lists it as the fastest/most-affordable member of the GPT-5.6 family (Sol/Terra/Luna) with a 1,050,000 context window, 128,000 max output tokens, reasoning token support, and a Feb 16, 2026 knowledge cutoff (fine-tuning listed as Not supported). GA of the GPT-5.6 family is widely reported as 2026-07-09 (third-party); the model page carries the Feb 16 2026 knowledge cutoff but no in-page GA date."
+identity_verification = "OpenAI's developer model page for gpt-5.6-luna lists it as a member of the GPT-5.6 family (Sol/Terra/Luna) with a 1,050,000 context window, 128,000 max output tokens, reasoning token support, and a Feb 16, 2026 knowledge cutoff (fine-tuning listed as Not supported). GA of the GPT-5.6 family is reported as 2026-07-09 by third-party coverage (single source); the model page carries the Feb 16 2026 knowledge cutoff but no in-page GA date."
 
 [api]
 endpoint_families = ["responses", "chat-completions", "batch"]
 auth = "In this setup, Codex CLI signs in with ChatGPT/OAuth plan credentials and uses ChatGPT workspace permissions, plan access, and ChatGPT-managed Codex entitlements. Codex CLI can also sign in with an OpenAI API key; API-key usage is billed through the OpenAI Platform account at standard API rates instead of included ChatGPT plan credits."
-streaming = "Supported. API streaming is available with stream=true on Responses and Chat Completions; streaming responses use server-sent events. Luna targets high-throughput/low-latency use; the model page lists fine-tuning as Not supported for this tier."
+streaming = "Supported. API streaming is available with stream=true on Responses and Chat Completions; streaming responses use server-sent events. Family-level (GPT-5.6) behavior; the per-tier model page does not separately enumerate a streaming flag."
 
 [caching]
 supported = true
 mode = "implicit"
-how_enabled = "Prompt caching works automatically for eligible requests with no code changes. GPT-5.6 introduces more predictable prompt caching, including support for explicit cache breakpoints. Caching starts at 1024 prompt tokens; repeated prompt prefixes, tools, and structured-output schemas can contribute to the cached prefix."
-ttl = "GPT-5.6 introduces a 30-minute minimum cache life (per the openai.com GPT-5.6 overview), a change from the GPT-5.5 24h prompt_cache_retention model. Explicit cache breakpoints let callers mark segments to cache and reuse."
+how_enabled = "Prompt caching works automatically for eligible requests with no code changes; prompt_cache_options.mode defaults to implicit (the mode field records this default). For GPT-5.6, explicit cache breakpoints are additionally available in both the Responses and Chat Completions APIs, and prompt_cache_key must be set to get the more reliable cache matching. Caching starts at 1024 prompt tokens (cached_tokens is zero for requests under 1024); repeated prompt prefixes, tools, and structured-output schemas can contribute to the cached prefix."
+ttl = "For GPT-5.6, prompt_cache_options.ttl sets a MINIMUM cache lifetime; the only supported value is 30m (also the default) — a cached prefix remains eligible for reuse for at least 30 minutes and may be retained longer. The prompt_cache_retention field used by earlier families (24h on GPT-5.5) is deprecated for GPT-5.6 and later."
 read_pricing_per_m = 0.10
 write_pricing_per_m = 1.25
 min_cacheable_prefix_tokens = 1024
@@ -26,30 +26,28 @@ strict_json_schema = true
 quirks = [
   "For reasoning models using function calling through the Responses API, pass back reasoning items, function call items, and function call output items during tool loops.",
   "Prompt-only JSON mode can still produce incomplete JSON when output is cut off by max_output_tokens or a content filter; use Structured Outputs for schema adherence.",
-  "Fine-tuning is listed as Not supported on the Luna model page.",
 ]
 
 [reasoning]
 params = ["reasoning.effort", "text.verbosity", "max_output_tokens", "model_reasoning_effort", "model_reasoning_summary", "model_verbosity"]
-defaults = "The gpt-5.6-luna model page confirms reasoning token support but does not enumerate the effort scale. Luna is the fast/cheap tier, routed at low/medium/high via `engine_args [\"-c\",\"model_reasoning_effort=...\"]`; `max` has not been observed on any tier but Sol. Harness-observed through the Codex CLI config surface, NOT OpenAI public model docs — treat the per-tier effort ceiling as such."
+defaults = "The gpt-5.6-luna model page confirms reasoning token support but does not enumerate an effort scale. Effort scales are surface-specific: the Codex CLI config reference types model_reasoning_effort as minimal|low|medium|high|xhigh (xhigh is model-dependent), and OpenRouter endpoint metadata lists supported_efforts [max, xhigh, high, medium, low, none] with default medium for openai/gpt-5.6-luna. OpenAI publishes no per-tier effort ceiling; Ringer passes effort per-task via engine_args [\"-c\",\"model_reasoning_effort=...\"]."
 max_output_interaction = "max_output_tokens limits total generated tokens, including reasoning tokens, visible output tokens, and non-visible formatting tokens. If the cap is exhausted during reasoning, the response can be incomplete before any visible output is produced."
 
 [limits]
 context_window = 1050000
 max_output_tokens = 128000
-long_context_caveat = "OPERATIONAL CAVEAT, NOT A SOURCED BENCHMARK: Luna's nominal context window is 1.05M, the same as Sol and Terra, but a 2026-07-14 search found no tier-by-tier long-context recall benchmark from OpenAI or any third party — so per-tier long-context behavior is unverified in both directions. Until a scoreboard accumulates real evidence, the conservative slot for Luna is short-context, low-stakes, latency-sensitive work."
-rate_limits = "Prompts with >272K input tokens are priced at 2x input and 1.5x output for the full request (per the gpt-5.6-luna model page). Knowledge cutoff Feb 16, 2026. ChatGPT-plan Codex OAuth usage is governed by plan entitlements, not API billing tiers; per-tier long-context API rate-limit tiers are not published on the model page."
+rate_limits = "Prompts with >272K input tokens are priced at 2x input and 1.5x output for the full request (per the gpt-5.6-luna model page). ChatGPT-plan Codex OAuth usage is governed by plan entitlements, not API billing tiers; per-tier long-context API rate-limit tiers are not published on the model page."
 
 [openrouter]
 upstream_providers = ["openai"]
-require_parameters_behavior = "This registry entry is for OpenAI direct/Codex OAuth access. If served via OpenRouter, the model slug would pass through the opencode engine's model field."
+require_parameters_behavior = "not applicable; this registry entry is for OpenAI direct/Codex OAuth access. gpt-5.6-luna is also listed on OpenRouter as openai/gpt-5.6-luna (see sources); OpenRouter routing would pass the model slug through the opencode engine's model field."
 
 [pricing]
 prompt_per_m = 1.00
 completion_per_m = 6.00
 cache_read_per_m = 0.10
 cache_write_per_m = 1.25
-as_of = "2026-07-14"
+as_of = "2026-07-16"
 
 [[sources]]
 claim = "model: gpt-5.6-luna context window"
@@ -64,10 +62,11 @@ accessed = "2026-07-14"
 quote = "128,000 max output tokens"
 
 [[sources]]
-claim = "pricing: gpt-5.6-luna input, cached input, and output per 1M"
+claim = "pricing: gpt-5.6-luna input, cached input, cache writes, and output per 1M"
 url = "https://developers.openai.com/api/docs/pricing"
-accessed = "2026-07-14"
-quote = "Input $1.00 Cached input $0.10 Output $6.00"
+accessed = "2026-07-16"
+quote = "Input Cached input Cache writes Output ... gpt-5.6-luna $1.00 $0.10 $1.25 $6.00"
+note = "The pricing page's GPT-5.6 rows carry an explicit Cache writes column (older families show '-'). The $1.25/M cache-write price is independently corroborated by OpenRouter endpoint metadata (input_cache_write = 0.00000125 for openai/gpt-5.6-luna, accessed 2026-07-16)."
 
 [[sources]]
 claim = "limits: gpt-5.6-luna large-prompt (>272K) pricing rule"
@@ -76,27 +75,65 @@ accessed = "2026-07-14"
 quote = "Prompts with >272K input tokens are priced at 2x input and 1.5x output for the full request"
 
 [[sources]]
-claim = "model: gpt-5.6-luna knowledge cutoff and fine-tuning support"
+claim = "model: gpt-5.6-luna knowledge cutoff"
 url = "https://developers.openai.com/api/docs/models/gpt-5.6-luna"
 accessed = "2026-07-14"
 quote = "Feb 16, 2026 knowledge cutoff"
 
 [[sources]]
-claim = "caching: GPT-5.6 introduces explicit cache breakpoints and a 30-minute minimum cache life"
-url = "https://openai.com/index/gpt-5-6/"
-accessed = "2026-07-14"
-quote = "more predictable prompt caching, including support for explicit cache breakpoints and a 30-minute minimum cache life"
-note = "openai.com/index/gpt-5-6 returned HTTP 403 to direct fetch; quote relayed via Perplexity sonar-pro search 2026-07-14. The 90% cache-read discount is independently corroborated by the pricing page ($0.10 cached = 0.1x $1.00 input)."
+claim = "model: gpt-5.6-luna fine-tuning not supported"
+url = "https://developers.openai.com/api/docs/models/gpt-5.6-luna"
+accessed = "2026-07-16"
+quote = "Fine-tuning Not supported"
 
 [[sources]]
-claim = "long_context: Luna recall-cliff figures are UNVERIFIED (no reproducible benchmark)"
-url = "https://www.mindstudio.ai/blog/what-is-gpt-5-6-openai-three-model-tiers"
-accessed = "2026-07-14"
-quote = "Luna is the fastest and most affordable model"
-note = "A 2026-07-14 search found no OpenAI or third-party tier-by-tier long-context recall benchmark for the GPT-5.6 family. Luna's long-context behavior relative to Terra/Sol is therefore unverified; the sheet carries this as an operational caveat only, not a sourced claim."
+claim = "reasoning: Codex CLI reasoning-effort scale"
+url = "https://developers.openai.com/codex/config-reference"
+accessed = "2026-07-16"
+quote = "minimal | low | medium | high | xhigh"
+note = "The config reference types model_reasoning_effort with this enum ('xhigh is model-dependent') and does not include 'max'."
 
 [[sources]]
-claim = "release: GPT-5.6 family (Sol/Terra/Luna) GA date (third-party, corroborated)"
+claim = "reasoning: OpenRouter supported reasoning efforts for openai/gpt-5.6-luna"
+url = "https://openrouter.ai/api/v1/models"
+accessed = "2026-07-16"
+quote = "\"supported_efforts\":[\"max\",\"xhigh\",\"high\",\"medium\",\"low\",\"none\"],\"default_effort\":\"medium\""
+
+[[sources]]
+claim = "tool_calling: strict structured outputs use JSON Schema strict true (platform, version-independent)"
+url = "https://developers.openai.com/api/docs/guides/structured-outputs"
+accessed = "2026-07-16"
+quote = "strict: true"
+
+[[sources]]
+claim = "caching: GPT-5.6 cache writes are billed at 1.25x the uncached input rate"
+url = "https://developers.openai.com/api/docs/guides/prompt-caching"
+accessed = "2026-07-16"
+quote = "On GPT-5.6 models and later model families, cache writes are billed at 1.25× the uncached input token rate and reported in `cache_write_tokens`."
+note = "Direct OpenAI source (replaces an earlier search-relayed quote from openai.com/index/gpt-5-6, which 403s to direct fetch). 1.25x of $1.00 input = $1.25/M, matching the pricing page's Cache writes column."
+
+[[sources]]
+claim = "caching: explicit cache breakpoints and 30m minimum cache life"
+url = "https://developers.openai.com/api/docs/guides/prompt-caching"
+accessed = "2026-07-16"
+quote = "use `prompt_cache_options.ttl` to set the minimum lifetime of all breakpoints written by the request. The only supported value is `30m`, which is also the default."
+note = "The guide also states: 'you can mark the end of a reusable prompt prefix with an explicit cache breakpoint. Breakpoints are available in both the Responses API and Chat Completions API.', documents `prompt_cache_options.mode` with implicit as the default, requires prompt_cache_key for the more reliable matching, and deprecates prompt_cache_retention for GPT-5.6 and later."
+
+[[sources]]
+claim = "caching: 1024-token floor for cached_tokens"
+url = "https://developers.openai.com/api/docs/guides/prompt-caching"
+accessed = "2026-07-16"
+quote = "For requests under 1024 tokens, `cached_tokens` is zero."
+
+[[sources]]
+claim = "release: GPT-5.6 family (Sol/Terra/Luna) GA date (third-party, single source)"
 url = "https://www.digitalapplied.com/blog/gpt-5-6-sol-terra-luna-public-ga"
 accessed = "2026-07-14"
 quote = "GPT-5.6 went to general availability on July 9, 2026 — across ChatGPT, Codex, and the OpenAI API"
+note = "release_date records the public GA date, not first availability (pre-GA access via Codex existed for the family; see docs/MODEL-NOTES.md, 'GPT-5.5 (codex) — attribution caveat'). Do not use release_date as a lower bound for scoreboard row attribution."
+
+[[sources]]
+claim = "openrouter: gpt-5.6-luna listing and cache-write price metadata"
+url = "https://openrouter.ai/api/v1/models"
+accessed = "2026-07-16"
+quote = "\"id\": \"openai/gpt-5.6-luna\", \"name\": \"OpenAI: GPT-5.6 Luna\" ... \"input_cache_read\": \"0.0000001\", \"input_cache_write\": \"0.00000125\""
