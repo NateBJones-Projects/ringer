@@ -48,8 +48,8 @@ class DesignReferenceTests(unittest.TestCase):
         self.renderer = ArtifactRenderer(Path(self.tmp.name) / "artifacts" / "run.html")
 
     def test_renderer_tokens_match_design_reference(self) -> None:
-        if not REFERENCE.exists():
-            self.skipTest(f"design reference is unavailable; regenerate it and point REFERENCE at it: {REFERENCE}")
+        # The fixture is committed; a missing file is a broken guard, never a skip.
+        self.assertTrue(REFERENCE.is_file(), f"committed design reference fixture is missing: {REFERENCE}")
         reference_css = REFERENCE.read_text(encoding="utf-8")
 
         expected_dark = token_values(css_block(reference_css, ":root"))
