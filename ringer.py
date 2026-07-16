@@ -8053,6 +8053,14 @@ class RingerRunner:
         self.verifier = Verifier()
         self.semaphore = asyncio.Semaphore(manifest.max_parallel)
         self.active_processes: dict[int, asyncio.subprocess.Process] = {}
+        # Engines that already produced a spawn failure this run. A missing
+        # binary fails identically for every task, so after the first INFRA
+        # verdict the remaining tasks on that engine are failed without
+        # spawning — one broken engine should cost one attempt, not
+        # tasks × attempts. (The startup preflight can't catch every case:
+        # wrapper-script engines resolve fine and then exit 127 when the
+        # binary INSIDE the wrapper is missing.)
+        self.infra_failed_engines: set[str] = set()
 
     async def run(self) -> int:
         self.manifest.workdir.mkdir(parents=True, exist_ok=True)
@@ -8107,6 +8115,24 @@ class RingerRunner:
         async with self.semaphore:
             with self.lock:
                 runtime.started_at_monotonic = time.monotonic()
+                engine_broken = runtime.task.engine in self.infra_failed_engines
+            if engine_broken:
+                # The engine already failed to spawn this run; every further
+                # task on it is doomed the same way. Fail fast, spawn nothing,
+                # log no model row (there is no model evidence).
+                with self.lock:
+                    runtime.status = "fail"
+                    runtime.final_verdict = "INFRA"
+                    runtime.ended_at_monotonic = time.monotonic()
+                with contextlib.suppress(Exception):
+                    append_text(
+                        runtime.log_path,
+                        f"[ringer.py] engine '{runtime.task.engine}' already "
+                        "hit a spawn failure this run — not spawning this "
+                        "task. Fix the engine 'bin'/PATH in the ringer "
+                        "config and re-run.\n",
+                    )
+                return
             prepared, prepare_error = await self._prepare_taskdir(runtime)
             if not prepared:
                 await self._record_prepare_error(runtime, prepare_error or "taskdir preparation failed")
@@ -8141,6 +8167,21 @@ class RingerRunner:
                         runtime.ended_at_monotonic = time.monotonic()
                     await self._cleanup_worktree_on_pass(runtime)
                     return
+                if verdict == "INFRA":
+                    # A retry cannot install a missing binary — skip it, trip
+                    # the per-engine circuit breaker so queued tasks on this
+                    # engine fail fast instead of spawning, and tell the
+                    # operator exactly what to fix.
+                    with self.lock:
+                        self.infra_failed_engines.add(runtime.task.engine)
+                    with contextlib.suppress(Exception):
+                        append_text(
+                            runtime.log_path,
+                            "[ringer.py] engine spawn failure "
+                            f"(rc={worker.returncode}, no tokens): the worker "
+                            "binary never ran. Not retrying — fix the engine "
+                            "'bin'/PATH in the ringer config and re-run.\n",
+                        )
                 if attempt < max_attempts and verdict in {"FAIL", "TIMEOUT"}:
                     failure_context = build_failure_context(runtime.log_path, verify.raw_output_excerpt)
                     current_spec = (
@@ -8468,6 +8509,19 @@ class RingerRunner:
         verdict: str,
         duration_ms: int,
     ) -> None:
+        if worker_never_ran(worker):
+            # No model was invoked, so there is no model evidence to log.
+            # The task record (run JSON) still carries the full attempt state;
+            # only the per-model scoreboard is protected here.
+            with contextlib.suppress(Exception):
+                append_text(
+                    runtime.log_path,
+                    "[ringer.py] no model evidence for this attempt "
+                    f"(rc={worker.returncode}, tokens={worker.tokens}, "
+                    f"error={worker.error or 'none'}) — the worker never ran, "
+                    "so no model-log row is written.\n",
+                )
+            return
         engine = self.config.engines.get(runtime.task.engine)
         resolved_model = resolved_task_model(
             runtime.task,
@@ -8648,9 +8702,32 @@ class AsyncFileCloser:
         self.fh.close()
 
 
+def worker_never_ran(worker: WorkerResult) -> bool:
+    """True when no model evidence exists for this attempt.
+
+    Two signatures, both meaning the model was never invoked: the engine
+    process failed before exec (error set, no exit code, no timeout), or the
+    engine command/wrapper exited with the shell's command-not-found (127) /
+    not-executable (126) codes without emitting any token usage. Attempts like
+    these are infrastructure evidence, not model evidence — they must not
+    reach the per-model log, where a `verdict != PASS` row silently drags the
+    model's pass rate down for a failure it had no part in.
+    """
+    if worker.tokens:
+        return False
+    if worker.error is not None and worker.returncode is None and not worker.timed_out:
+        return True
+    return worker.returncode in (126, 127)
+
+
 def verdict_for(worker: WorkerResult, verify: VerifyResult) -> str:
     if worker.error:
         return "ERROR"
+    if worker_never_ran(worker):
+        # Deliberately checked before verify.ok: even if a check passes (for
+        # example against artifacts left by an earlier run), a PASS must not
+        # be credited to a model that never ran.
+        return "INFRA"
     if worker.timed_out or verify.check_timed_out:
         return "TIMEOUT"
     if verify.ok:
@@ -9270,6 +9347,14 @@ def print_summary(run_id: str, runtimes: list[TaskRuntime]) -> None:
             f"{runtime.task.key:<24} {runtime.status:<8} "
             f"{(runtime.final_verdict or ''):<8} {runtime.attempts:>8} "
             f"{tokens:>10} {runtime.elapsed_s(now):>10.1f}"
+        )
+    infra = [r for r in runtimes if r.final_verdict == "INFRA"]
+    if infra:
+        print(
+            f"\n{len(infra)} task(s) hit engine spawn failures (INFRA): the "
+            "worker binary never ran, so no model-log rows were written and "
+            "no retries were spent. Check the engine 'bin' and PATH in your "
+            "ringer config, then re-run."
         )
 
 
