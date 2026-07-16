@@ -8229,11 +8229,23 @@ class RingerRunner:
                 # Failed tasks keep their worktrees for post-mortems, so a
                 # re-run with the same run_name lands here. Name the exact
                 # command that unblocks it — the bare "already exists" cost a
-                # full diagnosis cycle in the field.
+                # full diagnosis cycle in the field. A linked worktree has a
+                # .git *file*; only then is `git worktree remove` the right
+                # command, and it must be repo-qualified and quoted to be
+                # paste-safe from anywhere.
+                if (taskdir / ".git").is_file():
+                    remove_cmd = (
+                        f"git -C {shlex.quote(str(self.manifest.repo))} "
+                        f"worktree remove --force {shlex.quote(str(taskdir))}"
+                    )
+                    return False, (
+                        f"worktree taskdir already exists (left by a previous "
+                        f"failed run?): {taskdir} — remove it with "
+                        f"`{remove_cmd}` and re-run"
+                    )
                 return False, (
-                    f"worktree taskdir already exists (left by a previous "
-                    f"failed run?): {taskdir} — remove it with "
-                    f"`git worktree remove --force {taskdir}` and re-run"
+                    f"taskdir already exists but is not a registered git "
+                    f"worktree: {taskdir} — move or delete it, then re-run"
                 )
             proc = await asyncio.create_subprocess_exec(
                 "git",

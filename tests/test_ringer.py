@@ -506,7 +506,7 @@ class RingerCliTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout)
         rows = self.read_rows()
         self.assertEqual(rows[0]["verdict"], "ERROR")
-        self.assertIn("worktree taskdir already exists", rows[0]["notes"])
+        self.assertIn("taskdir already exists but is not a registered git worktree", rows[0]["notes"])
 
     def test_task_key_cannot_escape_workdir(self) -> None:
         manifest = self.write_manifest(

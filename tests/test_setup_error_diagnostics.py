@@ -48,7 +48,7 @@ def init_git_repo(path: Path) -> None:
 
 
 class SetupErrorDiagnosticsTests(unittest.TestCase):
-    def test_stale_worktree_collision_is_named_everywhere(self) -> None:
+    def run_with_stale_taskdir(self, *, registered_worktree: bool) -> tuple[str, Path, Path, Path, Path]:
         with tempfile.TemporaryDirectory() as temp_root:
             root = Path(temp_root)
             home = root / "home"
@@ -63,9 +63,18 @@ class SetupErrorDiagnosticsTests(unittest.TestCase):
             ringer_home.mkdir()
             init_git_repo(repo)
 
-            # Simulate the stale worktree a previous failed run leaves behind.
+            # Simulate what a previous failed run leaves behind: either a real
+            # registered worktree (the field case) or a plain directory.
             stale_taskdir = workdir / "stale-task"
-            stale_taskdir.mkdir(parents=True)
+            if registered_worktree:
+                stale_taskdir.parent.mkdir(parents=True)
+                subprocess.run(
+                    ["git", "-C", str(repo), "worktree", "add", "--quiet", str(stale_taskdir)],
+                    check=True,
+                    capture_output=True,
+                )
+            else:
+                stale_taskdir.mkdir(parents=True)
 
             config_path.write_text(
                 "\n".join(
@@ -130,6 +139,7 @@ class SetupErrorDiagnosticsTests(unittest.TestCase):
             env["HOME"] = str(home)
             env["RINGER_HOME"] = str(ringer_home)
             env["XDG_CONFIG_HOME"] = str(root / "xdg-config")
+            env["RINGER_NO_SELF_UPDATE"] = "1"
 
             proc = subprocess.run(
                 [
@@ -153,6 +163,11 @@ class SetupErrorDiagnosticsTests(unittest.TestCase):
             )
 
             combined_output = proc.stdout + proc.stderr
+            expected_reason = (
+                "worktree taskdir already exists"
+                if registered_worktree
+                else "taskdir already exists but is not a registered git worktree"
+            )
 
             # Verdict ERROR as before — but no longer naked.
             self.assertRegex(
@@ -161,19 +176,11 @@ class SetupErrorDiagnosticsTests(unittest.TestCase):
                 combined_output,
             )
 
-            # The summary lists the setup failure with the unblocking command.
+            # The summary lists the setup failure explicitly.
             self.assertIn(
                 "setup failures (no worker was spawned):", combined_output
             )
-            self.assertIn("worktree taskdir already exists", combined_output)
-            # macOS tempdirs surface as /var/... but resolve to /private/var/...;
-            # accept either rendering of the same taskdir.
-            self.assertTrue(
-                f"git worktree remove --force {stale_taskdir}" in combined_output
-                or f"git worktree remove --force {stale_taskdir.resolve()}"
-                in combined_output,
-                combined_output,
-            )
+            self.assertIn(expected_reason, combined_output)
 
             # The reason reaches the worker log, where post-mortems look first.
             worker_log_candidates = list(workdir.rglob("*.log"))
@@ -197,16 +204,42 @@ class SetupErrorDiagnosticsTests(unittest.TestCase):
                 data = json.loads(state_file.read_text(encoding="utf-8"))
                 tasks = data.get("tasks") if isinstance(data, dict) else None
                 for task in tasks or []:
-                    if (
-                        task.get("key") == "stale-task"
-                        and "worktree taskdir already exists"
-                        in (task.get("setup_error") or "")
+                    if task.get("key") == "stale-task" and expected_reason in (
+                        task.get("setup_error") or ""
                     ):
                         found_setup_error = True
             self.assertTrue(
                 found_setup_error,
                 f"setup_error missing from run state: {state_files}",
             )
+
+            return (
+                combined_output,
+                stale_taskdir.resolve(),
+                workdir.resolve(),
+                state_dir.resolve(),
+                repo.resolve(),
+            )
+
+    def test_stale_registered_worktree_names_the_exact_remove_command(self) -> None:
+        combined_output, stale_taskdir, _, _, repo = self.run_with_stale_taskdir(
+            registered_worktree=True
+        )
+        # The command must be paste-safe from anywhere: repo-qualified and
+        # pointing at the resolved taskdir.
+        self.assertIn(
+            f"git -C {repo} worktree remove --force {stale_taskdir}",
+            combined_output,
+        )
+
+    def test_plain_directory_collision_does_not_claim_a_worktree_command(self) -> None:
+        combined_output, _, _, _, _ = self.run_with_stale_taskdir(
+            registered_worktree=False
+        )
+        # `git worktree remove` would fail on a plain directory — never
+        # print a recovery command that does not work.
+        self.assertNotIn("git worktree remove", combined_output)
+        self.assertIn("move or delete it, then re-run", combined_output)
 
 
 if __name__ == "__main__":
