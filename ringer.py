@@ -6,6 +6,7 @@ import asyncio
 import base64
 import contextlib
 import json
+import math
 import mimetypes
 import os
 import re
@@ -40,6 +41,7 @@ from html import escape as html_escape
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from collections.abc import Awaitable, Callable
 from typing import Any, Iterable
 
 
@@ -121,6 +123,14 @@ class EngineConfig:
     # its own "model" — this is what makes a harness engine (OpenCode) model
     # agnostic instead of hard-coding one model into the command line.
     model_default: str = ""
+    # Minimum seconds between consecutive worker spawns of THIS engine.
+    # Engines whose instances share local state (OpenCode: one SQLite state
+    # DB for every process) fail their cold start when several workers launch
+    # in the same instant — one wins the lock, the rest die in seconds with
+    # "database is locked" before spending a single token, and simultaneous
+    # retries reproduce the collision. 0 (the default) preserves the current
+    # spawn-all-at-once behavior.
+    spawn_stagger_s: float = 0.0
 
     @property
     def process_name(self) -> str:
@@ -982,6 +992,22 @@ def load_engines(raw: Any) -> dict[str, EngineConfig]:
         model_default = str(
             section.get("model_default", base.model_default if base else "")
         ).strip()
+        stagger_raw = section.get(
+            "spawn_stagger_s", base.spawn_stagger_s if base else 0.0
+        )
+        if isinstance(stagger_raw, bool) or not isinstance(stagger_raw, (int, float)):
+            raise ValueError(
+                f"engines.{clean_name}.spawn_stagger_s must be a number of seconds"
+            )
+        spawn_stagger_s = float(stagger_raw)
+        if not math.isfinite(spawn_stagger_s):
+            raise ValueError(
+                f"engines.{clean_name}.spawn_stagger_s must be a finite number of seconds"
+            )
+        if spawn_stagger_s < 0:
+            raise ValueError(
+                f"engines.{clean_name}.spawn_stagger_s must not be negative"
+            )
         engines[clean_name] = EngineConfig(
             name=clean_name,
             bin=bin_path,
@@ -991,6 +1017,7 @@ def load_engines(raw: Any) -> dict[str, EngineConfig]:
             token_regex=token_regex,
             model_report_regex=model_report_regex,
             model_default=model_default,
+            spawn_stagger_s=spawn_stagger_s,
         )
     return engines
 
@@ -1463,6 +1490,7 @@ class WorkerResult:
     tokens: int | None
     error: str | None = None
     reported_model: str | None = None
+    spawn_wait_ms: int = 0
 
 
 @dataclass(frozen=True)
@@ -8015,6 +8043,40 @@ class Verifier:
         return proc.returncode, timed_out, output
 
 
+class SpawnGate:
+    """Spaces worker spawns of the same engine at least stagger_s apart.
+
+    Slot reservation: each caller claims the next free slot for its engine and
+    sleeps until then, so concurrent waiters spawn stagger_s apart in claim
+    order instead of colliding on shared engine state. Engines with
+    spawn_stagger_s = 0 pass through untouched. The bookkeeping between
+    reading and writing _next_free has no await points, so it is atomic on
+    the event loop — keep it that way.
+
+    now/sleep are injectable for deterministic tests.
+    """
+
+    def __init__(
+        self,
+        now: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
+        self._now = now
+        self._sleep = sleep
+        self._next_free: dict[str, float] = {}
+
+    async def wait_turn(self, engine_name: str, stagger_s: float) -> float:
+        if stagger_s <= 0:
+            return 0.0
+        now = self._now()
+        slot = max(now, self._next_free.get(engine_name, now))
+        self._next_free[engine_name] = slot + stagger_s
+        wait = slot - now
+        if wait > 0:
+            await self._sleep(wait)
+        return wait
+
+
 class RingerRunner:
     def __init__(
         self,
@@ -8057,6 +8119,7 @@ class RingerRunner:
         self.logger = EvalLogger(config.eval)
         self.verifier = Verifier()
         self.semaphore = asyncio.Semaphore(manifest.max_parallel)
+        self.spawn_gate = SpawnGate()
         self.active_processes: dict[int, asyncio.subprocess.Process] = {}
 
     async def run(self) -> int:
@@ -8136,7 +8199,11 @@ class RingerRunner:
                     runtime.last_check_returncode = verify.check_returncode
                     runtime.last_check_timed_out = verify.check_timed_out
                     runtime.last_check_output = verify.raw_output_excerpt
-                duration_ms = int((time.monotonic() - attempt_started) * 1000)
+                duration_ms = max(
+                    0,
+                    int((time.monotonic() - attempt_started) * 1000)
+                    - worker.spawn_wait_ms,
+                )
                 self._log_attempt(runtime, current_spec, retrying, worker, verify, verdict, duration_ms)
                 if verdict == "PASS":
                     self._harvest_deliverables_on_pass(runtime)
@@ -8409,6 +8476,15 @@ class RingerRunner:
                 append_text(log_path, steering_line)
         with self.lock:
             runtime.last_worker_command = list(cmd)
+        waited = await self.spawn_gate.wait_turn(engine.name, engine.spawn_stagger_s)
+        spawn_wait_ms = int(waited * 1000)
+        if waited > 0:
+            with contextlib.suppress(Exception):
+                append_text(
+                    log_path,
+                    f"[ringer.py] spawn stagger: waited {waited:.1f}s "
+                    f"(engines.{engine.name}.spawn_stagger_s = {engine.spawn_stagger_s:g})\n",
+                )
         append_text(
             log_path,
             "\n"
@@ -8420,7 +8496,13 @@ class RingerRunner:
         try:
             log_fh = log_path.open("ab")
         except OSError as exc:
-            return WorkerResult(returncode=None, timed_out=False, tokens=None, error=str(exc))
+            return WorkerResult(
+                returncode=None,
+                timed_out=False,
+                tokens=None,
+                error=str(exc),
+                spawn_wait_ms=spawn_wait_ms,
+            )
         async with AsyncFileCloser(log_fh):
             try:
                 proc = await asyncio.create_subprocess_exec(
@@ -8435,7 +8517,13 @@ class RingerRunner:
                 message = f"[ringer.py] worker spawn failed: {exc}\n"
                 log_fh.write(message.encode("utf-8", errors="replace"))
                 log_fh.flush()
-                return WorkerResult(returncode=None, timed_out=False, tokens=None, error=str(exc))
+                return WorkerResult(
+                    returncode=None,
+                    timed_out=False,
+                    tokens=None,
+                    error=str(exc),
+                    spawn_wait_ms=spawn_wait_ms,
+                )
             with self.lock:
                 runtime.worker_pid = proc.pid
             self.active_processes[proc.pid] = proc
@@ -8469,6 +8557,7 @@ class RingerRunner:
             timed_out=timed_out,
             tokens=tokens,
             reported_model=reported_model,
+            spawn_wait_ms=spawn_wait_ms,
         )
 
     async def _tee_stream(
@@ -8555,6 +8644,7 @@ class RingerRunner:
                 "verify_method": VERIFY_METHOD,
                 "verdict": verdict,
                 "duration_ms": duration_ms,
+                "spawn_wait_ms": worker.spawn_wait_ms,
                 "worker_tokens": worker.tokens,
                 "notes": "\n".join(notes_parts),
                 "orchestrator": self.identity,
