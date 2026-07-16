@@ -55,6 +55,7 @@ lab = "xAI"
 confidence = "verified"     # operator-confirmed (Jon, 2026-07-10): Grok Build CLI serves Grok 4.5 + Composer 2.5
 source = "https://docs.x.ai/developers/release-notes"
 last_verified = 2026-07-10
+noncanonical_slugs = ["opencode:openrouter/x-ai/grok-4.5"]
 
 [engines.grok.models."grok-composer-2.5-fast"]
 display = "Composer 2.5 Fast"
@@ -67,8 +68,8 @@ last_verified = 2026-07-10
 harness = "OpenCode"
 access = "OpenRouter API"
 # model key = the manifest "model" slug; entries below map slugs to display
-# names. Unlisted slugs retain their complete raw value, including the
-# "openrouter/" prefix, and are marked unregistered until verified here.
+# names. Unlisted slugs are marked unregistered and derive a display name;
+# their complete raw value appears only in scoreboard diagnostics until verified.
 
 [engines.opencode.models."openrouter/z-ai/glm-5.2"]
 display = "GLM 5.2"
