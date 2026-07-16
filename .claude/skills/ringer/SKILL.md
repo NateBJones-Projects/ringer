@@ -83,6 +83,28 @@ page — never `cat` result files into the terminal as the reveal. If a result
 matters, it belongs in the artifact; if it isn't there, that's a harvest gap
 to fix (declare it in `expect_files`), not a reason to bypass the page.
 
+## Who ran it — always pass `--identity`
+
+The identity is stamped into the Ringside picker row, the run header, and
+the `orchestrator` column of every eval row in `ringer.db`. It is how runs
+stay tellable apart in the library and how eval data stays segmentable —
+never let it fall through to the hostname.
+
+- **Have a session ID? Pass it bare.** `--identity ms-20260715-1759` —
+  exactly as the session knows itself, no decorating prefixes
+  (`claude-csa-ms-…` and `ms-…` from the same convention read as two
+  different callers).
+- **No session ID** (cron, maintenance, ad-hoc)? Use a short stable purpose
+  slug and REUSE it: `ringer-maint`, not a fresh coinage per run. Same
+  purpose, same identity, across days.
+- **Identity is the CALLER, not the job.** The job name lives in `run_name`
+  (one job, one artifact); the identity answers "who started this". Never
+  fold the job, round, or date into it.
+- **Repos with recurring runs get a `.fleet-agent` fallback** — one line at
+  the repo root, `[A-Za-z0-9_-]` only. It catches every invocation that
+  forgets the flag (`--identity` and env still win). This repo pins
+  `ringer-maint`.
+
 ## Spec-writing craft
 
 Workers are stateless and cannot ask questions. Every spec must be
