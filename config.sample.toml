@@ -145,7 +145,10 @@ model_report_regex = "(?m)^model:[ \\t]*([^ \\t\\r\\n]+)[ \\t]*\\r?$"
 # ringer's simultaneous retries reproduce the collision. A minimum gap between
 # spawns of this engine lets each cold start claim the DB before the next
 # begins. Applies per attempt (retries stagger too); 0 disables. Engines
-# without shared state (codex) don't need it.
+# without shared state (codex) don't need it. Staggered workers still hold
+# max_parallel slots while they wait for their spawn slot, so a wide batch on a
+# staggered engine can starve other engines' workers during the stagger window —
+# size max_parallel or split the run accordingly.
 # Uncomment and set an absolute path for `bin` to enable.
 # [engines.opencode]
 # bin = "/absolute/path/to/ringer/engines/opencode-sandboxed.sh"

@@ -63,6 +63,14 @@ class SpawnStaggerConfigTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             load_engines({"opencode": engine_section(spawn_stagger_s=-1)})
 
+    def test_inf_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "finite"):
+            load_engines({"opencode": engine_section(spawn_stagger_s=float("inf"))})
+
+    def test_nan_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "finite"):
+            load_engines({"opencode": engine_section(spawn_stagger_s=float("nan"))})
+
     def test_string_rejected(self) -> None:
         with self.assertRaises(ValueError):
             load_engines({"opencode": engine_section(spawn_stagger_s="2")})
@@ -264,6 +272,18 @@ class SpawnStaggerEndToEndTests(unittest.TestCase):
             for earlier, later in zip(spawn_times, spawn_times[1:]):
                 gap_s = (later - earlier).total_seconds()
                 self.assertGreaterEqual(gap_s, stagger_s * 0.75, spawn_times)
+
+            rows = [
+                json.loads(line)
+                for line in (root / "runs.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual(3, len(rows))
+            self.assertEqual(1, sum(row["spawn_wait_ms"] == 0 for row in rows))
+            self.assertEqual(2, sum(row["spawn_wait_ms"] >= 450 for row in rows))
+            # The third task waits about 1200 ms; if that leaked into
+            # duration_ms, this bound fails loudly, while a fast mock attempt
+            # stays far under it.
+            self.assertTrue(all(row["duration_ms"] < 1080 for row in rows), rows)
 
 
 if __name__ == "__main__":

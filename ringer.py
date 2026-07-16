@@ -6,6 +6,7 @@ import asyncio
 import base64
 import contextlib
 import json
+import math
 import mimetypes
 import os
 import re
@@ -625,6 +626,10 @@ def load_engines(raw: Any) -> dict[str, EngineConfig]:
                 f"engines.{clean_name}.spawn_stagger_s must be a number of seconds"
             )
         spawn_stagger_s = float(stagger_raw)
+        if not math.isfinite(spawn_stagger_s):
+            raise ValueError(
+                f"engines.{clean_name}.spawn_stagger_s must be a finite number of seconds"
+            )
         if spawn_stagger_s < 0:
             raise ValueError(
                 f"engines.{clean_name}.spawn_stagger_s must not be negative"
@@ -1091,6 +1096,7 @@ class WorkerResult:
     tokens: int | None
     error: str | None = None
     reported_model: str | None = None
+    spawn_wait_ms: int = 0
 
 
 @dataclass(frozen=True)
@@ -7532,7 +7538,11 @@ class RingerRunner:
                     runtime.last_check_returncode = verify.check_returncode
                     runtime.last_check_timed_out = verify.check_timed_out
                     runtime.last_check_output = verify.raw_output_excerpt
-                duration_ms = int((time.monotonic() - attempt_started) * 1000)
+                duration_ms = max(
+                    0,
+                    int((time.monotonic() - attempt_started) * 1000)
+                    - worker.spawn_wait_ms,
+                )
                 self._log_attempt(runtime, current_spec, retrying, worker, verify, verdict, duration_ms)
                 if verdict == "PASS":
                     self._harvest_deliverables_on_pass(runtime)
@@ -7722,14 +7732,6 @@ class RingerRunner:
                     "but config allow_full_access is false"
                 ),
             )
-        waited = await self.spawn_gate.wait_turn(engine.name, engine.spawn_stagger_s)
-        if waited > 0:
-            with contextlib.suppress(Exception):
-                append_text(
-                    log_path,
-                    f"[ringer.py] spawn stagger: waited {waited:.1f}s "
-                    f"(engines.{engine.name}.spawn_stagger_s = {engine.spawn_stagger_s:g})\n",
-                )
         cmd = build_worker_command(
             engine,
             taskdir=runtime.taskdir,
@@ -7784,6 +7786,15 @@ class RingerRunner:
                 append_text(log_path, steering_line)
         with self.lock:
             runtime.last_worker_command = list(cmd)
+        waited = await self.spawn_gate.wait_turn(engine.name, engine.spawn_stagger_s)
+        spawn_wait_ms = int(waited * 1000)
+        if waited > 0:
+            with contextlib.suppress(Exception):
+                append_text(
+                    log_path,
+                    f"[ringer.py] spawn stagger: waited {waited:.1f}s "
+                    f"(engines.{engine.name}.spawn_stagger_s = {engine.spawn_stagger_s:g})\n",
+                )
         append_text(
             log_path,
             "\n"
@@ -7795,7 +7806,13 @@ class RingerRunner:
         try:
             log_fh = log_path.open("ab")
         except OSError as exc:
-            return WorkerResult(returncode=None, timed_out=False, tokens=None, error=str(exc))
+            return WorkerResult(
+                returncode=None,
+                timed_out=False,
+                tokens=None,
+                error=str(exc),
+                spawn_wait_ms=spawn_wait_ms,
+            )
         async with AsyncFileCloser(log_fh):
             try:
                 proc = await asyncio.create_subprocess_exec(
@@ -7810,7 +7827,13 @@ class RingerRunner:
                 message = f"[ringer.py] worker spawn failed: {exc}\n"
                 log_fh.write(message.encode("utf-8", errors="replace"))
                 log_fh.flush()
-                return WorkerResult(returncode=None, timed_out=False, tokens=None, error=str(exc))
+                return WorkerResult(
+                    returncode=None,
+                    timed_out=False,
+                    tokens=None,
+                    error=str(exc),
+                    spawn_wait_ms=spawn_wait_ms,
+                )
             with self.lock:
                 runtime.worker_pid = proc.pid
             self.active_processes[proc.pid] = proc
@@ -7844,6 +7867,7 @@ class RingerRunner:
             timed_out=timed_out,
             tokens=tokens,
             reported_model=reported_model,
+            spawn_wait_ms=spawn_wait_ms,
         )
 
     async def _tee_stream(
@@ -7930,6 +7954,7 @@ class RingerRunner:
                 "verify_method": VERIFY_METHOD,
                 "verdict": verdict,
                 "duration_ms": duration_ms,
+                "spawn_wait_ms": worker.spawn_wait_ms,
                 "worker_tokens": worker.tokens,
                 "notes": "\n".join(notes_parts),
                 "orchestrator": self.identity,
