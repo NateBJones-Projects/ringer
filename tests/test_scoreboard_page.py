@@ -247,17 +247,18 @@ class ScoreboardPageTests(unittest.TestCase):
         html = self.render_to(self.root / "scoreboard.html")
 
         expected_headers = [
-            "Rank",
             "Model",
             "Lab",
             "Harness",
             "API/Plan",
             "Tier",
             "Tasks",
-            "First-try",
+            "First try",
             "Pass",
-            "Est. $/task",
+            "Tokens (median)",
+            "Speed (median)",
             "Last used",
+            "Notes",
         ]
         last_index = -1
         for header in expected_headers:
@@ -269,9 +270,13 @@ class ScoreboardPageTests(unittest.TestCase):
         self.assertIn('<div class="table-scroll">', html)
         self.assertNotIn("model-card", html)
         self.assertNotIn("source-grid", html)
-        self.assertIn("openrouter/proven", html)
-        self.assertIn("openrouter/probation", html)
-        self.assertIn("openrouter/free:free", html)
+        table_body = html[html.index("<main>") : html.index("</main>")]
+        self.assertNotIn("openrouter/proven", table_body)
+        self.assertNotIn("openrouter/probation", table_body)
+        self.assertNotIn("openrouter/free:free", table_body)
+        self.assertIn('<div class="model-name">Proven</div>', table_body)
+        self.assertIn('<div class="model-name">Probation</div>', table_body)
+        self.assertIn('<div class="model-name">Free</div>', table_body)
         # Blank-model codex rows are quarantined, never rendered as GPT-5.5
         # (taxonomy contract, docs/TAXONOMY.md).
         self.assertNotIn("GPT-5.5", html)
@@ -282,21 +287,24 @@ class ScoreboardPageTests(unittest.TestCase):
         self.assertIn("n=20", html)
         self.assertIn('class="rate-bar bar-fill" style="width: 90%"', html)
         self.assertIn('class="rate-bar bar-fill" style="width: 100%"', html)
-        self.assertIn(">free</td>", html)
-        self.assertNotIn("$0/task", html)
-        self.assertIn(">in plan</td>", html)
+        self.assertIn('<td class="num">2,000</td>', html)
+        self.assertIn(">0s</td>", html)
+        self.assertNotIn("Est. $/task", html)
         self.assertIn("<time>July 6</time><span>steady code-feature performance across a larger sample. Continuation line kept with the dated bullet.</span>", html)
         self.assertNotIn("`code-feature`", html)
         self.assertIn("fifth newest note", html)
-        self.assertNotIn("older note should stay behind the cap", html)
+        self.assertIn("older note should stay behind the cap", html)
         self.assertIn("more in model notes", html)
         self.assertIn("no judgment notes yet", html)
 
     def test_html_header_links_watchlist_and_footer_diagnostics(self) -> None:
-        html = self.render_to(self.root / "scoreboard.html")
+        generated_at = ringer.datetime.fromisoformat("2026-07-06T12:20:00+00:00")
+        with mock.patch.object(ringer, "datetime", wraps=ringer.datetime) as mocked_datetime:
+            mocked_datetime.now.return_value = generated_at
+            html = self.render_to(self.root / "scoreboard.html")
 
         self.assertIn("<h1 class=\"scoreboard-title\">Model performance scoreboard</h1>", html)
-        self.assertIn("Generated July 6, 2026", html)
+        self.assertIn("<span>Generated July 6, 2026</span>", html)
         self.assertIn('>eval log</a>', html)
         self.assertIn('>catalog</a>', html)
         self.assertIn('>model notes</a>', html)
@@ -309,8 +317,8 @@ class ScoreboardPageTests(unittest.TestCase):
 
         self.assertEqual(1, html.count('class="watchlist"'))
         self.assertIn("1 models free on OpenRouter right now", html)
-        self.assertIn('data-model="openrouter/free:free"', html)
-        self.assertIn('title="openrouter/free:free"', html)
+        self.assertNotIn('data-model="openrouter/free:free"', html)
+        self.assertNotIn('title="openrouter/free:free"', html)
         self.assertIn("Free · 128K ctx", html)
         self.assertIn("Free went free — July 6", html)
         self.assertNotIn("went_free", html)
@@ -318,14 +326,16 @@ class ScoreboardPageTests(unittest.TestCase):
         footer_start = html.index('<footer class="scoreboard-footer">')
         footer_html = html[footer_start:]
         self.assertIn("25 rows read, 1 skipped lines.", footer_html)
-        self.assertIn("Ranking sorts by evidence tier first", footer_html)
-        self.assertIn("Cost estimate assumes logged worker_tokens are split 50/50", footer_html)
+        self.assertIn("Ordering sorts by evidence tier first", footer_html)
+        self.assertIn("Misrouted and unattributed legacy rows are not ranked or tiered", footer_html)
 
     def test_evidence_floor_orders_probation_after_proven_model(self) -> None:
         html = self.render_to(self.root / "scoreboard.html")
 
-        self.assertLess(html.index("openrouter/proven"), html.index("openrouter/probation"))
-        self.assertIn('<td class="rank-cell num">1</td>', html[: html.index("openrouter/proven")])
+        self.assertLess(html.index(">Proven<"), html.index(">Probation<"))
+        proven_row = html[html.index(">Proven<") :]
+        proven_row = proven_row[: proven_row.index("</tr>")]
+        self.assertIn('<span class="tier-badge proven">proven</span>', proven_row)
 
     def test_reused_task_identity_does_not_collapse_proven_evidence(self) -> None:
         rows: list[dict[str, object]] = []
@@ -358,9 +368,9 @@ class ScoreboardPageTests(unittest.TestCase):
 
         html = self.render_to(self.root / "scoreboard.html")
 
-        self.assertLess(html.index("openrouter/proven"), html.index("openrouter/probation"))
+        self.assertLess(html.index(">Proven<"), html.index(">Probation<"))
         self.assertIn("n=20", html)
-        row_start = html.index('<tr class="model-row" id="model-openrouter-proven">')
+        row_start = html.rfind('<tr class="model-row"', 0, html.index(">Proven<"))
         row_end = html.index("</tr>", row_start)
         self.assertIn('<span class="tier-badge proven">proven</span>', html[row_start:row_end])
 
