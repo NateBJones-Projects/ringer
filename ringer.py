@@ -9517,9 +9517,35 @@ async def run_manifest(
         manifest.workdir,
         started_at=runner.started_at,
     )
+    task = asyncio.create_task(runner.run())
+    loop = asyncio.get_running_loop()
+    registered_signals: list[signal.Signals] = []
+    shutdown_started = False
+
+    def request_shutdown() -> None:
+        # One-shot: a repeat signal must not cancel the in-progress worker
+        # cleanup and state flush, or it recreates the orphan problem.
+        nonlocal shutdown_started
+        if shutdown_started:
+            print(
+                "ringer.py: shutdown already in progress; waiting on worker cleanup",
+                file=sys.stderr,
+            )
+            return
+        shutdown_started = True
+        task.cancel()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        with contextlib.suppress(NotImplementedError, RuntimeError):
+            loop.add_signal_handler(sig, request_shutdown)
+            registered_signals.append(sig)
     try:
-        return await runner.run()
+        return await task
+    except asyncio.CancelledError:
+        return 130
     finally:
+        for sig in registered_signals:
+            loop.remove_signal_handler(sig)
         unregister_active_run(runner.run_id)
 
 

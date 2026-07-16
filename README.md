@@ -194,6 +194,22 @@ grok login
 
 Route with per-task `"engine": "grok"` and pick the model with `"model": "grok-build"` or `"model": "grok-composer-2.5-fast"` (the shipped default — the speed pick). Grok brings its own OS sandbox on macOS (profile `workspace`: read everywhere, writes confined to the task dir, temp, and `~/.grok`), and its JSON output exposes no token counts — plan-billed workers report cost as included in plan.
 
+`args_template` is an argv array, not a shell string. Ringer replaces `{taskdir}`, `{spec}`, and `{model}` inside each argv element. `{access_args}`, `{sandbox_args}`, `{full_access_args}`, `{model_args}` (becomes `-m <resolved model>` when the task or engine names one), and `{engine_args}` (the task's per-task `engine_args`) expand to multiple argv elements only when they appear as their own array item.
+
+Watch for variadic CLI flags. If an engine has a flag that consumes all following values, put `{spec}` before that flag. For Claude-style CLIs, prefer:
+
+```toml
+args_template = ["-p", "{spec}", "--allowedTools", "Bash"]
+```
+
+not:
+
+```toml
+args_template = ["-p", "--allowedTools", "Bash", "{spec}"]
+```
+
+Each worker process runs with cwd set to `workdir/<task.key>/`. Use absolute paths in `spec` when workers need shared inputs outside their task directory.
+
 ## Ringside — mission control
 
 ![Ringside in the browser: a run's live results page with per-worker status and verification](docs/ringside.png)
