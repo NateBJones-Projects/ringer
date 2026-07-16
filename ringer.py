@@ -9188,6 +9188,118 @@ def shorten(value: str, limit: int) -> str:
     return clean[: max(0, limit - 3)] + "..."
 
 
+async def run_baseline(manifest: Manifest, *, config: AppConfig) -> int:
+    """Execute every task's CHECK against the unmodified tree. Spawn nothing.
+
+    The point: a check assertion that encodes NEW behavior is *expected* to
+    fail here, but an assertion that encodes UNCHANGED behavior and fails
+    here is a bug in the check itself — and at run time it will burn a
+    worker's attempts against something no model can satisfy. Running the
+    checks once, before any worker spawns, makes that question answerable in
+    one command. The harness only reports; deciding which failures are
+    expected is the orchestrator's judgment.
+
+    Checks run for real — including any exports or side effects they perform
+    (e.g. a fix-swarm check writing its patch file). Each task gets a fresh
+    scratch taskdir (a detached worktree when the manifest uses worktrees),
+    removed afterwards, so no state leaks between checks or into a later run.
+    """
+    del config  # engines are irrelevant: baseline spawns no workers
+    verifier = Verifier()
+    worktrees = manifest.worktrees and manifest.repo is not None
+    baseline_root = Path(tempfile.mkdtemp(prefix="ringer-baseline-"))
+    total = len(manifest.tasks)
+    print(f"Baseline: executing {total} check(s) with no workers spawned.")
+    failures = 0
+    errors = 0
+    leaked_worktrees: list[str] = []
+    try:
+        for task in manifest.tasks:
+            taskdir = (baseline_root / task.key).resolve()
+            # Same containment rule as the real run path: a key must not
+            # escape its scratch root.
+            if not taskdir.is_relative_to(baseline_root.resolve()) or taskdir == baseline_root.resolve():
+                errors += 1
+                print(f"{task.key:<24} baseline: ERROR (task key escapes the baseline scratch root)")
+                continue
+            if worktrees:
+                proc = await asyncio.create_subprocess_exec(
+                    "git",
+                    "-C",
+                    str(manifest.repo),
+                    "worktree",
+                    "add",
+                    "--detach",
+                    str(taskdir),
+                    "HEAD",
+                    stdin=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                )
+                stdout, _ = await proc.communicate()
+                if proc.returncode != 0:
+                    errors += 1
+                    print(f"{task.key:<24} baseline: ERROR (git worktree add failed)")
+                    message = stdout.decode("utf-8", errors="replace").strip()
+                    for line in message.splitlines()[:4]:
+                        print(f"    {line}")
+                    continue
+            else:
+                taskdir.mkdir(parents=True, exist_ok=True)
+            try:
+                verify = await verifier.verify(task, taskdir)
+                status = "pass" if verify.ok else "FAIL"
+                timed_out = ", timed out" if verify.check_timed_out else ""
+                print(
+                    f"{task.key:<24} baseline: {status} "
+                    f"(rc={verify.check_returncode}{timed_out})"
+                )
+                if not verify.ok:
+                    failures += 1
+                    excerpt = verify.raw_output_excerpt.strip()
+                    for line in excerpt.splitlines()[:6]:
+                        print(f"    {line}")
+            finally:
+                if worktrees:
+                    proc = await asyncio.create_subprocess_exec(
+                        "git",
+                        "-C",
+                        str(manifest.repo),
+                        "worktree",
+                        "remove",
+                        "--force",
+                        str(taskdir),
+                        stdin=asyncio.subprocess.DEVNULL,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.STDOUT,
+                    )
+                    stdout, _ = await proc.communicate()
+                    if proc.returncode != 0:
+                        # A clean summary must not hide leaked worktree state.
+                        leaked_worktrees.append(str(taskdir))
+                        message = stdout.decode("utf-8", errors="replace").strip()
+                        print(f"{task.key:<24} baseline: WARNING (worktree remove failed, leaked {taskdir})")
+                        for line in message.splitlines()[:2]:
+                            print(f"    {line}")
+    finally:
+        shutil.rmtree(baseline_root, ignore_errors=True)
+    passed = total - failures - errors
+    print(f"\nbaseline: {passed} pass, {failures} fail, {errors} error of {total} check(s).")
+    if leaked_worktrees:
+        print(
+            f"WARNING: {len(leaked_worktrees)} baseline worktree(s) could not be removed; "
+            f"clean up with `git -C {shlex.quote(str(manifest.repo))} worktree prune` after "
+            "removing the directories above."
+        )
+    print(
+        "Reading the results: a FAIL is EXPECTED for assertions that demand the\n"
+        "NEW behavior workers will build. A FAIL on an assertion about UNCHANGED\n"
+        "behavior means the check itself is broken and will burn worker attempts\n"
+        "against something no model can satisfy — fix the check before spawning."
+    )
+    return 0
+
+
 def append_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as fh:
@@ -9811,6 +9923,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument("--dry-run", action="store_true", help="print the plan without spawning codex")
     run_parser.add_argument(
+        "--baseline",
+        action="store_true",
+        help=(
+            "execute every task's CHECK against the unmodified tree and report, "
+            "spawning no workers — assertions about unchanged behavior that fail "
+            "baseline are bugs in the check, not work for a model"
+        ),
+    )
+    run_parser.add_argument(
         "--allow-noncanonical-route",
         action="store_true",
         help="allow a registry-marked noncanonical model route for a deliberate bakeoff",
@@ -9993,6 +10114,10 @@ def main(argv: list[str] | None = None) -> int:
                 force_browser=args.browser,
             )
             return 0
+        if getattr(args, "baseline", False):
+            # Deliberately before preflight_engine_bins: baseline spawns no
+            # workers, so a missing engine binary must not block it.
+            return asyncio.run(run_baseline(manifest, config=config))
         preflight_engine_bins(manifest, config)
         if args.command == "run":
             start_catalog_auto_refresh()
