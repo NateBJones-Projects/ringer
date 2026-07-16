@@ -12,6 +12,7 @@ from urllib.request import urlopen
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+import ringer  # noqa: E402
 from ringer import PersistentHudServer  # noqa: E402
 
 
@@ -66,7 +67,10 @@ class HudModelsTabTests(unittest.TestCase):
         server.model_log_path = self.log_path
         if use_db:
             server.model_db_path = self.db_path
-        port = server.start_background()
+        try:
+            port = server.start_background()
+        except ringer.BindNotPermittedError:
+            self.skipTest("environment forbids socket binding")
         self.addCleanup(server.stop)
         return server, port
 

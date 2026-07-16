@@ -15,6 +15,7 @@ from urllib.request import urlopen
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+import ringer  # noqa: E402
 from ringer import (  # noqa: E402
     Dashboard,
     EngineConfig,
@@ -95,7 +96,10 @@ class LogEndpointTests(unittest.TestCase):
             preferred_port=0,
             open_viewer=False,
         )
-        port = dashboard.start()
+        try:
+            port = dashboard.start()
+        except ringer.BindNotPermittedError:
+            self.skipTest("environment forbids socket binding")
         self.addCleanup(dashboard.stop)
         writer.set_port(port)
 
