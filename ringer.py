@@ -473,6 +473,9 @@ class Manifest:
     repo: Path | None
     tasks: tuple[TaskSpec, ...]
     source_path: Path | None = None
+    risk: str = "low"
+    orchestrator: dict[str, Any] | None = None
+    contract_review: dict[str, Any] | None = None
 
     @classmethod
     def from_path(cls, path: Path) -> "Manifest":
@@ -488,6 +491,9 @@ class Manifest:
             repo=manifest.repo,
             tasks=manifest.tasks,
             source_path=path,
+            risk=manifest.risk,
+            orchestrator=manifest.orchestrator,
+            contract_review=manifest.contract_review,
         )
 
     @classmethod
@@ -501,11 +507,38 @@ class Manifest:
         if not workdir_raw:
             raise ValueError("workdir is required")
         workdir = Path(str(workdir_raw)).expanduser().resolve()
+        risk_raw = obj.get("risk", "low")
+        if not isinstance(risk_raw, str):
+            raise ValueError("risk must be a string")
+        else:
+            risk = risk_raw.strip().lower()
+        if not risk:
+            raise ValueError("risk must not be empty when provided")
+        if risk not in {"low", "medium", "high", "critical"}:
+            raise ValueError("risk must be one of: low, medium, high, critical")
         max_parallel = int(obj.get("max_parallel", 1))
         if max_parallel <= 0:
             raise ValueError("max_parallel must be positive")
         repo_raw = obj.get("repo")
         repo = Path(str(repo_raw)).expanduser().resolve() if repo_raw else None
+        orchestrator_raw = obj.get("orchestrator")
+        if orchestrator_raw is not None:
+            if not isinstance(orchestrator_raw, dict) or any(
+                not isinstance(key, str) for key in orchestrator_raw
+            ):
+                raise ValueError("orchestrator must be a JSON object")
+            orchestrator = dict(orchestrator_raw)
+        else:
+            orchestrator = None
+        contract_review_raw = obj.get("contract_review")
+        if contract_review_raw is not None:
+            if not isinstance(contract_review_raw, dict) or any(
+                not isinstance(key, str) for key in contract_review_raw
+            ):
+                raise ValueError("contract_review must be a JSON object")
+            contract_review = dict(contract_review_raw)
+        else:
+            contract_review = None
         tasks_raw = obj.get("tasks")
         if not isinstance(tasks_raw, list) or not tasks_raw:
             raise ValueError("tasks must be a non-empty list")
@@ -534,6 +567,9 @@ class Manifest:
             worktrees=worktrees,
             repo=repo,
             tasks=tasks,
+            risk=risk,
+            orchestrator=orchestrator,
+            contract_review=contract_review,
         )
 
     def with_max_parallel(self, value: int | None) -> "Manifest":
@@ -549,7 +585,31 @@ class Manifest:
             repo=self.repo,
             tasks=self.tasks,
             source_path=self.source_path,
+            risk=self.risk,
+            orchestrator=self.orchestrator,
+            contract_review=self.contract_review,
         )
+
+    @property
+    def contract_sha256(self) -> str:
+        payload = {
+            "run_name": self.run_name,
+            "tasks": [
+                {
+                    "key": task.key,
+                    "spec": task.spec,
+                    "check": task.check,
+                    "expect_files": list(task.expect_files),
+                    "engine": task.engine,
+                    "model": task.model,
+                    "task_type": task.task_type,
+                    "verified": task.verified,
+                }
+                for task in self.tasks
+            ],
+        }
+        text = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 FILE_TEST_OPS = {"-e", "-f", "-s", "-d", "-r", "-w", "-x", "-L"}
@@ -603,6 +663,8 @@ def lint_manifest(manifest: Manifest, *, include_model_log_nudges: bool = False)
     if len(manifest.tasks) >= 3 and manifest.max_parallel == 1:
         findings.append("manifest: tasks will run serially; set max_parallel.")
 
+    findings.extend(lint_manifest_contract_review(manifest))
+
     if not manifest.worktrees:
         # Relative expect_files resolve inside each task's own directory and
         # cannot collide; only a shared absolute path is a real collision.
@@ -619,6 +681,71 @@ def lint_manifest(manifest: Manifest, *, include_model_log_nudges: bool = False)
                 )
 
     return findings
+
+
+def lint_manifest_contract_review(manifest: Manifest) -> list[str]:
+    if manifest.risk not in {"high", "critical"}:
+        return []
+    review = manifest.contract_review
+    if not isinstance(review, dict):
+        return [f"manifest: {manifest.risk} risk requires contract review before dispatch."]
+    required_fields = (
+        "verdict",
+        "reviewer_provider",
+        "reviewer_model",
+        "reviewer_family",
+        "reviewer_runtime",
+        "contract_sha256",
+    )
+    missing = [field for field in required_fields if not is_attested_text(review.get(field))]
+    findings: list[str] = []
+    if missing:
+        findings.append(
+            "manifest: high/critical risk requires contract review with "
+            "verdict=PASS, reviewer_provider, reviewer_model, reviewer_family, "
+            "reviewer_runtime, and contract_sha256; "
+            f"missing: {', '.join(missing)}."
+        )
+        return findings
+    verdict = str(review.get("verdict", "")).strip().upper()
+    if verdict != "PASS":
+        findings.append(
+            f"manifest: high/critical risk requires contract review verdict PASS, got {verdict or 'empty'}."
+        )
+    review_sha = str(review.get("contract_sha256", "")).strip()
+    if review_sha != manifest.contract_sha256:
+        findings.append(
+            "manifest: contract review contract_sha256 must match Manifest.contract_sha256."
+        )
+    orchestrator = manifest.orchestrator or {}
+    orchestrator_family = str(orchestrator.get("family", "")).strip() if isinstance(orchestrator, dict) else ""
+    reviewer_family = str(review.get("reviewer_family", "")).strip()
+    if not is_attested_text(orchestrator_family):
+        findings.append(
+            "manifest: high/critical risk requires a harness-attested orchestrator family "
+            "so cross-family review can be verified."
+        )
+    if orchestrator_family and reviewer_family and orchestrator_family.casefold() == reviewer_family.casefold():
+        findings.append(
+            "manifest: same-family contract review is not sufficient; cross-family review required."
+        )
+    harness_attestation = review.get("harness_attestation") or review.get("harness_session_id")
+    if not is_attested_text(harness_attestation):
+        findings.append(
+            "manifest: high/critical contract review requires a non-placeholder "
+            "harness_attestation or harness_session_id."
+        )
+    return findings
+
+
+def is_attested_text(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    lowered = text.casefold()
+    if "{{" in text or "}}" in text:
+        return False
+    return lowered not in {"todo", "tbd", "replace", "replace-me", "unknown", "self-reported"}
 
 
 FILE_POINTER_SPEC_RE = re.compile(
@@ -1122,6 +1249,10 @@ class StateWriter:
         max_parallel: int = 1,
         artifact: ArtifactConfig | None = None,
         path: Path | None = None,
+        risk: str = "low",
+        orchestrator: dict[str, Any] | None = None,
+        contract_review: dict[str, Any] | None = None,
+        contract_sha256: str = "",
     ) -> None:
         self.run_id = run_id
         self.run_name = run_name
@@ -1133,6 +1264,10 @@ class StateWriter:
         self.max_parallel = max_parallel
         self.state_dir = state_dir
         self.path = path or (state_dir / "runs" / f"{run_id}.json")
+        self.risk = risk
+        self.orchestrator = dict(orchestrator) if orchestrator is not None else None
+        self.contract_review = dict(contract_review) if contract_review is not None else None
+        self.contract_sha256 = contract_sha256
         self.pid = os.getpid()
         self.port: int | None = None
         self.finished = False
@@ -1257,6 +1392,12 @@ class StateWriter:
                 "port": self.port,
                 "dashboard_port": self.port,
                 "max_parallel": self.max_parallel,
+                "risk": self.risk,
+                "orchestrator": dict(self.orchestrator) if self.orchestrator is not None else None,
+                "contract_review": (
+                    dict(self.contract_review) if self.contract_review is not None else None
+                ),
+                "contract_sha256": self.contract_sha256,
                 "finished": self.finished,
                 "summary": self.summary if self.finished else None,
                 "started_at": self.started_at.isoformat(),
@@ -4623,7 +4764,21 @@ class EvalLogger:
             db_row = {
                 key: value
                 for key, value in row.items()
-                if key not in {"model", "task_type", "retry"}
+                if key
+                not in {
+                    "model",
+                    "task_type",
+                    "retry",
+                    "risk",
+                    "contract_sha256",
+                    "orchestrator_model",
+                    "orchestrator_runtime",
+                    "orchestrator_family",
+                    "reviewer_model",
+                    "reviewer_runtime",
+                    "reviewer_family",
+                    "reviewer_verdict",
+                }
             }
             try:
                 self._conn.execute(
@@ -7028,6 +7183,10 @@ class RingerRunner:
             self.lock,
             max_parallel=manifest.max_parallel,
             artifact=config.artifact,
+            risk=manifest.risk,
+            orchestrator=manifest.orchestrator,
+            contract_review=manifest.contract_review,
+            contract_sha256=manifest.contract_sha256,
         )
         self.dashboard = (
             Dashboard(
@@ -7526,12 +7685,37 @@ class RingerRunner:
     ) -> None:
         engine = self.config.engines.get(runtime.task.engine)
         resolved_model = runtime.task.model or (engine.model_default if engine else "")
+        orchestrator = self.manifest.orchestrator or {}
+        contract_review = self.manifest.contract_review or {}
+        orchestrator_model = model_log_text(orchestrator.get("model")) if isinstance(orchestrator, dict) else ""
+        orchestrator_runtime = model_log_text(orchestrator.get("runtime")) if isinstance(orchestrator, dict) else ""
+        orchestrator_family = model_log_text(orchestrator.get("family")) if isinstance(orchestrator, dict) else ""
+        reviewer_model = model_log_text(contract_review.get("reviewer_model"))
+        reviewer_runtime = model_log_text(contract_review.get("reviewer_runtime"))
+        reviewer_family = model_log_text(contract_review.get("reviewer_family"))
+        reviewer_verdict = model_log_text(contract_review.get("verdict"))
         notes_parts = [
             f"retry={'true' if retrying else 'false'}",
             f"worker_returncode={worker.returncode}",
             f"model={resolved_model}",
             f"task_type={runtime.task.task_type}",
+            f"contract_risk={self.manifest.risk}",
+            f"contract_sha256={self.manifest.contract_sha256}",
         ]
+        if orchestrator_model:
+            notes_parts.append(f"orchestrator_model={orchestrator_model}")
+        if orchestrator_runtime:
+            notes_parts.append(f"orchestrator_runtime={orchestrator_runtime}")
+        if orchestrator_family:
+            notes_parts.append(f"orchestrator_family={orchestrator_family}")
+        if reviewer_model:
+            notes_parts.append(f"reviewer_model={reviewer_model}")
+        if reviewer_runtime:
+            notes_parts.append(f"reviewer_runtime={reviewer_runtime}")
+        if reviewer_family:
+            notes_parts.append(f"reviewer_family={reviewer_family}")
+        if reviewer_verdict:
+            notes_parts.append(f"reviewer_verdict={reviewer_verdict}")
         if worker.error:
             notes_parts.append(f"worker_error={worker.error}")
         if verify.missing_files:
@@ -7555,6 +7739,15 @@ class RingerRunner:
                 "model": resolved_model,
                 "task_type": runtime.task.task_type,
                 "retry": retrying,
+                "risk": self.manifest.risk,
+                "contract_sha256": self.manifest.contract_sha256,
+                "orchestrator_model": orchestrator_model,
+                "orchestrator_runtime": orchestrator_runtime,
+                "orchestrator_family": orchestrator_family,
+                "reviewer_model": reviewer_model,
+                "reviewer_runtime": reviewer_runtime,
+                "reviewer_family": reviewer_family,
+                "reviewer_verdict": reviewer_verdict,
             }
         )
 
@@ -8597,7 +8790,16 @@ def main(argv: list[str] | None = None) -> int:
         else:
             manifest_path = args.manifest
         manifest = Manifest.from_path(manifest_path).with_max_parallel(args.max_parallel)
-        print_lint_findings(lint_manifest(manifest, include_model_log_nudges=True))
+        lint_findings = lint_manifest(manifest, include_model_log_nudges=True)
+        print_lint_findings(lint_findings)
+        dispatch_blockers = lint_manifest_contract_review(manifest)
+        if dispatch_blockers:
+            print(
+                "dispatch blocked: high/critical risk requires an exact-manifest, "
+                "cross-family, harness-attested PASS contract review.",
+                file=sys.stderr,
+            )
+            return 1
         validate_manifest_engines(manifest, config)
         identity_start_paths = [manifest.workdir]
         if manifest.source_path is not None:
