@@ -1,0 +1,66 @@
+{
+  "schema_version": 3,
+  "run_name": "bifrost-hub-hardening-admission-20260715-v2",
+  "workdir": "/private/tmp/ringer-bifrost-hub-hardening-admission-20260715-v2",
+  "max_parallel": 3,
+  "worktrees": false,
+  "default_engine": "codex",
+  "identity": "aegis",
+  "_purpose": "Versioned read-only admission pass for hermes-9ill.1. Produce evidence-backed implementation plans; perform no service, credential, tracker, repository, launchd, Bifrost, Paperclip, Ringer, Ringside, or MCP configuration mutation.",
+  "_safety": {
+    "control_plane_authority": "read_only",
+    "live_mutation": false,
+    "credential_access": false,
+    "protected_workdirs": [
+      "/Users/hermes/ringer",
+      "/Users/hermes/.bifrost",
+      "/Users/hermes/Library/LaunchAgents",
+      "/Users/hermes/.config",
+      "/Users/hermes/.paperclip"
+    ]
+  },
+  "tasks": [
+    {
+      "key": "boot-smoke-and-logs-admission-v2",
+      "bead_id": "hermes-9ill.1",
+      "task_type": "system-design-audit",
+      "engine": "codex",
+      "model": "gpt-5.6-luna",
+      "engine_args": ["-c", "model_reasoning_effort=high"],
+      "timeout_s": 900,
+      "full_access": false,
+      "expect_files": ["boot-smoke-and-logs-plan.md"],
+      "spec": "You are a read-only systems planning agent. Do not modify any repository, tracker, service, configuration, LaunchAgent, credential store, runtime, or host state. Do not restart anything. Do not print or inspect secret values. You may inspect non-secret source/configuration metadata and make read-only health probes. Write exactly one substantive deliverable in the current task directory: ./boot-smoke-and-logs-plan.md. Locate the Aegis ai.bifrost LaunchAgent, its actual executable/config/log paths, the Bifrost health endpoint contract, and the source/configuration that builds the Bifrost LLM Logs panel query. The deliverable must contain clearly labeled sections: Source evidence; Boot smoke design; Test matrix; Rolling-window logs correction; Owning repository and minimal file list; Rollback; Approval boundary. Cite exact observed paths and read-only commands. Design a launchd-safe boot smoke that polls http://127.0.0.1:8078/health with a bounded timeout and fails nonzero on timeout, malformed JSON, or unhealthy JSON. Specify fixture-backed success, timeout, malformed, and unhealthy tests. Identify the precise start_time/end_time defect location and propose rolling-window semantics with timezone and polling behavior. Call unobserved claims out explicitly. End before implementation: any shared Agentic OS or live-service change requires separate approval after two independent read-only confirmations.",
+      "check": "set -eu; f=boot-smoke-and-logs-plan.md; [ -s \"$f\" ] || { echo 'FAIL: boot-smoke-and-logs-plan.md missing or empty' >&2; exit 1; }; for term in 'Source evidence' 'Boot smoke' 'Test matrix' 'Rolling-window' 'Owning repository' 'Rollback' 'Approval boundary' '127.0.0.1:8078/health' 'malformed'; do grep -Fiq -- \"$term\" \"$f\" || { printf 'FAIL: boot/log plan missing required term: %s\\n' \"$term\" >&2; exit 1; }; done; bytes=$(wc -c < \"$f\" | tr -d ' '); [ \"$bytes\" -ge 3500 ] || { printf 'FAIL: boot/log plan too small: %s bytes\\n' \"$bytes\" >&2; exit 1; }; printf 'EXECUTED_CHECK=PASS boot-smoke-and-logs-plan bytes=%s\\n' \"$bytes\"",
+      "verified": "The executed check proves the plan is substantive and includes observed ownership, bounded health behavior, fixture coverage, rolling-window semantics, rollback, and the approval boundary."
+    },
+    {
+      "key": "claim-gate-admission-v2",
+      "bead_id": "hermes-9ill.1",
+      "task_type": "security-design-audit",
+      "engine": "codex",
+      "model": "gpt-5.6-luna",
+      "engine_args": ["-c", "model_reasoning_effort=high"],
+      "timeout_s": 900,
+      "full_access": false,
+      "expect_files": ["claim-gate-plan.md"],
+      "spec": "You are a read-only security planning agent. Do not modify any repository, tracker, service, configuration, credential store, runtime, or authority state. Do not invoke issue mutation commands and do not inspect or print secret values. Write exactly one substantive deliverable in the current task directory: ./claim-gate-plan.md. Locate ADR-0019 and the exact observed Ringer/Ringside, Bifrost, Paperclip, and Beads codepaths or configuration relevant to possible Ringside write capability. The deliverable must contain clearly labeled sections: Source evidence and ADR-0019 requirements; Deny-by-default claim protocol; Fixture-backed executable proof; Enablement proposal condition; Audit artifacts; Rollback and revocation; Approval boundary. Define a stable work identifier, explicit claimant identity, canonical Beads claim evidence, idempotency/replay behavior, and deny-by-default failures. Cover allowed claim, absent Beads claim, wrong claimant, stale/replayed claim, malformed authority envelope, and unavailable Beads with independent fixtures. State that write capability may only be proposed, not enabled, by this pass. Call unobserved claims out explicitly. End before implementation: any shared Agentic OS or authority change requires separate approval after two independent read-only confirmations.",
+      "check": "set -eu; f=claim-gate-plan.md; [ -s \"$f\" ] || { echo 'FAIL: claim-gate-plan.md missing or empty' >&2; exit 1; }; for term in 'ADR-0019' 'Source evidence' 'deny-by-default' 'Beads' 'claimant' 'replay' 'fixture' 'unavailable' 'Rollback' 'Approval boundary'; do grep -Fiq -- \"$term\" \"$f\" || { printf 'FAIL: claim-gate plan missing required term: %s\\n' \"$term\" >&2; exit 1; }; done; bytes=$(wc -c < \"$f\" | tr -d ' '); [ \"$bytes\" -ge 3500 ] || { printf 'FAIL: claim-gate plan too small: %s bytes\\n' \"$bytes\" >&2; exit 1; }; printf 'EXECUTED_CHECK=PASS claim-gate-plan bytes=%s\\n' \"$bytes\"",
+      "verified": "The executed check proves the plan is substantive and specifies an evidence-backed deny-by-default claim protocol, adversarial fixtures, rollback, and the approval boundary."
+    },
+    {
+      "key": "service-and-wrapper-boundary-admission-v2",
+      "bead_id": "hermes-9ill.1",
+      "task_type": "architecture-decision-audit",
+      "engine": "codex",
+      "model": "gpt-5.6-luna",
+      "engine_args": ["-c", "model_reasoning_effort=high"],
+      "timeout_s": 900,
+      "full_access": false,
+      "expect_files": ["service-and-wrapper-boundary-plan.md"],
+      "spec": "You are a read-only architecture planning agent. Do not modify any repository, tracker, service, configuration, LaunchAgent, credential store, runtime, or host state. Do not enable or restart clients. Do not invoke vault-local scripts. Do not inspect or print secret values. Inspect only non-secret metadata, launchd labels, configured wrapper names, Bifrost MCP client states, documented HTTP health endpoints, and relevant source paths. Write exactly one substantive deliverable in the current task directory: ./service-and-wrapper-boundary-plan.md. The deliverable must contain clearly labeled sections: Source evidence; Placement decision matrix; Aegis HTTP gateway contract; Wrapper allowlist and retirement policy; One-at-a-time re-enable sequence; Rollback; Decision owners; Approval boundary. The matrix must cover Gmail, Google Calendar, and Fleet Memory with Aegis-native versus Talaris-routed placement, noninteractive credential mechanism requirements, least authority, health checks, rollback, and explicit decision owners. Define an Aegis HTTP-gateway contract for OpenClaw and Kimi covering loopback or tunnel routing, health endpoint, authentication boundary, and the explicit fact that no unsupported stdio MCP launcher is assumed. Include a Vault-only/Talaris-specific wrapper allowlist or retirement policy and safe SSH-conversion admission checklist. Prohibit bulk startup changes. Call unobserved claims out explicitly. End before implementation: any shared Agentic OS, credential, service, or wrapper change requires separate approval after two independent read-only confirmations.",
+      "check": "set -eu; f=service-and-wrapper-boundary-plan.md; [ -s \"$f\" ] || { echo 'FAIL: service-and-wrapper-boundary-plan.md missing or empty' >&2; exit 1; }; for term in 'Source evidence' 'Placement decision matrix' 'Gmail' 'Google Calendar' 'Fleet Memory' 'OpenClaw' 'Kimi' 'noninteractive' 'allowlist' 'one-at-a-time' 'Rollback' 'Decision owners' 'Approval boundary'; do grep -Fiq -- \"$term\" \"$f\" || { printf 'FAIL: service/wrapper plan missing required term: %s\\n' \"$term\" >&2; exit 1; }; done; bytes=$(wc -c < \"$f\" | tr -d ' '); [ \"$bytes\" -ge 3500 ] || { printf 'FAIL: service/wrapper plan too small: %s bytes\\n' \"$bytes\" >&2; exit 1; }; printf 'EXECUTED_CHECK=PASS service-and-wrapper-boundary-plan bytes=%s\\n' \"$bytes\"",
+      "verified": "The executed check proves the plan is substantive and covers evidence, placement, service boundaries, wrapper policy, serialized enablement, owners, rollback, and the approval boundary."
+    }
+  ]
+}

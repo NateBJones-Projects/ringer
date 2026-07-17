@@ -5,6 +5,7 @@ import argparse
 import asyncio
 import base64
 import contextlib
+import hashlib
 import json
 import mimetypes
 import os
@@ -1010,6 +1011,11 @@ class TaskSpec:
     # engine's {model} placeholder); empty means the engine's model_default.
     model: str = ""
     task_type: str = ""
+    # Cross-link fields for auto-projection (Workstream A).
+    # When present, the post-run hook posts the verdict to the linked
+    # Paperclip issue and/or Beads issue.
+    paperclip_issue: str = ""
+    bead_id: str = ""
 
     @classmethod
     def from_obj(cls, obj: dict[str, Any]) -> "TaskSpec":
@@ -1050,6 +1056,12 @@ class TaskSpec:
         task_type = obj.get("task_type", "")
         if not isinstance(task_type, str):
             raise ValueError(f"task {key}: task_type must be a string")
+        paperclip_issue = obj.get("paperclip_issue", "")
+        if not isinstance(paperclip_issue, str):
+            raise ValueError(f"task {key}: paperclip_issue must be a string (e.g. 'JAC-3366')")
+        bead_id = obj.get("bead_id", "")
+        if not isinstance(bead_id, str):
+            raise ValueError(f"task {key}: bead_id must be a string (e.g. 'hermes-9zgz')")
         return cls(
             key=key,
             spec=spec,
@@ -1062,6 +1074,8 @@ class TaskSpec:
             verified=verified.strip(),
             model=model.strip(),
             task_type=task_type.strip(),
+            paperclip_issue=paperclip_issue.strip(),
+            bead_id=bead_id.strip(),
         )
 
 
@@ -1074,6 +1088,9 @@ class Manifest:
     repo: Path | None
     tasks: tuple[TaskSpec, ...]
     source_path: Path | None = None
+    risk: str = "low"
+    orchestrator: dict[str, Any] | None = None
+    contract_review: dict[str, Any] | None = None
 
     @classmethod
     def from_path(cls, path: Path) -> "Manifest":
@@ -1089,6 +1106,9 @@ class Manifest:
             repo=manifest.repo,
             tasks=manifest.tasks,
             source_path=path,
+            risk=manifest.risk,
+            orchestrator=manifest.orchestrator,
+            contract_review=manifest.contract_review,
         )
 
     @classmethod
@@ -1102,11 +1122,38 @@ class Manifest:
         if not workdir_raw:
             raise ValueError("workdir is required")
         workdir = Path(str(workdir_raw)).expanduser().resolve()
+        risk_raw = obj.get("risk", "low")
+        if not isinstance(risk_raw, str):
+            raise ValueError("risk must be a string")
+        else:
+            risk = risk_raw.strip().lower()
+        if not risk:
+            raise ValueError("risk must not be empty when provided")
+        if risk not in {"low", "medium", "high", "critical"}:
+            raise ValueError("risk must be one of: low, medium, high, critical")
         max_parallel = int(obj.get("max_parallel", 1))
         if max_parallel <= 0:
             raise ValueError("max_parallel must be positive")
         repo_raw = obj.get("repo")
         repo = Path(str(repo_raw)).expanduser().resolve() if repo_raw else None
+        orchestrator_raw = obj.get("orchestrator")
+        if orchestrator_raw is not None:
+            if not isinstance(orchestrator_raw, dict) or any(
+                not isinstance(key, str) for key in orchestrator_raw
+            ):
+                raise ValueError("orchestrator must be a JSON object")
+            orchestrator = dict(orchestrator_raw)
+        else:
+            orchestrator = None
+        contract_review_raw = obj.get("contract_review")
+        if contract_review_raw is not None:
+            if not isinstance(contract_review_raw, dict) or any(
+                not isinstance(key, str) for key in contract_review_raw
+            ):
+                raise ValueError("contract_review must be a JSON object")
+            contract_review = dict(contract_review_raw)
+        else:
+            contract_review = None
         tasks_raw = obj.get("tasks")
         if not isinstance(tasks_raw, list) or not tasks_raw:
             raise ValueError("tasks must be a non-empty list")
@@ -1135,6 +1182,9 @@ class Manifest:
             worktrees=worktrees,
             repo=repo,
             tasks=tasks,
+            risk=risk,
+            orchestrator=orchestrator,
+            contract_review=contract_review,
         )
 
     def with_max_parallel(self, value: int | None) -> "Manifest":
@@ -1150,7 +1200,31 @@ class Manifest:
             repo=self.repo,
             tasks=self.tasks,
             source_path=self.source_path,
+            risk=self.risk,
+            orchestrator=self.orchestrator,
+            contract_review=self.contract_review,
         )
+
+    @property
+    def contract_sha256(self) -> str:
+        payload = {
+            "run_name": self.run_name,
+            "tasks": [
+                {
+                    "key": task.key,
+                    "spec": task.spec,
+                    "check": task.check,
+                    "expect_files": list(task.expect_files),
+                    "engine": task.engine,
+                    "model": task.model,
+                    "task_type": task.task_type,
+                    "verified": task.verified,
+                }
+                for task in self.tasks
+            ],
+        }
+        text = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 FILE_TEST_OPS = {"-e", "-f", "-s", "-d", "-r", "-w", "-x", "-L"}
@@ -1211,6 +1285,8 @@ def lint_manifest(
     if len(manifest.tasks) >= 3 and manifest.max_parallel == 1:
         findings.append("manifest: tasks will run serially; set max_parallel.")
 
+    findings.extend(lint_manifest_contract_review(manifest))
+
     if not manifest.worktrees:
         # Relative expect_files resolve inside each task's own directory and
         # cannot collide; only a shared absolute path is a real collision.
@@ -1236,6 +1312,71 @@ def lint_manifest(
         )
 
     return findings
+
+
+def lint_manifest_contract_review(manifest: Manifest) -> list[str]:
+    if manifest.risk not in {"high", "critical"}:
+        return []
+    review = manifest.contract_review
+    if not isinstance(review, dict):
+        return [f"manifest: {manifest.risk} risk requires contract review before dispatch."]
+    required_fields = (
+        "verdict",
+        "reviewer_provider",
+        "reviewer_model",
+        "reviewer_family",
+        "reviewer_runtime",
+        "contract_sha256",
+    )
+    missing = [field for field in required_fields if not is_attested_text(review.get(field))]
+    findings: list[str] = []
+    if missing:
+        findings.append(
+            "manifest: high/critical risk requires contract review with "
+            "verdict=PASS, reviewer_provider, reviewer_model, reviewer_family, "
+            "reviewer_runtime, and contract_sha256; "
+            f"missing: {', '.join(missing)}."
+        )
+        return findings
+    verdict = str(review.get("verdict", "")).strip().upper()
+    if verdict != "PASS":
+        findings.append(
+            f"manifest: high/critical risk requires contract review verdict PASS, got {verdict or 'empty'}."
+        )
+    review_sha = str(review.get("contract_sha256", "")).strip()
+    if review_sha != manifest.contract_sha256:
+        findings.append(
+            "manifest: contract review contract_sha256 must match Manifest.contract_sha256."
+        )
+    orchestrator = manifest.orchestrator or {}
+    orchestrator_family = str(orchestrator.get("family", "")).strip() if isinstance(orchestrator, dict) else ""
+    reviewer_family = str(review.get("reviewer_family", "")).strip()
+    if not is_attested_text(orchestrator_family):
+        findings.append(
+            "manifest: high/critical risk requires a harness-attested orchestrator family "
+            "so cross-family review can be verified."
+        )
+    if orchestrator_family and reviewer_family and orchestrator_family.casefold() == reviewer_family.casefold():
+        findings.append(
+            "manifest: same-family contract review is not sufficient; cross-family review required."
+        )
+    harness_attestation = review.get("harness_attestation") or review.get("harness_session_id")
+    if not is_attested_text(harness_attestation):
+        findings.append(
+            "manifest: high/critical contract review requires a non-placeholder "
+            "harness_attestation or harness_session_id."
+        )
+    return findings
+
+
+def is_attested_text(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    lowered = text.casefold()
+    if "{{" in text or "}}" in text:
+        return False
+    return lowered not in {"todo", "tbd", "replace", "replace-me", "unknown", "self-reported"}
 
 
 FILE_POINTER_SPEC_RE = re.compile(
@@ -1527,6 +1668,211 @@ class ProcessTree:
         return count
 
 
+# --- Launch receipts (fleet provenance) -------------------------------------
+#
+# One append-only JSONL line per launch lifecycle event; latest line per
+# receipt_id wins. Schema: schema/launch-receipt.v1.json. Receipts record who
+# launched what — they never gate, block, or retry a launch (fail-open).
+# Security invariant: identities, IDs, hashes, paths, and coarse capability
+# classes only. No prompt text, no URLs with query strings, no tokens, codes,
+# OAuth state, PKCE material, cookies, or headers — the writer rejects rather
+# than redacts, so secret material is never stored in any form.
+
+LAUNCH_RECEIPT_VERSION = 1
+LAUNCH_RECEIPT_EVENTS = ("launched", "bound", "completed", "failed", "abandoned")
+RECEIPT_INTENT_MAX_CHARS = 140
+RECEIPT_NOTES_MAX_CHARS = 180
+RECEIPT_ID_PATTERN = re.compile(r"^lr-[0-9A-HJKMNP-TV-Z]{26}$")
+_ULID_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+# Patterns that must never appear anywhere in a serialized receipt. These are
+# the enforcement of the security invariant, not documentation of it — the
+# secret-leak test in tests/test_launch_receipts.py feeds each shape in.
+RECEIPT_FORBIDDEN_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("url-with-query-string", re.compile(r"https?://[^\s\"'\\]*\?[^\s\"'\\]+", re.IGNORECASE)),
+    ("authorization-header", re.compile(r"\bauthorization\b\s*[:=]", re.IGNORECASE)),
+    ("bearer-token", re.compile(r"\bbearer\s+[A-Za-z0-9._~+/-]{8,}=*", re.IGNORECASE)),
+    (
+        "oauth-or-key-param",
+        re.compile(
+            r"\b(code|state|token|access_token|refresh_token|id_token|client_secret"
+            r"|code_verifier|code_challenge|api[_-]?key|secret)\s*=",
+            re.IGNORECASE,
+        ),
+    ),
+    ("jwt-shaped", re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]*")),
+    ("private-key-block", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
+    ("cookie-header", re.compile(r"\b(set-)?cookie\b\s*[:=]", re.IGNORECASE)),
+)
+
+
+class ReceiptSecurityError(ValueError):
+    """Raised when receipt material matches a forbidden secret pattern.
+
+    The receipt is rejected outright — nothing is stored or rewritten. The
+    exception message names only the pattern class, never the matched text.
+    """
+
+
+def scan_receipt_material(text: str) -> list[str]:
+    """Return the names of forbidden patterns found in text (empty = clean)."""
+    return [name for name, pattern in RECEIPT_FORBIDDEN_PATTERNS if pattern.search(text)]
+
+
+def new_receipt_id() -> str:
+    """lr- prefix plus a 26-char Crockford-base32 ULID (48-bit ms timestamp + 80 random bits)."""
+    value = (int(time.time() * 1000) & ((1 << 48) - 1)) << 80 | int.from_bytes(os.urandom(10), "big")
+    chars = []
+    for _ in range(26):
+        chars.append(_ULID_ALPHABET[value & 0x1F])
+        value >>= 5
+    return "lr-" + "".join(reversed(chars))
+
+
+def fleet_child_env(
+    environ: dict[str, str],
+    *,
+    identity: str,
+    receipt_id: str,
+    launcher_kind: str = "orchestrator",
+    bead_id: str | None = None,
+    parent_session: str | None = None,
+) -> dict[str, str]:
+    """The FLEET_* env contract every conforming launcher passes to its child.
+
+    Any launcher (ringer, Sol, cron lanes) adopts provenance by exporting these
+    five variables and appending one launch-receipt line.
+    """
+    env = dict(environ)
+    env["FLEET_LAUNCHER"] = identity
+    env["FLEET_LAUNCHER_KIND"] = launcher_kind
+    env["FLEET_LAUNCH_ID"] = receipt_id
+    if bead_id:
+        env["FLEET_BEAD"] = bead_id
+    if parent_session:
+        env["FLEET_PARENT_SESSION"] = parent_session
+    return env
+
+
+def build_launch_receipt(
+    receipt_id: str,
+    *,
+    identity: str,
+    run_id: str,
+    host: str,
+    entrypoint: str,
+    model: str,
+    cwd: str,
+    full_access: bool,
+    spec: str,
+    intent: str,
+    bead_id: str | None = None,
+    parent_session: str | None = None,
+) -> dict[str, Any]:
+    """A 'launched' receipt for a ringer worker. The spec is hashed, never stored."""
+    return {
+        "receipt_version": LAUNCH_RECEIPT_VERSION,
+        "receipt_id": receipt_id,
+        "event": "launched",
+        "emitted_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        "host": host,
+        "launcher": {
+            "identity": identity,
+            "kind": "orchestrator",
+            "pid": os.getpid(),
+            "run_id": run_id,
+            "session_id": parent_session,
+        },
+        "launched": {
+            "kind": "worker",
+            "entrypoint": entrypoint,
+            "session_id": None,
+            "model": model or None,
+            "cwd": cwd,
+            "permission_mode": "full_access" if full_access else "sandbox",
+            "prompt_sha256": hashlib.sha256(spec.encode("utf-8")).hexdigest(),
+        },
+        "work": {
+            "bead_id": bead_id,
+            "intent": intent[:RECEIPT_INTENT_MAX_CHARS],
+        },
+        "side_effect_grants": ["engine:full-access"] if full_access else [],
+    }
+
+
+def build_terminal_receipt(
+    receipt_id: str,
+    event: str,
+    *,
+    identity: str,
+    run_id: str,
+    host: str,
+    parent_session: str | None = None,
+) -> dict[str, Any]:
+    """A terminal lifecycle line (completed / failed / abandoned) for an earlier receipt_id."""
+    return {
+        "receipt_version": LAUNCH_RECEIPT_VERSION,
+        "receipt_id": receipt_id,
+        "event": event,
+        "emitted_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        "host": host,
+        "launcher": {
+            "identity": identity,
+            "kind": "orchestrator",
+            "pid": os.getpid(),
+            "run_id": run_id,
+            "session_id": parent_session,
+        },
+    }
+
+
+class ReceiptWriter:
+    """Append-only launch-receipt writer. Rejects unsafe material; never blocks a launch.
+
+    Callers must treat every exception as non-fatal (log and continue) — a
+    receipt that cannot be written must not stop the work it describes.
+    """
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.lock = threading.Lock()
+
+    def emit(self, receipt: dict[str, Any]) -> None:
+        self._validate(receipt)
+        line = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+        found = scan_receipt_material(line)
+        if found:
+            raise ReceiptSecurityError(
+                "receipt rejected, forbidden material matched: " + ", ".join(found)
+            )
+        with self.lock:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with self.path.open("a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+
+    @staticmethod
+    def _validate(receipt: dict[str, Any]) -> None:
+        for key in ("receipt_version", "receipt_id", "event", "emitted_at", "host", "launcher"):
+            if key not in receipt:
+                raise ValueError(f"receipt missing required field: {key}")
+        if receipt["receipt_version"] != LAUNCH_RECEIPT_VERSION:
+            raise ValueError(f"unsupported receipt_version: {receipt['receipt_version']!r}")
+        if not RECEIPT_ID_PATTERN.match(str(receipt["receipt_id"])):
+            raise ValueError("receipt_id must match lr-<26-char Crockford ULID>")
+        if receipt["event"] not in LAUNCH_RECEIPT_EVENTS:
+            raise ValueError(f"unknown receipt event: {receipt['event']!r}")
+        if receipt["event"] == "launched" and ("launched" not in receipt or "work" not in receipt):
+            raise ValueError("a 'launched' receipt requires 'launched' and 'work' sections")
+        work = receipt.get("work")
+        if isinstance(work, dict):
+            intent = str(work.get("intent", ""))
+            if not intent or len(intent) > RECEIPT_INTENT_MAX_CHARS:
+                raise ValueError(f"work.intent must be 1..{RECEIPT_INTENT_MAX_CHARS} chars")
+        notes = receipt.get("notes")
+        if notes is not None and len(str(notes)) > RECEIPT_NOTES_MAX_CHARS:
+            raise ValueError(f"notes must be <= {RECEIPT_NOTES_MAX_CHARS} chars")
+
+
 class StateWriter:
     def __init__(
         self,
@@ -1541,6 +1887,10 @@ class StateWriter:
         max_parallel: int = 1,
         artifact: ArtifactConfig | None = None,
         path: Path | None = None,
+        risk: str = "low",
+        orchestrator: dict[str, Any] | None = None,
+        contract_review: dict[str, Any] | None = None,
+        contract_sha256: str = "",
     ) -> None:
         self.run_id = run_id
         self.run_name = run_name
@@ -1552,12 +1902,17 @@ class StateWriter:
         self.max_parallel = max_parallel
         self.state_dir = state_dir
         self.path = path or (state_dir / "runs" / f"{run_id}.json")
+        self.risk = risk
+        self.orchestrator = dict(orchestrator) if orchestrator is not None else None
+        self.contract_review = dict(contract_review) if contract_review is not None else None
+        self.contract_sha256 = contract_sha256
         self.pid = os.getpid()
         self.port: int | None = None
         self.finished = False
         self.summary: dict[str, int] | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._flush_lock = threading.Lock()
         self.artifact = artifact or ArtifactConfig(
             enabled=False,
             out_template=str(state_dir / "artifacts" / "{run_id}.html"),
@@ -1601,16 +1956,17 @@ class StateWriter:
         self.flush()
 
     def flush(self) -> dict[str, Any]:
-        state = self.snapshot()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
-        os.replace(tmp, self.path)
-        if self.artifact.enabled:
-            self._write_status_artifact_safe(state)
-            self._write_index_safe()
-            self._write_library_live_safe(state)
-        return state
+        with self._flush_lock:
+            state = self.snapshot()
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+            os.replace(tmp, self.path)
+            if self.artifact.enabled:
+                self._write_status_artifact_safe(state)
+                self._write_index_safe()
+                self._write_library_live_safe(state)
+            return state
 
     def snapshot(self) -> dict[str, Any]:
         now = time.monotonic()
@@ -1682,6 +2038,12 @@ class StateWriter:
                 "port": self.port,
                 "dashboard_port": self.port,
                 "max_parallel": self.max_parallel,
+                "risk": self.risk,
+                "orchestrator": dict(self.orchestrator) if self.orchestrator is not None else None,
+                "contract_review": (
+                    dict(self.contract_review) if self.contract_review is not None else None
+                ),
+                "contract_sha256": self.contract_sha256,
                 "finished": self.finished,
                 "summary": self.summary if self.finished else None,
                 "started_at": self.started_at.isoformat(),
@@ -4717,6 +5079,7 @@ def read_json_object(path: Path, default: dict[str, Any]) -> dict[str, Any]:
 
 def scan_hud_run_states(state_dir: Path, *, limit: int = 12) -> list[dict[str, Any]]:
     runs_dir = state_dir / "runs"
+    active = read_active_runs()
     try:
         paths = [path for path in runs_dir.glob("*.json") if path.is_file()]
     except OSError:
@@ -4733,12 +5096,16 @@ def scan_hud_run_states(state_dir: Path, *, limit: int = 12) -> list[dict[str, A
     for path in paths[:limit]:
         data = read_json_object(path, {})
         if data:
+            run_id = str(data.get("run_id", path.stem))
+            if str(data.get("state", "finished" if data.get("finished") else "live")) == "live" and run_id not in active:
+                data = dict(data)
+                data["state"] = "died"
             runs.append(data)
     return runs
 
 
 def read_active_runs_file() -> dict[str, Any]:
-    return read_json_object(active_runs_path(), {})
+    return read_active_runs()
 
 
 def resolve_artifact_http_path(artifact_root: Path, request_path: str) -> Path | None:
@@ -5106,7 +5473,24 @@ class EvalLogger:
             db_row = {
                 key: value
                 for key, value in row.items()
-                if key not in {"model", "reasoning_effort", "task_type", "retry"}
+                if key
+                not in {
+                    "model",
+                    "reported_model",
+                    "expected_model",
+                    "reasoning_effort",
+                    "task_type",
+                    "retry",
+                    "risk",
+                    "contract_sha256",
+                    "orchestrator_model",
+                    "orchestrator_runtime",
+                    "orchestrator_family",
+                    "reviewer_model",
+                    "reviewer_runtime",
+                    "reviewer_family",
+                    "reviewer_verdict",
+                }
             }
             try:
                 self._conn.execute(
@@ -8024,6 +8408,12 @@ class RingerRunner:
         dashboard_enabled: bool = True,
         force_browser: bool = False,
     ) -> None:
+        dispatch_blockers = lint_manifest_contract_review(manifest)
+        if dispatch_blockers:
+            raise ValueError(
+                "dispatch blocked: high/critical contract review gate failed: "
+                + " ".join(dispatch_blockers)
+            )
         self.manifest = manifest
         self.config = config
         self.identity = identity
@@ -8043,6 +8433,10 @@ class RingerRunner:
             self.lock,
             max_parallel=manifest.max_parallel,
             artifact=config.artifact,
+            risk=manifest.risk,
+            orchestrator=manifest.orchestrator,
+            contract_review=manifest.contract_review,
+            contract_sha256=manifest.contract_sha256,
         )
         self.dashboard = (
             Dashboard(
@@ -8058,6 +8452,14 @@ class RingerRunner:
         self.verifier = Verifier()
         self.semaphore = asyncio.Semaphore(manifest.max_parallel)
         self.active_processes: dict[int, asyncio.subprocess.Process] = {}
+        self.receipt_writer = ReceiptWriter(config.state_dir / "receipts" / "launches.jsonl")
+        self.receipt_host = socket.gethostname().split(".", 1)[0] or TOOL_NAME
+        self.receipt_bead = os.environ.get("FLEET_BEAD", "").strip() or None
+        self.receipt_parent_session = (
+            os.environ.get("FLEET_PARENT_SESSION", "").strip()
+            or os.environ.get("CLAUDE_SESSION_ID", "").strip()
+            or None
+        )
 
     async def run(self) -> int:
         self.manifest.workdir.mkdir(parents=True, exist_ok=True)
@@ -8096,6 +8498,35 @@ class RingerRunner:
                     results_page = artifact_live_path(self.state_writer.state_dir, self.manifest.run_name)
                     print(f"\nYour results: {results_page}")
                     print("Open it in a browser, or run './ringer.py hud' for the full Ringside view (http://127.0.0.1:8700).")
+            # Auto-projection hook (Workstream A): if any task carries
+            # paperclip_issue or bead_id, project the verdict to those
+            # surfaces automatically. Failures are non-fatal — they log
+            # to stderr but do not affect the run exit code.
+            with contextlib.suppress(Exception):
+                self._run_projection_hook()
+
+    def _run_projection_hook(self) -> None:
+        """Auto-project verdict to Paperclip/Beads if cross-link fields are present."""
+        has_links = any(
+            task.paperclip_issue or task.bead_id
+            for task in self.manifest.tasks
+        )
+        if not has_links:
+            return
+        hook_path = Path.home() / ".ringer" / "hooks" / "paperclip_projector.py"
+        if not hook_path.is_file():
+            print(f"[projection] Hook script not found at {hook_path}, skipping.", file=sys.stderr)
+            return
+        state_path = self.state_writer.path
+        manifest_path = self.manifest.source_path
+        cmd = [sys.executable, str(hook_path), str(state_path)]
+        if manifest_path and manifest_path.is_file():
+            cmd.append(str(manifest_path))
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.stdout.strip():
+            print(result.stdout.rstrip())
+        if result.returncode != 0 and result.stderr.strip():
+            print(f"[projection] {result.stderr.rstrip()}", file=sys.stderr)
 
     async def kill_all_workers(self) -> None:
         procs = list(self.active_processes.values())
@@ -8363,6 +8794,7 @@ class RingerRunner:
             engine_args=runtime.task.engine_args,
             model=runtime.task.model,
         )
+        effective_spec = spec
         if self.config.steering.dir is not None:
             original_cmd = cmd
             steering_state: dict[str, Any] = {
@@ -8379,6 +8811,7 @@ class RingerRunner:
                     profile,
                     inject_candidates=self.config.steering.inject_candidates,
                 )
+                effective_spec = injected_spec
                 if profile is not None:
                     steering_state = {
                         "profile": profile.slug,
@@ -8401,6 +8834,7 @@ class RingerRunner:
                     )
             except Exception:
                 cmd = original_cmd
+                effective_spec = spec
                 steering_state = {"profile": None, "version": None, "rule_ids": []}
                 steering_line = "[ringer.py] steering: no profile matched\n"
             with self.lock:
@@ -8409,23 +8843,66 @@ class RingerRunner:
                 append_text(log_path, steering_line)
         with self.lock:
             runtime.last_worker_command = list(cmd)
+
+        # Launch provenance: one receipt before the spawn, the FLEET_* env
+        # contract into the child, one terminal line after. Fail-open — a
+        # receipt problem never blocks the worker.
+        receipt_id: str | None = None
+        worker_env = dict(os.environ)
+        try:
+            receipt_id = new_receipt_id()
+            worker_env = fleet_child_env(
+                worker_env,
+                identity=self.identity,
+                receipt_id=receipt_id,
+                bead_id=self.receipt_bead,
+                parent_session=self.receipt_parent_session,
+            )
+            self._emit_receipt_safe(
+                runtime,
+                build_launch_receipt(
+                    receipt_id,
+                    identity=self.identity,
+                    run_id=self.run_id,
+                    host=self.receipt_host,
+                    entrypoint=runtime.task.engine,
+                    model=runtime.task.model or engine.model_default,
+                    cwd=str(runtime.taskdir),
+                    full_access=runtime.task.full_access,
+                    spec=effective_spec,
+                    intent=f"ringer run {self.manifest.run_name} task {runtime.task.key} attempt {attempt}",
+                    bead_id=self.receipt_bead,
+                    parent_session=self.receipt_parent_session,
+                ),
+            )
+        except Exception as exc:
+            # Provenance setup itself is fail-open. Log only the exception
+            # class so malformed or secret-bearing values cannot be echoed.
+            append_text(
+                log_path,
+                f"[ringer.py] launch provenance unavailable ({exc.__class__.__name__}); "
+                "launch proceeds without a receipt\n",
+            )
         append_text(
             log_path,
             "\n"
             f"[ringer.py] attempt {attempt} started {datetime.now(timezone.utc).isoformat()}\n"
             f"[ringer.py] engine: {runtime.task.engine}\n"
-            f"[ringer.py] command: {shell_command_for_display(cmd)} < /dev/null\n",
+            + (f"[ringer.py] launch receipt: {receipt_id}\n" if receipt_id else "")
+            + f"[ringer.py] command: {shell_command_for_display(cmd)} < /dev/null\n",
         )
         capture = RollingBytes(max_bytes=1_000_000)
         try:
             log_fh = log_path.open("ab")
         except OSError as exc:
+            self._emit_terminal_receipt_safe(runtime, receipt_id, "failed")
             return WorkerResult(returncode=None, timed_out=False, tokens=None, error=str(exc))
         async with AsyncFileCloser(log_fh):
             try:
                 proc = await asyncio.create_subprocess_exec(
                     *cmd,
                     cwd=str(runtime.taskdir),
+                    env=worker_env,
                     stdin=asyncio.subprocess.DEVNULL,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.STDOUT,
@@ -8435,6 +8912,7 @@ class RingerRunner:
                 message = f"[ringer.py] worker spawn failed: {exc}\n"
                 log_fh.write(message.encode("utf-8", errors="replace"))
                 log_fh.flush()
+                self._emit_terminal_receipt_safe(runtime, receipt_id, "failed")
                 return WorkerResult(returncode=None, timed_out=False, tokens=None, error=str(exc))
             with self.lock:
                 runtime.worker_pid = proc.pid
@@ -8464,11 +8942,49 @@ class RingerRunner:
         if timed_out:
             append_text(log_path, f"\n[ringer.py] worker timed out after {runtime.task.timeout_s}s\n")
         append_text(log_path, f"[ringer.py] attempt {attempt} exited rc={proc.returncode}\n")
+        self._emit_terminal_receipt_safe(
+            runtime,
+            receipt_id,
+            "completed" if proc.returncode == 0 and not timed_out else "failed",
+        )
         return WorkerResult(
             returncode=proc.returncode,
             timed_out=timed_out,
             tokens=tokens,
             reported_model=reported_model,
+        )
+
+    def _emit_receipt_safe(self, runtime: TaskRuntime, receipt: dict[str, Any]) -> None:
+        try:
+            self.receipt_writer.emit(receipt)
+        except ReceiptSecurityError as exc:
+            # The message names only pattern classes, never matched text.
+            append_text(
+                runtime.log_path,
+                f"[ringer.py] launch receipt rejected ({exc}); launch proceeds without a receipt\n",
+            )
+        except Exception as exc:
+            append_text(
+                runtime.log_path,
+                f"[ringer.py] launch receipt skipped ({exc.__class__.__name__}); "
+                "receipts never block a launch\n",
+            )
+
+    def _emit_terminal_receipt_safe(
+        self, runtime: TaskRuntime, receipt_id: str | None, event: str
+    ) -> None:
+        if receipt_id is None:
+            return
+        self._emit_receipt_safe(
+            runtime,
+            build_terminal_receipt(
+                receipt_id,
+                event,
+                identity=self.identity,
+                run_id=self.run_id,
+                host=self.receipt_host,
+                parent_session=self.receipt_parent_session,
+            ),
         )
 
     async def _tee_stream(
@@ -8522,12 +9038,37 @@ class RingerRunner:
         reasoning_effort = effective_reasoning_effort_from_command(
             runtime.last_worker_command
         )
+        orchestrator = self.manifest.orchestrator or {}
+        contract_review = self.manifest.contract_review or {}
+        orchestrator_model = model_log_text(orchestrator.get("model")) if isinstance(orchestrator, dict) else ""
+        orchestrator_runtime = model_log_text(orchestrator.get("runtime")) if isinstance(orchestrator, dict) else ""
+        orchestrator_family = model_log_text(orchestrator.get("family")) if isinstance(orchestrator, dict) else ""
+        reviewer_model = model_log_text(contract_review.get("reviewer_model"))
+        reviewer_runtime = model_log_text(contract_review.get("reviewer_runtime"))
+        reviewer_family = model_log_text(contract_review.get("reviewer_family"))
+        reviewer_verdict = model_log_text(contract_review.get("verdict"))
         notes_parts = [
             f"retry={'true' if retrying else 'false'}",
             f"worker_returncode={worker.returncode}",
             f"model={stamped_model}",
             f"task_type={runtime.task.task_type}",
+            f"contract_risk={self.manifest.risk}",
+            f"contract_sha256={self.manifest.contract_sha256}",
         ]
+        if orchestrator_model:
+            notes_parts.append(f"orchestrator_model={orchestrator_model}")
+        if orchestrator_runtime:
+            notes_parts.append(f"orchestrator_runtime={orchestrator_runtime}")
+        if orchestrator_family:
+            notes_parts.append(f"orchestrator_family={orchestrator_family}")
+        if reviewer_model:
+            notes_parts.append(f"reviewer_model={reviewer_model}")
+        if reviewer_runtime:
+            notes_parts.append(f"reviewer_runtime={reviewer_runtime}")
+        if reviewer_family:
+            notes_parts.append(f"reviewer_family={reviewer_family}")
+        if reviewer_verdict:
+            notes_parts.append(f"reviewer_verdict={reviewer_verdict}")
         if worker.error:
             notes_parts.append(f"worker_error={worker.error}")
         if verify.missing_files:
@@ -8564,6 +9105,15 @@ class RingerRunner:
                 "reasoning_effort": reasoning_effort,
                 "task_type": runtime.task.task_type,
                 "retry": retrying,
+                "risk": self.manifest.risk,
+                "contract_sha256": self.manifest.contract_sha256,
+                "orchestrator_model": orchestrator_model,
+                "orchestrator_runtime": orchestrator_runtime,
+                "orchestrator_family": orchestrator_family,
+                "reviewer_model": reviewer_model,
+                "reviewer_runtime": reviewer_runtime,
+                "reviewer_family": reviewer_family,
+                "reviewer_verdict": reviewer_verdict,
             }
         )
 
@@ -10095,7 +10645,17 @@ def main(argv: list[str] | None = None) -> int:
             ),
         )
         print_lint_findings(lint_findings)
-        if any(finding.startswith("ERROR:") for finding in lint_findings):
+        dispatch_blockers = lint_manifest_contract_review(manifest)
+        if dispatch_blockers:
+            print(
+                "dispatch blocked: high/critical risk requires an exact-manifest, "
+                "cross-family, harness-attested PASS contract review.",
+                file=sys.stderr,
+            )
+        if (
+            any(finding.startswith("ERROR:") for finding in lint_findings)
+            or dispatch_blockers
+        ):
             return 1
         validate_manifest_engines(manifest, config)
         identity_start_paths = [manifest.workdir]

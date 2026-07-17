@@ -340,6 +340,27 @@ The per-user philosophy, stated plainly: every user's workload is different, so 
 
 Ringer can optionally load per-model steering profiles, prepend applicable worker rules to both first-attempt and retry prompts, print driver guidance for the orchestrator, and collect one local observation row per attempt. The feature is fail-open: missing or malformed steering data never blocks a run. Setup, the profile contract, and the observation schema are documented in [`docs/STEERING.md`](docs/STEERING.md).
 
+## Launch receipts — provenance for every worker
+
+Every worker spawn appends a **launch receipt** to `<state_dir>/receipts/launches.jsonl` (default `~/.ringer/receipts/launches.jsonl`), so the next observer can attribute who launched what, when, and why — including ambient side effects (MCP OAuth flows, port binds) that no transcript records. The format is one JSON line per lifecycle event (`launched` → optional `bound` → `completed`/`failed`/`abandoned`), append-only, latest line per `receipt_id` wins. Schema: [`schema/launch-receipt.v1.json`](schema/launch-receipt.v1.json).
+
+Each worker child inherits the **FLEET_\* env contract** — `FLEET_LAUNCHER`, `FLEET_LAUNCHER_KIND`, `FLEET_LAUNCH_ID` (the receipt id), plus `FLEET_BEAD` and `FLEET_PARENT_SESSION` when known (passed through from ringer's own environment). Any other launcher (an orchestrator session, a cron lane) adopts provenance the same way: export the five variables, append one receipt line.
+
+Rules the code enforces:
+
+- **Receipts observe; they never block.** Any receipt failure is logged to the task log and the launch proceeds (fail-open).
+- **No secrets, ever — rejected, not redacted.** Receipts carry identities, IDs, hashes, paths, and coarse capability classes only. The writer refuses any material shaped like a URL with a query string, an `Authorization:`/cookie header, an OAuth `code=`/`state=`/token parameter, a JWT, or a private key — nothing matching those shapes is stored in any form, and the prompt/spec appears only as a SHA-256 hash.
+- **Append-only.** Lifecycle updates are new lines, never rewrites; the file is inert data no consumer depends on for correctness.
+
+Audit with the read-only verifier (exit non-zero on violations):
+
+```bash
+tools/verify_launch_receipts.py            # checks ~/.ringer/receipts/launches.jsonl
+tools/verify_launch_receipts.py --json     # machine-readable report
+```
+
+It validates every line against the schema, scans for forbidden material, resolves lifecycle state, reports unbound and stale-open receipts (abandoned candidates after 24h), and — joined against `~/.claude/projects` transcripts — flags post-cutover `sdk-cli`/`external` sessions with no receipt as **unattributed launches**. Sessions predating the first receipt are pre-cutover and never backfilled.
+
 ## Hard-won invariants
 
 Four rules are baked into every worker invocation. They all cost us real debugging hours; you get them for free:

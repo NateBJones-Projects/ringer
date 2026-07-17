@@ -1,0 +1,39 @@
+{
+  "schema_version": 3,
+  "run_name": "paperclip-ten-task-streak-admission-20260715-v1",
+  "workdir": "/private/tmp/ringer-paperclip-ten-task-streak-admission-20260715-v1",
+  "max_parallel": 2,
+  "worktrees": false,
+  "default_engine": "codex",
+  "identity": "aegis",
+  "tasks": [
+    {
+      "key": "independent_queue_admission",
+      "task_type": "planning",
+      "engine": "codex",
+      "model": "gpt-5.5",
+      "engine_args": ["-c", "model_reasoning_effort=high"],
+      "timeout_s": 600,
+      "full_access": false,
+      "bead_id": "hermes-jxk0",
+      "spec": "Act as the first independent, read-only admission judge for Bead hermes-jxk0. Do not mutate Paperclip, Beads, repositories, services, or configuration. Query the live local Paperclip API at http://127.0.0.1:3100/api for company 87c32b8e-f131-4df8-ad8e-963d01b458e7. Inspect current issues and enough agent/run state to decide whether ten DISTINCT agent-safe Paperclip issues can be executed consecutively now. Exclude personal/human-owned work, blocked work, already-running work, synthetic Ringer-only repetitions, duplicates, and any issue lacking a safe autonomous acceptance path. Never print or store credentials. Write exactly one artifact, queue-admission.json, as valid JSON with these top-level keys: generated_at_utc, source, bead_id, constraints, eligible_candidates, exclusions, eligible_count, verdict, next_action. source must identify the live Paperclip API without query strings or secrets. bead_id must equal hermes-jxk0. constraints must be a non-empty array. eligible_candidates must be an array of objects; each object must include id, identifier, title, status, assigneeAgentId, and rationale. exclusions must be a non-empty array of objects containing identifier and reason. eligible_count must exactly equal the length of eligible_candidates. verdict must be exactly ADMIT or HOLD; ADMIT is permitted only if eligible_count is at least 10 and all ten are distinct, currently actionable, non-personal, and not running. next_action must be a concrete safe action. Be conservative and factual. Do not invent candidates or claim execution occurred.",
+      "check": "set -eu; f=queue-admission.json; if [ ! -s \"$f\" ]; then echo 'FAIL: queue-admission.json missing or empty' >&2; exit 1; fi; python3 - <<'PY'\nimport json\nfrom pathlib import Path\np=Path('queue-admission.json')\ntry: d=json.loads(p.read_text())\nexcept Exception as e: raise SystemExit(f'FAIL: invalid JSON: {e}')\nreq={'generated_at_utc','source','bead_id','constraints','eligible_candidates','exclusions','eligible_count','verdict','next_action'}\nmissing=sorted(req-set(d))\nif missing: raise SystemExit(f'FAIL: missing keys: {missing}')\nif d['bead_id']!='hermes-jxk0': raise SystemExit('FAIL: wrong bead_id')\nif not isinstance(d['constraints'],list) or not d['constraints']: raise SystemExit('FAIL: constraints must be non-empty')\nif not isinstance(d['eligible_candidates'],list): raise SystemExit('FAIL: eligible_candidates must be an array')\nif d['eligible_count']!=len(d['eligible_candidates']): raise SystemExit('FAIL: eligible_count mismatch')\nif d['verdict'] not in {'ADMIT','HOLD'}: raise SystemExit('FAIL: verdict must be ADMIT or HOLD')\nif d['verdict']=='ADMIT' and d['eligible_count']<10: raise SystemExit('FAIL: ADMIT requires at least 10 candidates')\nids=[]\nfor i,c in enumerate(d['eligible_candidates']):\n    need={'id','identifier','title','status','assigneeAgentId','rationale'}\n    if not need.issubset(c): raise SystemExit(f'FAIL: candidate {i} missing fields')\n    ids.append(c['id'])\nif len(ids)!=len(set(ids)): raise SystemExit('FAIL: duplicate candidate IDs')\nif not isinstance(d['exclusions'],list) or not d['exclusions']: raise SystemExit('FAIL: exclusions must be non-empty')\nfor i,x in enumerate(d['exclusions']):\n    if not {'identifier','reason'}.issubset(x): raise SystemExit(f'FAIL: exclusion {i} missing fields')\nif not isinstance(d['next_action'],str) or len(d['next_action'].strip())<20: raise SystemExit('FAIL: next_action is not concrete')\nprint(f\"EXECUTED_CHECK=PASS queue-admission verdict={d['verdict']} eligible_count={d['eligible_count']}\")\nPY",
+      "expect_files": ["queue-admission.json"],
+      "verified": "The live Paperclip queue was independently screened against the ten-distinct-task safety and actionability contract."
+    },
+    {
+      "key": "independent_protocol_gate",
+      "task_type": "planning",
+      "engine": "codex",
+      "model": "gpt-5.6-sol",
+      "engine_args": ["-c", "model_reasoning_effort=high"],
+      "timeout_s": 600,
+      "full_access": false,
+      "bead_id": "hermes-jxk0",
+      "spec": "Act as the second independent, read-only gate judge for Bead hermes-jxk0. Do not mutate Paperclip, Beads, repositories, services, or configuration. Query live Paperclip state at http://127.0.0.1:3100/api for company 87c32b8e-f131-4df8-ad8e-963d01b458e7. Write exactly one artifact named streak-gate.md. It must define an evidence-backed admission decision for a future streak of ten DISTINCT real agent-safe Paperclip issues. It must include the literal headings: # Verdict, ## Live evidence, ## Eligibility rules, ## Sequential execution protocol, ## Reset conditions, ## Receipt schema, ## Current candidate assessment, ## Safe next action. Under # Verdict, state exactly either ADMIT or HOLD on its own line. ADMIT is allowed only if the live queue contains at least ten distinct, currently actionable, non-personal, non-running issues with safe autonomous completion paths. The protocol must require one-at-a-time execution, pre/post live read-back, successful terminal run state, done issue state, zero adapter/runtime errors, immutable evidence per issue, and a full reset to zero after any error. The receipt schema must name issue UUID, identifier, agent UUID, run UUID, start/end timestamps, terminal state, exit code, error reason, evidence path, and sequence number. Explicitly exclude personal/human-owned issues, blocked issues, already-running issues, synthetic repetitions, and duplicate IDs. Never include credential values. Do not claim ten tasks were executed; this is an admission gate only.",
+      "check": "set -eu; f=streak-gate.md; if [ ! -s \"$f\" ]; then echo 'FAIL: streak-gate.md missing or empty' >&2; exit 1; fi; for heading in '# Verdict' '## Live evidence' '## Eligibility rules' '## Sequential execution protocol' '## Reset conditions' '## Receipt schema' '## Current candidate assessment' '## Safe next action'; do if ! grep -Fxq -- \"$heading\" \"$f\"; then printf 'FAIL: missing exact heading: %s\\n' \"$heading\" >&2; exit 1; fi; done; for term in 'one-at-a-time' 'pre/post live read-back' 'done issue state' 'adapter/runtime errors' 'reset to zero' 'issue UUID' 'run UUID' 'sequence number' 'personal/human-owned' 'blocked issues' 'already-running' 'synthetic repetitions' 'duplicate IDs'; do if ! grep -Fiq -- \"$term\" \"$f\"; then printf 'FAIL: missing required contract phrase: %s\\n' \"$term\" >&2; exit 1; fi; done; verdict=$(awk '/^# Verdict$/{getline; while ($0 ~ /^[[:space:]]*$/) getline; print; exit}' \"$f\"); case \"$verdict\" in ADMIT|HOLD) ;; *) printf 'FAIL: verdict must be ADMIT or HOLD, found: %s\\n' \"$verdict\" >&2; exit 1;; esac; bytes=$(wc -c < \"$f\" | tr -d ' '); if [ \"$bytes\" -lt 3000 ]; then printf 'FAIL: streak gate too small: %s bytes\\n' \"$bytes\" >&2; exit 1; fi; printf 'EXECUTED_CHECK=PASS protocol-gate verdict=%s bytes=%s\\n' \"$verdict\" \"$bytes\"",
+      "expect_files": ["streak-gate.md"],
+      "verified": "A second independent judge defined and applied the strict sequential streak protocol, reset conditions, and immutable receipt contract."
+    }
+  ]
+}
