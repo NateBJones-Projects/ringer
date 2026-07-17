@@ -52,6 +52,9 @@ CONFIG_FILE_NAME = "config.toml"
 DEFAULT_ENGINE_NAME = "codex"
 DEFAULT_TIMEOUT_S = 900
 CHECK_TIMEOUT_S = 60
+# Worktree setup hooks are run before any worker starts. Keep this bounded so
+# a bad environment bootstrap cannot hang a whole run without diagnostics.
+WORKTREE_SETUP_TIMEOUT_S = 120
 DEFAULT_DASHBOARD_PORT_BASE = 8787
 DEFAULT_HUD_PORT = 8700
 DEFAULT_CATALOG_SOURCE = "https://openrouter.ai/api/v1/models"
@@ -1074,6 +1077,7 @@ class Manifest:
     repo: Path | None
     tasks: tuple[TaskSpec, ...]
     source_path: Path | None = None
+    worktree_setup: str = ""
 
     @classmethod
     def from_path(cls, path: Path) -> "Manifest":
@@ -1089,6 +1093,7 @@ class Manifest:
             repo=manifest.repo,
             tasks=manifest.tasks,
             source_path=path,
+            worktree_setup=manifest.worktree_setup,
         )
 
     @classmethod
@@ -1107,6 +1112,10 @@ class Manifest:
             raise ValueError("max_parallel must be positive")
         repo_raw = obj.get("repo")
         repo = Path(str(repo_raw)).expanduser().resolve() if repo_raw else None
+        worktree_setup_raw = obj.get("worktree_setup", "")
+        if not isinstance(worktree_setup_raw, str):
+            raise ValueError("worktree_setup must be a string")
+        worktree_setup = worktree_setup_raw
         tasks_raw = obj.get("tasks")
         if not isinstance(tasks_raw, list) or not tasks_raw:
             raise ValueError("tasks must be a non-empty list")
@@ -1135,6 +1144,7 @@ class Manifest:
             worktrees=worktrees,
             repo=repo,
             tasks=tasks,
+            worktree_setup=worktree_setup,
         )
 
     def with_max_parallel(self, value: int | None) -> "Manifest":
@@ -1150,6 +1160,7 @@ class Manifest:
             repo=self.repo,
             tasks=self.tasks,
             source_path=self.source_path,
+            worktree_setup=self.worktree_setup,
         )
 
 
@@ -8264,8 +8275,63 @@ class RingerRunner:
                 message = stdout.decode("utf-8", errors="replace")
                 append_text(runtime.log_path, f"[ringer.py] git worktree add failed:\n{message}\n")
                 return False, message.strip() or "git worktree add failed"
+            if self.manifest.worktree_setup.strip():
+                setup_ok, setup_error = await self._run_worktree_setup(runtime)
+                if not setup_ok:
+                    return False, setup_error
             return True, None
         taskdir.mkdir(parents=True, exist_ok=True)
+        return True, None
+
+    async def _run_worktree_setup(self, runtime: TaskRuntime) -> tuple[bool, str | None]:
+        command = self.manifest.worktree_setup
+        append_text(
+            runtime.log_path,
+            "\n"
+            f"[ringer.py] worktree setup started {datetime.now(timezone.utc).isoformat()}\n"
+            f"[ringer.py] setup command: {command}\n",
+        )
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                command,
+                cwd=str(runtime.taskdir),
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                start_new_session=True,
+            )
+        except Exception as exc:
+            error = f"worktree_setup spawn failed: {exc}"
+            append_text(runtime.log_path, f"[ringer.py] {error}\n")
+            return False, error
+
+        timed_out = False
+        try:
+            stdout, _ = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=WORKTREE_SETUP_TIMEOUT_S,
+            )
+        except asyncio.TimeoutError:
+            timed_out = True
+            terminate_process_group(proc)
+            try:
+                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+            except asyncio.TimeoutError:
+                kill_process_group(proc)
+                stdout, _ = await proc.communicate()
+
+        output = stdout.decode("utf-8", errors="replace") if stdout else ""
+        if output:
+            append_text(runtime.log_path, output)
+            if not output.endswith("\n"):
+                append_text(runtime.log_path, "\n")
+        if timed_out:
+            error = f"worktree_setup timed out after {WORKTREE_SETUP_TIMEOUT_S}s"
+            append_text(runtime.log_path, f"[ringer.py] {error}\n")
+            return False, error
+        append_text(runtime.log_path, f"[ringer.py] worktree setup exited rc={proc.returncode}\n")
+        if proc.returncode != 0:
+            return False, f"worktree_setup exited with code {proc.returncode}"
         return True, None
 
     async def _cleanup_worktree_on_pass(self, runtime: TaskRuntime) -> None:
