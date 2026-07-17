@@ -1,5 +1,5 @@
 # Model identity registry — resolves (engine, manifest model field) into the
-# display triple: Model / Harness / Access. This is what the scoreboard and
+# display taxonomy: Model / Lab / Harness / Access. This is what the scoreboard and
 # Ringside show, and what keeps engine names (codex) from masquerading as
 # model names.
 #
@@ -14,23 +14,31 @@ default_model_key = "gpt-5.5"
 
 [engines.codex.models."gpt-5.5"]
 display = "GPT-5.5"
+lab = "OpenAI"
 confidence = "verified"     # snapshot gpt-5.5-2026-04-23, Codex CLI default; see capability file
 source = "https://developers.openai.com/codex/models"
+last_verified = 2026-07-10
 
 [engines.codex.models."gpt-5.6-sol"]
 display = "GPT-5.6 Sol"
+lab = "OpenAI"
 confidence = "verified"
 source = "https://developers.openai.com/codex/models"
+last_verified = 2026-07-10
 
 [engines.codex.models."gpt-5.6-luna"]
 display = "GPT-5.6 Luna"
+lab = "OpenAI"
 confidence = "verified"
 source = "https://developers.openai.com/codex/models"
+last_verified = 2026-07-10
 
 [engines.codex.models."gpt-5.6-terra"]
 display = "GPT-5.6 Terra"
+lab = "OpenAI"
 confidence = "verified"
 source = "https://developers.openai.com/codex/models"
+last_verified = 2026-07-10
 
 [engines.grok]
 harness = "Grok Build CLI"
@@ -38,37 +46,55 @@ access = "OAuth plan"
 default_model_key = "grok-build"
 
 [engines.grok.models."grok-build"]
-# "Grok Build" is the HARNESS (the CLI product); the model behind the
-# grok-build alias is unnamed by xAI in our data — capability research task
-# caps-grok is establishing the true lineage with citations. Until then the
-# display shows the alias explicitly rather than harness branding.
-display = "Grok Build 0.1"
-confidence = "verified"     # xAI overloads the brand: the CLI is the harness, "Grok Build 0.1" is the MODEL with its own official model page
+# "Grok Build" is the HARNESS (the CLI product), never a model name. The CLI
+# serves exactly two models: Grok 4.5 (xAI) and Composer 2.5 (Cursor). The
+# 'grok-build' engine default resolves to Grok 4.5. An earlier entry here
+# wrongly recorded "Grok Build 0.1" as a model — do not reintroduce it.
+display = "Grok 4.5"
+lab = "xAI"
+confidence = "verified"     # operator-confirmed (Jon, 2026-07-10): Grok Build CLI serves Grok 4.5 + Composer 2.5
 source = "https://docs.x.ai/developers/release-notes"
+last_verified = 2026-07-10
+noncanonical_slugs = ["opencode:openrouter/x-ai/grok-4.5"]
 
 [engines.grok.models."grok-composer-2.5-fast"]
 display = "Composer 2.5 Fast"
+lab = "Cursor (Anysphere)"
 confidence = "verified"     # Cursor (Anysphere) model, served through xAI's Grok Build CLI in our setup
 source = "https://cursor.com/blog/composer-2-5"
+last_verified = 2026-07-10
 
 [engines.opencode]
 harness = "OpenCode"
 access = "OpenRouter API"
 # model key = the manifest "model" slug; entries below map slugs to display
-# names. Unlisted slugs display as the slug with the "openrouter/" prefix
-# stripped, access "OpenRouter API".
+# names. Unlisted slugs are marked unregistered and derive a display name;
+# their complete raw value appears only in scoreboard diagnostics until verified.
 
 [engines.opencode.models."openrouter/z-ai/glm-5.2"]
 display = "GLM 5.2"
+lab = "Z.ai (Zhipu AI)"
 confidence = "verified"
 source = "manifest model field; OpenRouter slug z-ai/glm-5.2"
+last_verified = 2026-07-10
 
 [engines.opencode.models."openrouter/moonshotai/kimi-k2.7-code"]
 display = "Kimi K2.7 Code"
+lab = "Moonshot AI"
 confidence = "verified"
 source = "manifest model field; OpenRouter slug moonshotai/kimi-k2.7-code"
+last_verified = 2026-07-10
 
 [engines.opencode.models."openrouter/nvidia/nemotron-3-super-120b-a12b:free"]
 display = "Nemotron 3 Super 120B (free)"
+lab = "NVIDIA"
 confidence = "verified"
 source = "manifest model field; OpenRouter slug nvidia/nemotron-3-super-120b-a12b:free"
+last_verified = 2026-07-10
+
+[engines.opencode.models."openrouter/meta-llama/llama-3.3-70b-instruct:free"]
+display = "Llama 3.3 70B Instruct (free)"
+lab = "Meta"
+confidence = "verified"
+source = "manifest model field; OpenRouter slug meta-llama/llama-3.3-70b-instruct:free"
+last_verified = 2026-07-10

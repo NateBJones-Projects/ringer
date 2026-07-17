@@ -27,7 +27,7 @@ Do not use this for judgment-heavy refactors, cross-file architecture changes, o
 | `{{LOCAL_VERIFY — exact command from this worktree that gives useful output, e.g. npm test -- --runInBand path/to/test}}` | The command the worker should run before finishing. |
 | `{{EXPORT_DIR}}` | Absolute directory outside all task worktrees where checks write `<task-key>.patch` and ignored-file copies. Create it before the run. |
 | `{{GITIGNORED_EXPORTS}}` | `NONE` for normal tracked-file migrations, `AUTO` to copy every ignored path found under the owned paths, or a semicolon-separated list of ignored owned paths to copy. |
-| `{{PYTHON}}` | Python executable for the check script, for example `/opt/homebrew/bin/python3.14` or `python3`. |
+| `{{PYTHON}}` | Python executable for the check script, for example `python3`. |
 | `{{KIT_DIR}}` | Absolute path to `templates/migration-swarm` in this Ringer checkout or copied kit location. |
 
 ## Checks
