@@ -128,6 +128,30 @@ class EngineConfig:
 
 
 @dataclass(frozen=True)
+class EngineBinDiagnostic:
+    engine: str
+    config_key: str
+    value: str
+    path_value: str | None
+    path_was_set: bool
+    default_search_path: str = field(default_factory=lambda: os.defpath)
+
+    @property
+    def searched_path_display(self) -> str:
+        if not self.path_was_set:
+            return f"<unset> (shutil default: {self.default_search_path!r})"
+        if self.path_value == "":
+            return "<empty>"
+        return repr(self.path_value)
+
+    def warning(self) -> str:
+        return (
+            f"ringer.py: warning: {self.config_key} = {self.value!r} is not resolvable; "
+            f"searched PATH: {self.searched_path_display}"
+        )
+
+
+@dataclass(frozen=True)
 class PostgresEvalConfig:
     env_file: Path
 
@@ -428,6 +452,7 @@ class AppConfig:
     artifact: ArtifactConfig
     steering: SteeringConfig = field(default_factory=SteeringConfig)
     update: UpdateConfig = field(default_factory=UpdateConfig)
+    engine_bin_diagnostics: tuple[EngineBinDiagnostic, ...] = ()
 
     @classmethod
     def load(cls, path: Path | None = None) -> "AppConfig":
@@ -452,7 +477,12 @@ class AppConfig:
         hud_app_path = optional_path(data.get("hud_app_path"))
         allow_full_access = bool(data.get("allow_full_access", False))
         eval_config = load_eval_config(data.get("eval"), state_dir)
-        engines = load_engines(data.get("engines"))
+        raw_engines = data.get("engines")
+        engines = load_engines(raw_engines)
+        engine_bin_diagnostics = collect_engine_bin_diagnostics(
+            engines,
+            engine_names=configured_engine_names(raw_engines),
+        )
         artifact_config = load_artifact_config(data.get("artifact"), state_dir)
         update_config = load_update_config(data.get("update"))
         try:
@@ -474,6 +504,7 @@ class AppConfig:
             artifact=artifact_config,
             steering=steering_config,
             update=update_config,
+            engine_bin_diagnostics=engine_bin_diagnostics,
         )
 
 
@@ -924,6 +955,71 @@ def load_hud_port(raw: Any) -> int:
     if port <= 0:
         raise ValueError("hud.port must be positive")
     return port
+
+
+def configured_engine_names(raw: Any) -> tuple[str, ...]:
+    if not isinstance(raw, dict):
+        return ()
+    names: list[str] = []
+    for name in raw:
+        clean = str(name).strip()
+        if clean:
+            names.append(clean)
+    return tuple(names)
+
+
+def has_path_separator(value: str) -> bool:
+    separators = tuple(sep for sep in (os.sep, os.altsep) if sep)
+    return any(sep in value for sep in separators)
+
+
+def collect_engine_bin_diagnostics(
+    engines: dict[str, EngineConfig],
+    *,
+    engine_names: Iterable[str] | None = None,
+    path_value: str | None = None,
+    path_was_set: bool | None = None,
+) -> tuple[EngineBinDiagnostic, ...]:
+    if path_was_set is None:
+        path_was_set = "PATH" in os.environ
+    if path_value is None and path_was_set:
+        path_value = os.environ.get("PATH", "")
+    search_path = path_value if path_was_set else os.defpath
+    names = tuple(engine_names) if engine_names is not None else tuple(engines)
+
+    diagnostics: list[EngineBinDiagnostic] = []
+    for name in names:
+        engine = engines.get(name)
+        if engine is None:
+            continue
+        bin_value = engine.bin
+        if has_path_separator(bin_value):
+            continue
+        if shutil.which(bin_value, path=search_path) is not None:
+            continue
+        diagnostics.append(
+            EngineBinDiagnostic(
+                engine=name,
+                config_key=f"engines.{name}.bin",
+                value=bin_value,
+                path_value=path_value,
+                path_was_set=path_was_set,
+            )
+        )
+    return tuple(diagnostics)
+
+
+def print_engine_bin_diagnostics(config: AppConfig) -> None:
+    for diagnostic in config.engine_bin_diagnostics:
+        print(diagnostic.warning(), file=sys.stderr)
+
+
+def print_engine_bin_diagnostics_if_config_loads(path: Path | None) -> None:
+    try:
+        config = AppConfig.load(path)
+    except Exception:
+        return
+    print_engine_bin_diagnostics(config)
 
 
 def load_engines(raw: Any) -> dict[str, EngineConfig]:
@@ -10053,6 +10149,7 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "lint":
             manifest = Manifest.from_path(args.manifest)
+            print_engine_bin_diagnostics_if_config_loads(args.config)
             findings = lint_manifest(
                 manifest,
                 allow_noncanonical_route=args.allow_noncanonical_route,
@@ -10067,6 +10164,7 @@ def main(argv: list[str] | None = None) -> int:
             return run_catalog_command(args)
 
         config = AppConfig.load(args.config)
+        print_engine_bin_diagnostics(config)
         if args.command == "db":
             return run_db_command(config, args)
         if args.command == "models":
