@@ -5,6 +5,7 @@ import argparse
 import asyncio
 import base64
 import contextlib
+import hashlib
 import json
 import mimetypes
 import os
@@ -2415,7 +2416,7 @@ def print_model_explore(
     for group in groups:
         label = (
             "unranked"
-            if group.get("unattributed") or group.get("misrouted")
+            if group.get("unattributed") or group.get("misrouted") or group.get("invalidated_only")
             else ("proven" if proven_model_group(group) else "probation")
         )
         display = (
@@ -4439,7 +4440,7 @@ def inject_models_tab_into_ringside_html(html: str) -> str:
     }
     .breakdown-grid {
       display: grid;
-      grid-template-columns: minmax(120px, 1fr) repeat(5, minmax(70px, auto));
+      grid-template-columns: minmax(120px, 1fr) repeat(6, minmax(70px, auto));
       gap: 0;
       padding: 8px 10px 10px 46px;
       color: var(--muted);
@@ -4458,7 +4459,7 @@ def inject_models_tab_into_ringside_html(html: str) -> str:
     }
     @media (max-width: 760px) {
       .breakdown-grid {
-        grid-template-columns: minmax(110px, 1fr) repeat(2, minmax(64px, auto));
+        grid-template-columns: minmax(110px, 1fr) repeat(3, minmax(64px, auto));
         padding-left: 10px;
       }
       .breakdown-grid .optional { display: none; }
@@ -4540,6 +4541,7 @@ def inject_models_tab_into_ringside_html(html: str) -> str:
         const cells = [
           '<div class="breakdown-head">Task type</div>',
           '<div class="breakdown-head">Tasks</div>',
+          '<div class="breakdown-head">Invalid</div>',
           '<div class="breakdown-head">First</div>',
           '<div class="breakdown-head optional">Pass</div>',
           '<div class="breakdown-head optional">Attempts</div>',
@@ -4549,6 +4551,7 @@ def inject_models_tab_into_ringside_html(html: str) -> str:
           cells.push(
             `<div>${html(group.task_type || "(untyped)")}</div>`,
             `<div>${numberOrZeroLocal(group.tasks).toLocaleString()}</div>`,
+            `<div>${numberOrZeroLocal(group.invalidated_rows).toLocaleString()}</div>`,
             `<div>${html(percent(group.first_try_pass_rate))}</div>`,
             `<div class="optional">${html(percent(group.pass_rate))}</div>`,
             `<div class="optional">${numberOrZeroLocal(group.attempts).toLocaleString()}</div>`,
@@ -4586,6 +4589,7 @@ def inject_models_tab_into_ringside_html(html: str) -> str:
             `<td>${html(row.access || "unknown")}</td>`,
             `<td><span class="tier-badge ${html(tierClass)}">${html(tier)}</span></td>`,
             `<td class="numeric">${numberOrZeroLocal(row.tasks).toLocaleString()}</td>`,
+            `<td class="numeric">${numberOrZeroLocal(row.invalidated_rows).toLocaleString()}</td>`,
             `<td class="numeric">${html(percent(row.first_try_pass_rate))}</td>`,
             `<td class="numeric">${html(percent(row.pass_rate))}</td>`,
             `<td class="numeric">${row.median_tokens === null || row.median_tokens === undefined ? "" : numberOrZeroLocal(row.median_tokens).toLocaleString()}</td>`,
@@ -4594,13 +4598,13 @@ def inject_models_tab_into_ringside_html(html: str) -> str:
             `<td class="model-notes" title="${html(notes)}">${html(row.latest_note || "")}</td>`,
             '</tr>',
           );
-          if (expanded) body.push(`<tr class="model-breakdown"><td colspan="12">${breakdown(bucketId)}</td></tr>`);
+          if (expanded) body.push(`<tr class="model-breakdown"><td colspan="13">${breakdown(bucketId)}</td></tr>`);
         });
         wrap.innerHTML = [
           '<table class="models-table">',
           '<thead><tr>',
           '<th>Model</th><th>Lab</th><th>Harness</th><th>API/Plan</th><th>Tier</th>',
-          '<th class="numeric">Tasks</th><th class="numeric">First try</th><th class="numeric">Pass</th>',
+          '<th class="numeric">Tasks</th><th class="numeric">Invalidated</th><th class="numeric">First try</th><th class="numeric">Pass</th>',
           '<th class="numeric">Tokens (median)</th><th>Speed (median)</th><th>Last used</th><th>Notes</th>',
           '</tr></thead>',
           `<tbody>${body.join("")}</tbody>`,
@@ -5239,6 +5243,14 @@ def model_log_row_is_reserved_fixture(row: dict[str, Any]) -> bool:
     return model_log_text(row.get("model")) in RESERVED_FIXTURE_MODELS
 
 
+def model_log_row_is_invalidated(row: dict[str, Any]) -> bool:
+    return (
+        row.get("evidence_excluded") is True
+        or bool(model_log_text(row.get("invalidated_at")))
+        or bool(model_log_text(row.get("invalidation_reason")))
+    )
+
+
 def model_reasoning_effort_keys(rows: list[dict[str, Any]]) -> set[tuple[str, str, bool]]:
     keys: set[tuple[str, str, bool]] = set()
     for row in rows:
@@ -5334,12 +5346,13 @@ def read_model_log_rows(
             if not isinstance(row, dict):
                 skipped += 1
                 continue
-            if engine is not None and model_log_text(row.get("worker_engine")) != engine:
+            if engine is not None and model_log_row_engine(row) != engine:
                 continue
             rows.append(row)
     if since is not None:
         selected_row_ids: set[int] = set()
-        for task_rows in group_model_log_tasks(rows):
+        evidence_rows = [row for row in rows if not model_log_row_is_invalidated(row)]
+        for task_rows in group_model_log_tasks(evidence_rows):
             ordered = sorted(
                 task_rows,
                 key=lambda row: (
@@ -5350,8 +5363,133 @@ def read_model_log_rows(
             final_date = parse_log_date(ordered[-1].get("logged_at"))
             if final_date and final_date >= since:
                 selected_row_ids.update(id(row) for row in task_rows)
-        rows = [row for row in rows if id(row) in selected_row_ids]
+        rows = [
+            row
+            for row in rows
+            if id(row) in selected_row_ids
+            or (
+                model_log_row_is_invalidated(row)
+                and (logged := parse_log_date(row.get("logged_at"))) != ""
+                and logged >= since
+            )
+        ]
     return rows, skipped
+
+
+@dataclass(frozen=True)
+class ModelInvalidationResult:
+    path: Path
+    matched: int
+    newly_invalidated: int
+    already_invalidated: int
+
+
+def model_log_row_matches_invalidation(
+    row: dict[str, Any],
+    *,
+    run_id: str,
+    task_key: str | None = None,
+) -> bool:
+    if model_log_text(row.get("run_id")) != run_id:
+        return False
+    if task_key is not None and model_log_text(row.get("task_key")) != task_key:
+        return False
+    return True
+
+
+def _line_ending(raw_line: bytes) -> bytes:
+    if raw_line.endswith(b"\r\n"):
+        return b"\r\n"
+    if raw_line.endswith(b"\n"):
+        return b"\n"
+    return b""
+
+
+def invalidate_model_log_rows(
+    path: Path,
+    *,
+    run_id: str,
+    task_key: str | None = None,
+    reason: str,
+    now: datetime | None = None,
+) -> ModelInvalidationResult:
+    path = path.expanduser().resolve()
+    reason = reason.strip()
+    run_id = run_id.strip()
+    task_key = (task_key.strip() or None) if task_key is not None else None
+    if not run_id:
+        raise ValueError("--run is required for --invalidate")
+    if not reason:
+        raise ValueError("--reason must be non-empty for --invalidate")
+    try:
+        original_stat = path.stat()
+    except FileNotFoundError:
+        return ModelInvalidationResult(path, 0, 0, 0)
+    mode = original_stat.st_mode & 0o7777
+    invalidated_at = (now or datetime.now(timezone.utc)).replace(microsecond=0).isoformat()
+    fd: int | None = None
+    tmp_path: Path | None = None
+    matched = 0
+    newly_invalidated = 0
+    already_invalidated = 0
+    try:
+        fd, tmp_name = tempfile.mkstemp(
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+        )
+        tmp_path = Path(tmp_name)
+        with path.open("rb") as src, os.fdopen(fd, "wb") as dst:
+            if hasattr(os, "fchmod"):
+                os.fchmod(dst.fileno(), mode)
+            fd = None
+            while True:
+                raw_line = src.readline()
+                if not raw_line:
+                    break
+                output = raw_line
+                try:
+                    row = json.loads(raw_line.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    dst.write(output)
+                    continue
+                if not isinstance(row, dict) or not model_log_row_matches_invalidation(
+                    row,
+                    run_id=run_id,
+                    task_key=task_key,
+                ):
+                    dst.write(output)
+                    continue
+                matched += 1
+                if model_log_row_is_invalidated(row):
+                    already_invalidated += 1
+                    dst.write(output)
+                    continue
+                row["evidence_excluded"] = True
+                row["invalidated_at"] = invalidated_at
+                row["invalidation_reason"] = reason
+                output = json.dumps(row, sort_keys=True).encode("utf-8") + _line_ending(raw_line)
+                newly_invalidated += 1
+                dst.write(output)
+            dst.flush()
+            os.fsync(dst.fileno())
+        if newly_invalidated:
+            os.replace(tmp_path, path)
+            tmp_path = None
+            with contextlib.suppress(OSError):
+                dir_fd = os.open(path.parent, os.O_RDONLY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+    finally:
+        if fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+        if tmp_path is not None:
+            with contextlib.suppress(OSError):
+                tmp_path.unlink()
+    return ModelInvalidationResult(path, matched, newly_invalidated, already_invalidated)
 
 
 def aggregate_model_log_rows(
@@ -5362,7 +5500,58 @@ def aggregate_model_log_rows(
 ) -> list[dict[str, Any]]:
     groups: dict[tuple[str, str, str, str, bool], dict[str, Any]] = {}
     effort_keys = model_reasoning_effort_keys(rows)
-    for task_rows in group_model_log_tasks(rows):
+    for row in rows:
+        if not model_log_row_is_invalidated(row) or model_log_row_is_reserved_fixture(row):
+            continue
+        group_engine = model_log_row_engine(row)
+        group_model = model_log_row_model(row)
+        group_task_type = model_log_row_task_type(row)
+        unattributed = model_log_row_is_unattributed(row)
+        reasoning_effort = None if unattributed else model_log_row_reasoning_effort(row)
+        if model is not None and group_model != model:
+            continue
+        if task_type is not None and group_task_type != task_type:
+            continue
+        key = (
+            group_engine,
+            group_model,
+            group_task_type,
+            reasoning_effort or "",
+            unattributed,
+        )
+        group = groups.setdefault(
+            key,
+            {
+                "engine": group_engine,
+                "model": group_model,
+                "task_type": group_task_type,
+                "reasoning_effort": reasoning_effort,
+                "show_reasoning_effort": (
+                    (group_engine, group_model, unattributed) in effort_keys
+                ),
+                "unattributed": unattributed,
+                "tasks": 0,
+                "attempts": 0,
+                "invalidated_rows": 0,
+                "passed": 0,
+                "failed": 0,
+                "pass_rate": 0.0,
+                "first_try_pass_rate": 0.0,
+                "median_duration_ms": None,
+                "median_tokens": None,
+                "last_seen": "",
+                "_first_try_passed": 0,
+                "_duration_ms": [],
+                "_tokens": [],
+            },
+        )
+        group["invalidated_rows"] += 1
+        logged_at = model_log_text(row.get("logged_at"))
+        if logged_at > group["last_seen"]:
+            group["last_seen"] = logged_at
+
+    evidence_rows = [row for row in rows if not model_log_row_is_invalidated(row)]
+    for task_rows in group_model_log_tasks(evidence_rows):
         ordered = sorted(
             task_rows,
             key=lambda row: (
@@ -5403,6 +5592,7 @@ def aggregate_model_log_rows(
                 "unattributed": unattributed,
                 "tasks": 0,
                 "attempts": 0,
+                "invalidated_rows": 0,
                 "passed": 0,
                 "failed": 0,
                 "pass_rate": 0.0,
@@ -5451,8 +5641,10 @@ def aggregate_model_log_rows(
                 "reasoning_effort": group["reasoning_effort"],
                 "show_reasoning_effort": group["show_reasoning_effort"],
                 "unattributed": group["unattributed"],
+                "invalidated_only": bool(group["invalidated_rows"] and not group["tasks"]),
                 "tasks": group["tasks"],
                 "attempts": group["attempts"],
+                "invalidated_rows": group["invalidated_rows"],
                 "passed": group["passed"],
                 "failed": group["failed"],
                 "pass_rate": group["pass_rate"],
@@ -5485,6 +5677,7 @@ MODEL_SCOREBOARD_COLUMNS = (
     "API/Plan",
     "Tier",
     "Tasks",
+    "Invalidated",
     "First try",
     "Pass",
     "Tokens (median)",
@@ -5851,7 +6044,7 @@ def enrich_model_groups_with_identity(
             # The aggregation helper retains the engine as a legacy grouping key.
             # Public payloads must not expose harness branding as a model identity.
             item["model"] = ""
-        if item.get("unattributed") or item.get("misrouted"):
+        if item.get("unattributed") or item.get("misrouted") or item.get("invalidated_only"):
             item["tier"] = "unranked"
         elif "tier" not in item:
             item["tier"] = model_scoreboard_tier(
@@ -5943,6 +6136,9 @@ def create_read_model_schema(conn: Any) -> None:
             verdict TEXT,
             duration_ms INTEGER,
             worker_tokens INTEGER,
+            evidence_excluded INTEGER,
+            invalidated_at TEXT,
+            invalidation_reason TEXT,
             orchestrator TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_attempts_model_task_type
@@ -6000,6 +6196,12 @@ def create_read_model_schema(conn: Any) -> None:
         conn.execute("ALTER TABLE attempts ADD COLUMN reported_model TEXT")
     if not read_model_column_exists(conn, "attempts", "expected_model"):
         conn.execute("ALTER TABLE attempts ADD COLUMN expected_model TEXT")
+    if not read_model_column_exists(conn, "attempts", "evidence_excluded"):
+        conn.execute("ALTER TABLE attempts ADD COLUMN evidence_excluded INTEGER")
+    if not read_model_column_exists(conn, "attempts", "invalidated_at"):
+        conn.execute("ALTER TABLE attempts ADD COLUMN invalidated_at TEXT")
+    if not read_model_column_exists(conn, "attempts", "invalidation_reason"):
+        conn.execute("ALTER TABLE attempts ADD COLUMN invalidation_reason TEXT")
     if not read_model_column_exists(conn, "identity", "lab"):
         conn.execute("ALTER TABLE identity ADD COLUMN lab TEXT")
     if not read_model_column_exists(conn, "identity", "alias"):
@@ -6105,6 +6307,9 @@ def insert_attempt_rows(conn: Any, rows: list[dict[str, Any]]) -> int:
                 model_log_text(row.get("verdict")),
                 model_log_int(row.get("duration_ms")),
                 model_log_int(row.get("worker_tokens")),
+                1 if model_log_row_is_invalidated(row) else 0,
+                model_log_text(row.get("invalidated_at")) or None,
+                model_log_text(row.get("invalidation_reason")) or None,
                 model_log_text(row.get("orchestrator")),
             )
         )
@@ -6114,9 +6319,10 @@ def insert_attempt_rows(conn: Any, rows: list[dict[str, Any]]) -> int:
             INSERT INTO attempts (
                 run_id, task_key, logged_at, engine, model, reported_model, expected_model,
                 reasoning_effort, task_type, retry,
-                verdict, duration_ms, worker_tokens, orchestrator
+                verdict, duration_ms, worker_tokens, evidence_excluded, invalidated_at,
+                invalidation_reason, orchestrator
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             payloads,
         )
@@ -6153,6 +6359,21 @@ def file_sync_metadata(path: Path) -> tuple[int, int]:
     except FileNotFoundError:
         return -1, 0
     return int(stat.st_mtime_ns), int(stat.st_size)
+
+
+def hash_file_prefix(path: Path, byte_count: int) -> str:
+    if byte_count <= 0:
+        return hashlib.sha256(b"").hexdigest()
+    digest = hashlib.sha256()
+    remaining = byte_count
+    with path.expanduser().open("rb") as fh:
+        while remaining > 0:
+            chunk = fh.read(min(1024 * 1024, remaining))
+            if not chunk:
+                break
+            digest.update(chunk)
+            remaining -= len(chunk)
+    return digest.hexdigest()
 
 
 def insert_catalog_event_rows(conn: Any, events: list[dict[str, Any]]) -> int:
@@ -6337,7 +6558,16 @@ def rebuild_read_model_db(
             inserted = insert_attempt_rows(conn, rows)
             refresh_catalog_tables(conn, catalog_path)
             refresh_identity_tables(conn, registry_path)
-            write_sync_state_values(conn, {"log_offset": offset})
+            log_mtime, log_size = file_sync_metadata(log_path)
+            write_sync_state_values(
+                conn,
+                {
+                    "log_offset": offset,
+                    "log_prefix_sha256": hash_file_prefix(log_path, offset),
+                    "log_mtime_ns": log_mtime,
+                    "log_size": log_size,
+                },
+            )
             conn.commit()
         except Exception:
             conn.rollback()
@@ -6356,15 +6586,20 @@ def sync_read_model_db(
     log_path = log_path.expanduser().resolve()
     catalog_path = (catalog_path or default_catalog_path()).expanduser().resolve()
     registry_path = (registry_path or default_model_registry_path()).expanduser().resolve()
-    try:
-        log_size = log_path.stat().st_size
-    except FileNotFoundError:
-        log_size = 0
+    log_mtime, log_size = file_sync_metadata(log_path)
     with contextlib.closing(connect_read_model_db(db_path)) as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
             create_read_model_schema(conn)
             offset = read_sync_state_int(conn, "log_offset", 0)
+            stored_mtime = read_sync_state_int(conn, "log_mtime_ns", -2)
+            stored_size = read_sync_state_int(conn, "log_size", -2)
+            # Stat fingerprint: unchanged size+mtime deliberately skips hashing to
+            # avoid re-reading the log on every sync (a performance tradeoff; a
+            # same-size content change with identical mtime would be missed, which
+            # is acceptable here because the log is append-mostly and mtime moves
+            # on any real write).
+            metadata_unchanged = stored_mtime == log_mtime and stored_size == log_size
             if log_size < offset:
                 conn.rollback()
                 return rebuild_read_model_db(
@@ -6373,11 +6608,36 @@ def sync_read_model_db(
                     catalog_path=catalog_path,
                     registry_path=registry_path,
                 )
+            if not metadata_unchanged:
+                stored_hash = read_sync_state_value(conn, "log_prefix_sha256")
+                current_hash = hash_file_prefix(log_path, offset)
+                if stored_hash is None or stored_hash != current_hash:
+                    conn.rollback()
+                    return rebuild_read_model_db(
+                        db_path,
+                        log_path,
+                        catalog_path=catalog_path,
+                        registry_path=registry_path,
+                    )
             rows, skipped, new_offset = read_log_rows_from_offset(log_path, offset)
             inserted = insert_attempt_rows(conn, rows)
             refresh_catalog_tables(conn, catalog_path)
             refresh_identity_tables(conn, registry_path)
-            write_sync_state_values(conn, {"log_offset": new_offset})
+            new_mtime, new_size = file_sync_metadata(log_path)
+            next_hash = (
+                read_sync_state_value(conn, "log_prefix_sha256") or hashlib.sha256(b"").hexdigest()
+                if metadata_unchanged
+                else hash_file_prefix(log_path, new_offset)
+            )
+            write_sync_state_values(
+                conn,
+                {
+                    "log_offset": new_offset,
+                    "log_prefix_sha256": next_hash,
+                    "log_mtime_ns": new_mtime,
+                    "log_size": new_size,
+                },
+            )
             conn.commit()
         except Exception:
             conn.rollback()
@@ -6430,7 +6690,8 @@ def db_attempt_rows(
         query = """
             SELECT run_id, task_key, logged_at, engine, model, reported_model, expected_model,
                    reasoning_effort, task_type, retry,
-                   verdict, duration_ms, worker_tokens, orchestrator
+                   verdict, duration_ms, worker_tokens, evidence_excluded, invalidated_at,
+                   invalidation_reason, orchestrator
             FROM attempts
         """
         params: list[Any] = []
@@ -6453,6 +6714,9 @@ def db_attempt_rows(
                 "verdict": row["verdict"],
                 "duration_ms": row["duration_ms"],
                 "worker_tokens": row["worker_tokens"],
+                "evidence_excluded": bool(row["evidence_excluded"]),
+                "invalidated_at": row["invalidated_at"],
+                "invalidation_reason": row["invalidation_reason"],
                 "orchestrator": row["orchestrator"],
             }
             for row in conn.execute(query, params)
@@ -6460,7 +6724,8 @@ def db_attempt_rows(
         registry = load_identity_registry_from_db(conn)
     if since is not None:
         selected_row_ids: set[int] = set()
-        for task_rows in group_model_log_tasks(rows):
+        evidence_rows = [row for row in rows if not model_log_row_is_invalidated(row)]
+        for task_rows in group_model_log_tasks(evidence_rows):
             ordered = sorted(
                 task_rows,
                 key=lambda row: (
@@ -6471,7 +6736,16 @@ def db_attempt_rows(
             final_date = parse_log_date(ordered[-1].get("logged_at"))
             if final_date and final_date >= since:
                 selected_row_ids.update(id(row) for row in task_rows)
-        rows = [row for row in rows if id(row) in selected_row_ids]
+        rows = [
+            row
+            for row in rows
+            if id(row) in selected_row_ids
+            or (
+                model_log_row_is_invalidated(row)
+                and (logged := parse_log_date(row.get("logged_at"))) != ""
+                and logged >= since
+            )
+        ]
     return rows, registry
 
 
@@ -6791,7 +7065,63 @@ def aggregate_model_scoreboard_rows(
 ) -> list[dict[str, Any]]:
     models: dict[tuple[str, str, str, bool], dict[str, Any]] = {}
     effort_keys = model_reasoning_effort_keys(rows)
-    for task_rows in group_model_log_tasks(rows):
+    for row in rows:
+        if not model_log_row_is_invalidated(row) or model_log_row_is_reserved_fixture(row):
+            continue
+        group_engine = model_log_row_engine(row)
+        group_model = model_log_row_model(row)
+        group_task_type = model_log_row_task_type(row)
+        unattributed = model_log_row_is_unattributed(row)
+        reasoning_effort = None if unattributed else model_log_row_reasoning_effort(row)
+        if model is not None and group_model != model:
+            continue
+        if task_type is not None and group_task_type != task_type:
+            continue
+        model_key = (group_engine, group_model, reasoning_effort or "", unattributed)
+        model_entry = models.setdefault(
+            model_key,
+            {
+                "engine": group_engine,
+                "model": group_model,
+                "reasoning_effort": reasoning_effort,
+                "show_reasoning_effort": (
+                    (group_engine, group_model, unattributed) in effort_keys
+                ),
+                "unattributed": unattributed,
+                "tasks": 0,
+                "attempts": 0,
+                "invalidated_rows": 0,
+                "passed": 0,
+                "failed": 0,
+                "retries": 0,
+                "first_try_passed": 0,
+                "last_seen": "",
+                "_duration_ms": [],
+                "_tokens": [],
+                "_task_types": {},
+            },
+        )
+        breakdown = model_entry["_task_types"].setdefault(
+            group_task_type,
+            {
+                "task_type": group_task_type,
+                "tasks": 0,
+                "attempts": 0,
+                "invalidated_rows": 0,
+                "passed": 0,
+                "failed": 0,
+                "first_try_passed": 0,
+                "last_seen": "",
+            },
+        )
+        for target in (model_entry, breakdown):
+            target["invalidated_rows"] += 1
+            logged_at = model_log_text(row.get("logged_at"))
+            if logged_at > target["last_seen"]:
+                target["last_seen"] = logged_at
+
+    evidence_rows = [row for row in rows if not model_log_row_is_invalidated(row)]
+    for task_rows in group_model_log_tasks(evidence_rows):
         ordered = sorted(
             task_rows,
             key=lambda row: (
@@ -6825,6 +7155,7 @@ def aggregate_model_scoreboard_rows(
                 "unattributed": unattributed,
                 "tasks": 0,
                 "attempts": 0,
+                "invalidated_rows": 0,
                 "passed": 0,
                 "failed": 0,
                 "retries": 0,
@@ -6841,6 +7172,7 @@ def aggregate_model_scoreboard_rows(
                 "task_type": group_task_type,
                 "tasks": 0,
                 "attempts": 0,
+                "invalidated_rows": 0,
                 "passed": 0,
                 "failed": 0,
                 "first_try_passed": 0,
@@ -6878,6 +7210,7 @@ def aggregate_model_scoreboard_rows(
                     "task_type": breakdown["task_type"],
                     "tasks": b_tasks,
                     "attempts": breakdown["attempts"],
+                    "invalidated_rows": breakdown["invalidated_rows"],
                     "passed": breakdown["passed"],
                     "failed": breakdown["failed"],
                     "first_try_pass_rate": breakdown["first_try_passed"] / b_tasks if b_tasks else 0.0,
@@ -6889,7 +7222,7 @@ def aggregate_model_scoreboard_rows(
         first_try_rate = entry["first_try_passed"] / tasks_count if tasks_count else 0.0
         tier = (
             "unranked"
-            if entry["unattributed"]
+            if entry["unattributed"] or (entry["invalidated_rows"] and not tasks_count)
             else model_scoreboard_tier(tasks_count, first_try_rate)
         )
         finalized.append(
@@ -6899,9 +7232,11 @@ def aggregate_model_scoreboard_rows(
                 "reasoning_effort": entry["reasoning_effort"],
                 "show_reasoning_effort": entry["show_reasoning_effort"],
                 "unattributed": entry["unattributed"],
+                "invalidated_only": bool(entry["invalidated_rows"] and not tasks_count),
                 "tier": tier,
                 "tasks": tasks_count,
                 "attempts": entry["attempts"],
+                "invalidated_rows": entry["invalidated_rows"],
                 "retries": entry["retries"],
                 "passed": entry["passed"],
                 "failed": entry["failed"],
@@ -7163,12 +7498,13 @@ def render_task_breakdown_table(task_rows: list[dict[str, Any]]) -> str:
             f"""<tr>
       <td>{html_escape(str(item.get("task_type") or ""))}</td>
       <td class="num">{fmt_int(item.get("tasks"))}</td>
+      <td class="num">{fmt_int(item.get("invalidated_rows"))}</td>
       <td class="num rate-cell">{rate_cell_html(item.get("first_try_pass_rate"))}</td>
       <td class="num rate-cell">{rate_cell_html(item.get("pass_rate"))}</td>
     </tr>"""
         )
     return f"""<table class="breakdown">
-    <thead><tr><th>task_type</th><th>n</th><th>first-try</th><th>pass</th></tr></thead>
+    <thead><tr><th>task_type</th><th>n</th><th>invalidated</th><th>first-try</th><th>pass</th></tr></thead>
     <tbody>{"".join(rows)}</tbody>
   </table>"""
 
@@ -7534,6 +7870,7 @@ def render_model_table_pair(
       <td>{html_escape(access)}</td>
       <td><span class="tier-badge {html_escape(tier)}">{html_escape(tier_display)}</span></td>
       <td class="num">{fmt_int(row.get("tasks"))}</td>
+      <td class="num">{fmt_int(row.get("invalidated_rows"))}</td>
       <td class="num rate-cell">{rate_cell_html(row.get("first_try_pass_rate"))}</td>
       <td class="num rate-cell">{rate_cell_html(row.get("pass_rate"))}</td>
       <td class="num">{html_escape(fmt_int(row.get("median_tokens"))) if row.get("median_tokens") is not None else ""}</td>
@@ -7542,7 +7879,7 @@ def render_model_table_pair(
       <td class="notes-cell" title="{html_escape(notes_title)}">{html_escape(latest_note)}</td>
     </tr>
     <tr class="detail-row">
-      <td colspan="12">
+      <td colspan="13">
         <details class="model-detail">
           <summary>details for {html_escape(model_display)}</summary>
           <div class="detail-content">
@@ -7591,7 +7928,7 @@ def render_model_scoreboard_html(
         )
     table_rows = "".join(rendered_rows)
     if not table_rows:
-        table_rows = '<tr><td colspan="12" class="muted">No local model evidence matched these filters.</td></tr>'
+        table_rows = '<tr><td colspan="13" class="muted">No local model evidence matched these filters.</td></tr>'
     unregistered_slugs = sorted(
         {str(row.get("model") or "") for row in ordered if row.get("unregistered") and row.get("model")}
     )
@@ -7649,6 +7986,7 @@ def render_model_scoreboard_html(
             <th>API/Plan</th>
             <th>Tier</th>
             <th class="num">Tasks</th>
+            <th class="num">Invalidated</th>
             <th class="num">First try</th>
             <th class="num">Pass</th>
             <th class="num">Tokens (median)</th>
@@ -7715,7 +8053,7 @@ def write_model_scoreboard_html(
 
 def print_model_log_table(path: Path, rows_read: int, skipped: int, groups: list[dict[str, Any]]) -> None:
     print(f"Model log: {path} ({rows_read} rows, {skipped} skipped lines)")
-    widths = (32, 20, 18, 18, 10, 7, 10, 7, 15, 14, 14, 60)
+    widths = (32, 20, 18, 18, 10, 7, 11, 10, 7, 15, 14, 14, 60)
     header = " | ".join(
         f"{name:<{width}}" for name, width in zip(MODEL_SCOREBOARD_COLUMNS, widths)
     )
@@ -7746,6 +8084,7 @@ def print_model_log_table(path: Path, rows_read: int, skipped: int, groups: list
             str(group.get("access") or "unknown"),
             "not ranked" if group.get("tier") == "unranked" else str(group.get("tier") or ""),
             fmt_int(group.get("tasks")),
+            fmt_int(group.get("invalidated_rows")),
             fmt_percent(group.get("first_try_pass_rate")),
             fmt_percent(group.get("pass_rate")),
             "" if group.get("median_tokens") is None else fmt_int(group.get("median_tokens")),
@@ -7845,7 +8184,69 @@ def build_models_api_payload(
     }
 
 
+def run_models_invalidate_command(config: AppConfig, args: argparse.Namespace) -> int:
+    default_log_path = config.eval.jsonl_path.expanduser().resolve()
+    log_path = (args.log or default_log_path).expanduser().resolve()
+    run_id = model_log_text(getattr(args, "invalidate_run_id", ""))
+    task_key = model_log_text(getattr(args, "invalidate_task_key", "")) or None
+    reason = model_log_text(getattr(args, "reason", ""))
+    if not run_id:
+        print("models --invalidate requires --run <run_id>", file=sys.stderr)
+        return 2
+    if not reason:
+        print("models --invalidate requires a non-empty --reason <text>", file=sys.stderr)
+        return 2
+    try:
+        result = invalidate_model_log_rows(
+            log_path,
+            run_id=run_id,
+            task_key=task_key,
+            reason=reason,
+        )
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    except OSError as exc:
+        print(f"models invalidate failed: {exc}", file=sys.stderr)
+        return 1
+    selector = f"run={run_id}" + (f" task={task_key}" if task_key else "")
+    if result.matched == 0:
+        print(f"No matching model log rows for {selector} in {result.path}", file=sys.stderr)
+        return 1
+    print(
+        f"models invalidation: {selector}; "
+        f"newly_invalidated={result.newly_invalidated} "
+        f"already_invalidated={result.already_invalidated} log={result.path}"
+    )
+    explicit_db = getattr(args, "db", None) is not None
+    db_path = (getattr(args, "db", None) or default_read_model_db_path()).expanduser().resolve()
+    if result.newly_invalidated and should_use_read_model_db(
+        log_path=log_path,
+        default_log_path=default_log_path,
+        explicit_db=explicit_db,
+    ):
+        catalog_path = (getattr(args, "catalog_file", None) or default_catalog_path()).expanduser().resolve()
+        registry_path = (getattr(args, "registry", None) or default_model_registry_path()).expanduser().resolve()
+        try:
+            rebuild_read_model_db(
+                db_path,
+                log_path,
+                catalog_path=catalog_path,
+                registry_path=registry_path,
+            )
+        except Exception as exc:
+            print(
+                f"models invalidation wrote {result.path}, but read-model rebuild failed: {exc}",
+                file=sys.stderr,
+            )
+            return 1
+        print(f"models invalidation: rebuilt read model {db_path}")
+    return 0
+
+
 def run_models_command(config: AppConfig, args: argparse.Namespace) -> int:
+    if getattr(args, "invalidate", False):
+        return run_models_invalidate_command(config, args)
     default_log_path = config.eval.jsonl_path.expanduser().resolve()
     log_path = (args.log or default_log_path).expanduser().resolve()
     since = validate_since_date(args.since)
@@ -9975,6 +10376,10 @@ def build_parser() -> argparse.ArgumentParser:
     models_parser.add_argument("--html", nargs="?", const="", help="render a self-contained HTML scoreboard; optional output path")
     models_parser.add_argument("--open", action="store_true", help="render the HTML scoreboard to the artifact library and open it")
     models_parser.add_argument("--json", action="store_true", help="print the scoreboard as JSON")
+    models_parser.add_argument("--invalidate", action="store_true", help="exclude selected model-log rows from evidence")
+    models_parser.add_argument("--run", dest="invalidate_run_id", help="run_id selector for --invalidate")
+    models_parser.add_argument("--task", dest="invalidate_task_key", help="task_key selector for --invalidate")
+    models_parser.add_argument("--reason", help="non-empty invalidation reason for --invalidate")
 
     catalog_parser = subparsers.add_parser("catalog", help="show or refresh the local OpenRouter model catalog")
     catalog_parser.add_argument("--refresh", action="store_true", help="fetch source and rewrite the local snapshot")
