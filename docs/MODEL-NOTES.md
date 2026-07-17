@@ -82,6 +82,7 @@ checks and raw logs support — no vibes, no worker self-reports.
   the review->fix loop on this codebase.
 - 2026-07-10 — OUT OF QUOTA: both codex lanes of a doc-review run failed instantly with "You've hit your usage limit... try again at Aug 7th, 2026" (attempts burned on the same wall). Do not route to codex before 2026-08-07; use opencode/GLM 5.2 as the fallback lane.
 - 2026-07-10 — PRD/brief revision (fold 25+ review fixes into two docs, 558 lines out, 40+ assertion executed check, medium reasoning): PASS attempt 1. Clean FR renumbering, consistent cross-doc edits. Quota was reset same day — the Aug 7 lockout note above no longer applies.
+- 2026-07-17 — docs (cancode-2026-application, grant-application revision: ~840-line draft, 10 binding editorial constraints, substance validator with repetition cap + factual-correction asserts + invented-dollar-figure rejection): PASS attempt 1, 50.3k tokens, 251s, medium reasoning. Hit the "450"-occurrence cap exactly (6), applied all factual corrections, and added judgment beyond spec (flagged Vercel/GitHub deployment as possibly too advanced for an intro module). Funder-facing prose revision with a hard content contract is squarely in codex's proven docs lane.
 
 ## glm-5.2 via opencode (`openrouter/z-ai/glm-5.2`)
 
