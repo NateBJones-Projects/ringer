@@ -1,0 +1,61 @@
+{
+  "run_name": "jac-3643-nate-native-ringer-upgrade",
+  "workdir": "/Users/hermes/.ringer/work/jac-3643/run",
+  "max_parallel": 2,
+  "worktrees": true,
+  "repo": "/Users/hermes/.ringer/work/jac-3643/source",
+  "risk": "high",
+  "orchestrator": {
+    "provider": "openai",
+    "model": "gpt-5.6-sol",
+    "family": "gpt-5.6",
+    "runtime": "openai-codex",
+    "attestation": "openclaw session_status for agent:local:main:thread:7618822262:40264"
+  },
+  "contract_review": {
+    "verdict": "PASS",
+    "reviewer_provider": "anthropic",
+    "reviewer_model": "claude-opus-4-8",
+    "reviewer_family": "claude-4.8",
+    "reviewer_runtime": "claude-cli-2.1.196",
+    "harness_session_id": "56e14e58-98bf-4ebb-9e02-28932300e169",
+    "contract_sha256": "0f9857b4287e728c7d2f5aede5fdf5de19886f041a9355e4b0c0a21a01d593a9",
+    "artifact": "contracts/jac-3643-manifest-review-opus.v1.json"
+  },
+  "tasks": [
+    {
+      "key": "core-contract-metadata",
+      "task_type": "code-feature",
+      "engine": "codex",
+      "model": "gpt-5.4-mini",
+      "engine_args": [
+        "-c",
+        "model_reasoning_effort=high"
+      ],
+      "timeout_s": 1800,
+      "paperclip_issue": "JAC-3643",
+      "bead_id": "notes-hbq1q",
+      "spec": "Implement the core-contract-metadata lane from contracts/jac-3643-nate-native-upgrade.v1.json. Your current working directory IS an isolated Git worktree of the frozen source repository. Modify only ringer.py and tests/test_contract_metadata.py. Leave all changes uncommitted. Do not push, merge, restart services, call Paperclip, touch Beads, or change any other path. Required behavior: (1) add backwards-compatible optional run-level manifest fields risk, orchestrator, and contract_review; risk values are low, medium, high, critical, with absent treated as low; orchestrator is a string-keyed JSON object; contract_review is a string-keyed JSON object. Validate types and preserve these fields through Manifest.from_path and with_max_parallel. (2) Add a deterministic Manifest.contract_sha256 computed from UTF-8 JSON using sort_keys=true, separators comma/colon, ensure_ascii=false over exactly: run_name and an ordered tasks array containing each task key, spec, check, expect_files as a list, engine, model, task_type, and verified. JSON source key order, whitespace, workdir, max_parallel, paperclip_issue, bead_id, routine_id, goal_id, timeout, and review metadata must not change the hash. (3) Add high/critical lint findings unless contract_review has verdict PASS, reviewer_model, reviewer_family, reviewer_runtime, and contract_sha256 exactly matching Manifest.contract_sha256; also find same-family review when orchestrator.family equals reviewer_family. Low/medium runs remain compatible and need no review. (4) Expose risk, orchestrator, contract_review, and contract_sha256 in live/final state snapshots. Trace StateWriter construction and Runner wiring rather than creating a second state path. (5) Add risk, contract_sha256, orchestrator model/runtime, and reviewer model/runtime/verdict to attempt evidence in both structured row fields where safe and the notes trail so JSONL consumers retain them. Do not change PASS authority: executable checks still decide; do not add semantic override logic. (6) Preserve the existing exactly-two-attempt maximum and raw check output injection. Tests must prove old-manifest compatibility, canonical hash invariance to JSON key order and irrelevant metadata, hash sensitivity to semantic task fields, with_max_parallel preservation, high-risk missing/mismatched/same-family lint findings, valid cross-family PASS, state exposure, and attempt evidence. Follow local style and avoid broad refactors. End your response with CORE_CONTRACT_METADATA_DONE and a concise file/test summary.",
+      "check": "set -eu; git add -N tests/test_contract_metadata.py; changed=$(git status --porcelain | sed 's/^...//'); bad=$(printf '%s\n' \"$changed\" | grep -Ev '^(ringer.py|tests/test_contract_metadata.py)$' || true); if [ -n \"$bad\" ]; then echo \"FAIL: core worker changed paths outside ownership:\"; printf '%s\n' \"$bad\"; exit 1; fi; python3 -m pytest -q tests/test_contract_metadata.py || { echo 'FAIL: contract metadata tests failed'; exit 1; }; python3 -m pytest -q tests/test_lint.py tests/test_verify_order.py tests/test_model_log.py tests/test_launch_receipts.py || { echo 'FAIL: core regression tests failed'; exit 1; }; git diff --check || { echo 'FAIL: git diff check failed'; exit 1; }; mkdir -p /Users/hermes/.ringer/work/jac-3643/exports; git diff --binary -- ringer.py tests/test_contract_metadata.py > /Users/hermes/.ringer/work/jac-3643/exports/core-contract-metadata.patch; test -s /Users/hermes/.ringer/work/jac-3643/exports/core-contract-metadata.patch || { echo 'FAIL: exported core patch is empty'; exit 1; }; echo 'PASS: core contract metadata behavior, regressions, ownership, and patch export verified'",
+      "expect_files": [],
+      "verified": "contract metadata is backwards-compatible, canonically hashed, high-risk lint-gated, exposed in state/eval evidence, regression-tested, ownership-bounded, and exported as a non-empty patch"
+    },
+    {
+      "key": "policy-and-template",
+      "task_type": "docs",
+      "engine": "codex",
+      "model": "gpt-5.4-mini",
+      "engine_args": [
+        "-c",
+        "model_reasoning_effort=medium"
+      ],
+      "timeout_s": 1800,
+      "paperclip_issue": "JAC-3643",
+      "bead_id": "notes-hbq1q",
+      "spec": "Implement the policy-and-template lane from contracts/jac-3643-nate-native-upgrade.v1.json. Your current working directory IS an isolated Git worktree of the frozen source repository. Create or modify only docs/nate-native-fleet-policy.md, schema/ringer-contract-review.v1.json, templates/frontier-worker-loop/README.md, templates/frontier-worker-loop/manifest.json, and tests/test_frontier_worker_template.py. Leave all changes uncommitted. Do not push, merge, restart services, call Paperclip, touch Beads, or change any other path. Required content: (1) docs/nate-native-fleet-policy.md must define the corrected control loop: frontier orchestrator writes the immutable contract and executable checks; economical proven workers implement in isolated parallel lanes; executable checks decide PASS/FAIL; exactly one retry receives raw failure output; receipts drive per-task-type routing; semantic review is conditional and can veto green but never override red; Ringside is observational; Paperclip is trigger/telemetry/work-product projection; Beads/Vault remain authoritative. Include four modes: canonical, contract-reviewed high-risk, semantic-review, and bakeoff/exploration with a suggested 80-90 percent proven / 10-20 percent exploration policy and promotion only after roughly 20 comparable receipts. (2) schema/ringer-contract-review.v1.json must be a strict JSON Schema for a PASS/FAIL contract-review receipt including contract_sha256, reviewer provider/model/family/runtime, harness attestation, reviewed_at, requirement_gaps, required_changes, and advisories. (3) templates/frontier-worker-loop/manifest.json must be valid JSON and demonstrate risk/orchestrator/contract_review plus two independent economical worker tasks with task_type, model, meaningful checks that print failures, verified sentences, paperclip_issue, and bead_id placeholders. It must make contract_review.contract_sha256 a replacement placeholder and state that a high-risk run is not dispatchable before exact-manifest cross-family PASS. (4) the template README must provide a fill/freeze/hash/review/lint/run/integrate/semantic-review/receipt workflow and make authority boundaries explicit. (5) tests/test_frontier_worker_template.py must stay lane-local: validate the JSON/schema/template and policy invariants without importing or depending on the new ringer.py behavior from the other lane. Use only the standard library and pytest. End your response with POLICY_TEMPLATE_DONE and a concise file/test summary.",
+      "check": "set -eu; for f in docs/nate-native-fleet-policy.md schema/ringer-contract-review.v1.json templates/frontier-worker-loop/README.md templates/frontier-worker-loop/manifest.json tests/test_frontier_worker_template.py; do git add -N \"$f\"; done; changed=$(git status --porcelain | sed 's/^...//'); bad=$(printf '%s\n' \"$changed\" | grep -Ev '^(docs/nate-native-fleet-policy.md|schema/ringer-contract-review.v1.json|templates/frontier-worker-loop/README.md|templates/frontier-worker-loop/manifest.json|tests/test_frontier_worker_template.py)$' || true); if [ -n \"$bad\" ]; then echo \"FAIL: policy worker changed paths outside ownership:\"; printf '%s\n' \"$bad\"; exit 1; fi; python3 -m pytest -q tests/test_frontier_worker_template.py || { echo 'FAIL: policy/template tests failed'; exit 1; }; python3 -m json.tool schema/ringer-contract-review.v1.json >/dev/null || { echo 'FAIL: review schema is invalid JSON'; exit 1; }; python3 -m json.tool templates/frontier-worker-loop/manifest.json >/dev/null || { echo 'FAIL: template manifest is invalid JSON'; exit 1; }; git diff --check || { echo 'FAIL: git diff check failed'; exit 1; }; mkdir -p /Users/hermes/.ringer/work/jac-3643/exports; git diff --binary -- docs/nate-native-fleet-policy.md schema/ringer-contract-review.v1.json templates/frontier-worker-loop/README.md templates/frontier-worker-loop/manifest.json tests/test_frontier_worker_template.py > /Users/hermes/.ringer/work/jac-3643/exports/policy-and-template.patch; test -s /Users/hermes/.ringer/work/jac-3643/exports/policy-and-template.patch || { echo 'FAIL: exported policy patch is empty'; exit 1; }; echo 'PASS: policy, schema, template, lane-local tests, ownership, and patch export verified'",
+      "expect_files": [],
+      "verified": "the fleet policy, strict review schema, reusable template, lane-local tests, authority boundaries, ownership, and non-empty patch export are mechanically validated"
+    }
+  ]
+}
