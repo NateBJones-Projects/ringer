@@ -21,6 +21,12 @@ TASKDIR="${1:?usage: opencode-sandboxed.sh <taskdir> [--no-sandbox] <args...>}";
 SANDBOX=1
 if [ "${1:-}" = "--no-sandbox" ]; then SANDBOX=0; shift; fi
 
+# Ringer's OpenCode lane runs local Qwen, not Claude Code. Keep Claude's skills
+# installed for Claude while preventing OpenCode's compatibility layer from
+# importing ~/.claude skills and inflating every Qwen task's prompt context.
+# Export before either execution path so sandboxed and full-access runs agree.
+export OPENCODE_DISABLE_CLAUDE_CODE=1
+
 # Resolve opencode without tripping `set -e` (command -v returns nonzero when absent).
 if ! OPENCODE_BIN="$(command -v opencode)" || [ -z "$OPENCODE_BIN" ]; then
   echo "opencode-sandboxed.sh: opencode not found on PATH" >&2

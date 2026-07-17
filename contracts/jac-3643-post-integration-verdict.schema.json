@@ -1,0 +1,42 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "verdict",
+    "reviewed_base",
+    "reviewed_commit",
+    "requirement_gaps",
+    "required_changes",
+    "advisories",
+    "evidence"
+  ],
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": ["PASS", "FAIL"]
+    },
+    "reviewed_base": {
+      "type": "string"
+    },
+    "reviewed_commit": {
+      "type": "string"
+    },
+    "requirement_gaps": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "required_changes": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "advisories": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "evidence": {
+      "type": "array",
+      "items": {"type": "string"},
+      "minItems": 1
+    }
+  }
+}

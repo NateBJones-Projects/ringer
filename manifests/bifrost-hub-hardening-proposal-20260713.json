@@ -1,0 +1,54 @@
+{
+  "run_name": "bifrost-hub-hardening-proposal-20260713",
+  "workdir": "/tmp/ringer-bifrost-hub-hardening-20260713",
+  "max_parallel": 3,
+  "_purpose": "Admission and implementation-plan pass only. It must identify exact owning repositories and safe checks before any live launchd, Bifrost, Paperclip, Ringer, credential, or MCP configuration mutation.",
+  "_safety": {
+    "control_plane_authority": "read_only",
+    "live_mutation": false,
+    "credential_access": false,
+    "protected_workdirs": [
+      "/Users/hermes/ringer",
+      "/Users/hermes/.bifrost",
+      "/Users/hermes/Library/LaunchAgents",
+      "/Users/hermes/.config",
+      "/Users/hermes/.paperclip"
+    ],
+    "dispatch_rule": "Do not enable a client, write a launchd plist, restart a service, import credentials, or change Ringer/Ringside write authority. Produce evidence-backed implementation plans only."
+  },
+  "tasks": [
+    {
+      "key": "boot-smoke-and-logs-admission",
+      "task_type": "system-design-audit",
+      "engine": "opencode",
+      "model": "ollama/qwen3-coder:30b",
+      "timeout_s": 900,
+      "expect_files": ["boot-smoke-and-logs-plan.md"],
+      "spec": "Read-only discovery for the first two Bifrost reliability items. Locate the Aegis ai.bifrost LaunchAgent, its actual executable/config/log paths, Bifrost health endpoint contract, and the source/configuration that builds the Bifrost LLM Logs panel query. Do not edit anything outside this task directory and do not restart services. Write ./boot-smoke-and-logs-plan.md. It must include: (1) source evidence with exact paths and read-only commands used; (2) a launchd-safe boot-smoke implementation design that polls http://127.0.0.1:8078/health with a bounded timeout and fails nonzero on timeout or malformed/unhealthy JSON; (3) an executable test matrix including success, timeout, and unhealthy-response fixtures; (4) the precise start_time/end_time defect location and a rolling-window query proposal with timezone and polling semantics; (5) exact owning repository/worktree and a minimal file-level change list; (6) rollback behavior. Do not claim a path or endpoint unless observed.",
+      "check": "test -s boot-smoke-and-logs-plan.md && for heading in 'Source evidence' 'Boot smoke' 'Test matrix' 'rolling' 'Owning' 'Rollback'; do grep -qi \"$heading\" boot-smoke-and-logs-plan.md || { echo \"FAIL: missing section $heading\"; exit 1; }; done && grep -q '127.0.0.1:8078/health' boot-smoke-and-logs-plan.md && echo 'boot/log plan gate passed'",
+      "verified": "The plan names observed owners and contains bounded health, fixture, rolling-window, and rollback contracts for the first two implementation tasks."
+    },
+    {
+      "key": "claim-gate-admission",
+      "task_type": "security-design-audit",
+      "engine": "opencode",
+      "model": "ollama/qwen3-coder:30b",
+      "timeout_s": 900,
+      "expect_files": ["claim-gate-plan.md"],
+      "spec": "Read-only discovery for ADR-0019. Locate ADR-0019 and the exact Ringer/Ringside or Bifrost/Paperclip codepaths/configuration that could make Ringside write-capable. Do not edit services, configuration, or authority. Write ./claim-gate-plan.md with: (1) cited ADR requirements and observed source paths; (2) a minimal claim-gate protocol requiring a stable work identifier, explicit claimant identity, canonical Beads claim evidence, idempotency/replay behavior, and a deny-by-default failure mode; (3) a fixture-backed executable proof plan that independently covers allowed claim, absent Bead claim, wrong claimant, stale/replayed claim, malformed authority envelope, and unavailable Beads; (4) the exact condition under which write capability may be proposed, not enabled; (5) audit artifact and rollback/revocation requirements. Do not use secrets or issue mutation commands.",
+      "check": "test -s claim-gate-plan.md && for token in 'ADR-0019' 'deny' 'replay' 'Beads' 'fixture' 'rollback'; do grep -qi \"$token\" claim-gate-plan.md || { echo \"FAIL: missing $token\"; exit 1; }; done && echo 'claim-gate plan gate passed'",
+      "verified": "The plan has an evidence-backed deny-by-default claim protocol and test matrix that can prove or reject future write enablement."
+    },
+    {
+      "key": "service-and-wrapper-boundary-admission",
+      "task_type": "architecture-decision-audit",
+      "engine": "opencode",
+      "model": "ollama/qwen3-coder:30b",
+      "timeout_s": 900,
+      "expect_files": ["service-and-wrapper-boundary-plan.md"],
+      "spec": "Read-only architecture admission for the remaining service and wrapper work. Inspect only non-secret metadata, launchd labels, configured wrapper names, Bifrost MCP client states, and documented HTTP health endpoints. Write ./service-and-wrapper-boundary-plan.md with: (1) a placement decision matrix for Gmail, Google Calendar, and Fleet Memory: Aegis-native versus Talaris-routed, required noninteractive credential mechanism, least authority, health check, rollback, and explicit decision owner; (2) the Aegis HTTP-gateway contract for OpenClaw and Kimi, including loopback/tunnel route, health endpoint, authentication boundary, and explicit statement that no unsupported stdio MCP launcher is assumed; (3) an allowlist/retirement policy for Vault-only and Talaris-specific wrappers, including a safe SSH conversion admission checklist; (4) a one-at-a-time re-enable sequence that prohibits bulk startup changes. Do not inspect secrets, invoke vault-local scripts, or enable/restart clients.",
+      "check": "test -s service-and-wrapper-boundary-plan.md && for token in 'Gmail' 'Google Calendar' 'Fleet Memory' 'OpenClaw' 'Kimi' 'noninteractive' 'allowlist' 'one-at-a-time'; do grep -qi \"$token\" service-and-wrapper-boundary-plan.md || { echo \"FAIL: missing $token\"; exit 1; }; done && echo 'service/wrapper plan gate passed'",
+      "verified": "The plan supplies a decision gate, least-authority path, HTTP-service boundary, and wrapper allowlist policy before any credential or startup mutation."
+    }
+  ]
+}

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 import tempfile
@@ -299,7 +300,7 @@ class LintManifestTests(unittest.TestCase):
         )
         self.assertEqual([], lint_manifest(manifest), "compliant manifest should have no lint findings")
 
-    def test_templates_are_clean(self) -> None:
+    def test_templates_have_expected_lint_state(self) -> None:
         # Every kit ships one or more manifest skeletons (manifest.json plus
         # optional manifest-round*.json for multi-round kits).
         template_paths = sorted((ROOT / "templates").glob("*/manifest*.json"))
@@ -308,6 +309,17 @@ class LintManifestTests(unittest.TestCase):
             with self.subTest(template=path.name):
                 manifest = Manifest.from_path(path)
                 findings = lint_manifest(manifest)
+                raw = json.loads(path.read_text(encoding="utf-8"))
+                if raw.get("template_unfilled") is True:
+                    self.assertTrue(
+                        findings,
+                        f"{path} is a gated unfilled template and must not be dispatchable",
+                    )
+                    self.assertTrue(
+                        all("contract review" in item.lower() for item in findings),
+                        f"{path} should be blocked only by its unfilled review evidence: {findings}",
+                    )
+                    continue
                 self.assertEqual([], findings, f"{path} should lint clean, got: {findings}")
 
 
