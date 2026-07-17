@@ -30,6 +30,9 @@ For dispatch, project the reviewed receipt into the manifest's flat
 receipt remains the strict nested document defined by
 `schema/ringer-contract-review.v1.json`; the manifest projection exists only so
 Ringer can enforce the gate and expose the evidence in run state.
+`template_unfilled: true` is a human-facing marker only; the fail-closed gate is
+the placeholder rejection plus exact hash, cross-family identity, PASS verdict,
+and harness-attestation validation performed by Ringer.
 
 ## Review Rules
 

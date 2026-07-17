@@ -528,6 +528,7 @@ class ContractMetadataTests(unittest.TestCase):
                         "reviewer_model": "claude-opus-4-8",
                         "reviewer_family": "claude-4.8",
                         "reviewer_runtime": "claude-cli-2.1.196",
+                        "harness_session_id": "56e14e58-98bf-4ebb-9e02-28932300e169",
                         "contract_sha256": base.contract_sha256,
                     },
                     tasks=[self.task(expect_files=["output.txt"])],
@@ -585,6 +586,7 @@ class ContractMetadataTests(unittest.TestCase):
                         "reviewer_model": "claude-opus-4-8",
                         "reviewer_family": "claude-4.8",
                         "reviewer_runtime": "claude-cli-2.1.196",
+                        "harness_session_id": "56e14e58-98bf-4ebb-9e02-28932300e169",
                         "contract_sha256": base.contract_sha256,
                     },
                     tasks=[self.task(expect_files=["output.txt"])],
@@ -648,6 +650,26 @@ class ContractMetadataTests(unittest.TestCase):
         self.assertEqual(1, exit_code)
         self.assertIn("dispatch blocked", output.getvalue())
         dry_run_mock.assert_not_called()
+
+    def test_runner_reasserts_high_risk_gate_for_programmatic_callers(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            manifest = self.manifest_from_obj(
+                workdir=root / "work",
+                risk="critical",
+                orchestrator={"family": "gpt-5.6"},
+                tasks=[self.task(expect_files=["output.txt"])],
+            )
+
+            with self.assertRaisesRegex(ValueError, "dispatch blocked"):
+                RingerRunner(
+                    manifest,
+                    config=self.build_app_config(root),
+                    identity="programmatic-caller",
+                    dashboard_enabled=False,
+                )
+
+            self.assertFalse((root / "state").exists())
 
 
 if __name__ == "__main__":

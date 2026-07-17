@@ -7164,6 +7164,12 @@ class RingerRunner:
         dashboard_enabled: bool = True,
         force_browser: bool = False,
     ) -> None:
+        dispatch_blockers = lint_manifest_contract_review(manifest)
+        if dispatch_blockers:
+            raise ValueError(
+                "dispatch blocked: high/critical contract review gate failed: "
+                + " ".join(dispatch_blockers)
+            )
         self.manifest = manifest
         self.config = config
         self.identity = identity
