@@ -4667,9 +4667,443 @@ def inject_models_tab_into_ringside_html(html: str) -> str:
     return html
 
 
+HUD_PLAN_BODY_LIMIT_BYTES = 256 * 1024
+PREMIUM_CODEX_MODELS = frozenset(
+    {
+        "gpt-5.6-luna",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+    }
+)
+PLAN_TASK_TYPES = (
+    "code-feature",
+    "code-fix",
+    "code-review",
+    "test-hardening",
+    "docs",
+    "research",
+    "probe",
+)
+PLAN_REASONING_EFFORTS = ("low", "medium", "high")
+
+
+def engine_accepts_model(engine: EngineConfig) -> bool:
+    return any("{model}" in item or item == "{model_args}" for item in engine.args_template)
+
+
+def build_hud_plan_payload(config: AppConfig) -> dict[str, Any]:
+    engines = []
+    for name, engine in sorted(config.engines.items()):
+        engines.append(
+            {
+                "name": name,
+                "model_default": engine.model_default,
+                "supports_model": engine_accepts_model(engine),
+                "supports_reasoning": any(item == "{engine_args}" for item in engine.args_template),
+            }
+        )
+
+    lanes: list[dict[str, Any]] = []
+    codex = config.engines.get("codex")
+    if codex is not None and engine_accepts_model(codex):
+        lanes.append(
+            {
+                "id": "codex-gpt-5.5",
+                "label": "Standard Codex GPT-5.5",
+                "engine": "codex",
+                "model": "gpt-5.5",
+                "premium": False,
+                "description": "Normal implementation, fixes, and reviews.",
+            }
+        )
+        for model, label, description in (
+            ("gpt-5.6-terra", "GPT-5.6 Terra", "Premium escalation for difficult implementation."),
+            ("gpt-5.6-sol", "GPT-5.6 Sol", "Premium escalation for hard review and synthesis."),
+            ("gpt-5.6-luna", "GPT-5.6 Luna", "Candidate escalation for explicit bakeoffs."),
+        ):
+            lanes.append(
+                {
+                    "id": model,
+                    "label": label,
+                    "engine": "codex",
+                    "model": model,
+                    "premium": True,
+                    "description": description,
+                }
+            )
+
+    return {
+        "engines": engines,
+        "lanes": lanes,
+        "task_types": list(PLAN_TASK_TYPES),
+        "reasoning_efforts": list(PLAN_REASONING_EFFORTS),
+        "defaults": {
+            "run_name": "ringer-run",
+            "workdir": str((config.state_dir / "work" / "ringer-run").resolve()),
+            "max_parallel": 2,
+            "worktrees": False,
+        },
+        "policy": {
+            "default_model": "gpt-5.5",
+            "explicit_task_models": True,
+            "premium_models": sorted(PREMIUM_CODEX_MODELS),
+            "premium_requires_approval": True,
+            "agentops_linkage": False,
+            "auto_start": False,
+        },
+    }
+
+
+def validate_hud_plan_payload(
+    payload: Any,
+    config: AppConfig,
+    *,
+    require_premium_approval: bool,
+) -> tuple[Manifest, dict[str, Any], list[str], dict[str, Any]]:
+    if not isinstance(payload, dict):
+        raise ValueError("request body must be a JSON object")
+    manifest_obj = payload.get("manifest")
+    if not isinstance(manifest_obj, dict):
+        raise ValueError("manifest must be a JSON object")
+
+    manifest = Manifest.from_obj(manifest_obj)
+    validate_manifest_engines(manifest, config)
+    for task in manifest.tasks:
+        engine = config.engines[task.engine]
+        if engine_accepts_model(engine) and not task.model:
+            raise ValueError(
+                f"task {task.key}: choose an explicit model in the orchestration plan; "
+                "Ringside will not inherit an engine default"
+            )
+        if task.full_access and not config.allow_full_access:
+            raise ValueError(
+                f"task {task.key}: full_access is disabled by config; choose sandboxed execution"
+            )
+
+    premium_tasks = [task.key for task in manifest.tasks if task.model in PREMIUM_CODEX_MODELS]
+    premium_approved = payload.get("premium_approved") is True
+    premium_reason = str(payload.get("premium_reason") or "").strip()
+    if require_premium_approval and premium_tasks and not premium_approved:
+        raise ValueError(
+            "premium routing is not approved; explicitly approve the premium tasks before launch"
+        )
+    if require_premium_approval and premium_tasks and not premium_reason:
+        raise ValueError("premium routing needs a short reason before launch")
+
+    findings = lint_manifest(manifest, include_model_log_nudges=True, config=config)
+    if require_premium_approval and findings:
+        raise ValueError("plan has lint findings: " + " | ".join(findings))
+
+    routing = {
+        "planned_at": utc_now_iso(),
+        "explicit_task_models": True,
+        "premium_approved": bool(premium_tasks and premium_approved),
+        "premium_reason": premium_reason if premium_tasks else "",
+        "premium_tasks": premium_tasks,
+        "task_models": {
+            task.key: {
+                "engine": task.engine,
+                "model": task.model,
+                "task_type": task.task_type,
+                "engine_args": list(task.engine_args),
+            }
+            for task in manifest.tasks
+        },
+    }
+    normalized = dict(manifest_obj)
+    normalized["routing"] = routing
+    return manifest, normalized, findings, routing
+
+
+def save_hud_plan(state_dir: Path, manifest_obj: dict[str, Any], run_name: str) -> Path:
+    plans_dir = state_dir / "plans"
+    plans_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    base = sanitize_artifact_name(run_name)
+    path = plans_dir / f"{base}-{stamp}.json"
+    suffix = 1
+    while path.exists():
+        path = plans_dir / f"{base}-{stamp}-{suffix}.json"
+        suffix += 1
+    atomic_write_json(path, manifest_obj)
+    return path
+
+
+def launch_hud_plan(config: AppConfig, manifest_path: Path) -> subprocess.Popen[bytes]:
+    command = [sys.executable, str(Path(__file__).resolve())]
+    if config.path is not None:
+        command.extend(["--config", str(config.path)])
+    command.extend(["run", str(manifest_path)])
+    log_path = config.state_dir / "plan-launches.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_file = log_path.open("ab")
+    try:
+        return subprocess.Popen(
+            command,
+            stdout=log_file,
+            stderr=log_file,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    finally:
+        log_file.close()
+
+
+def inject_plan_tab_into_ringside_html(html: str) -> str:
+    if 'id="plan-panel"' in html or 'id="models-tab"' not in html:
+        return html
+    plan_tab = '      <button type="button" class="tab" id="plan-tab" aria-selected="false">Plan / Run</button>\n'
+    panel = """
+      <section id="plan-panel" class="panel plan-panel" hidden>
+        <form id="plan-form" class="plan-form" novalidate>
+          <header class="plan-header">
+            <div>
+              <h1>Plan / Run</h1>
+              <p>Build an explicit Ringer manifest, choose exact Codex model lanes, validate it, then launch through the local CLI.</p>
+            </div>
+            <div class="plan-metrics mono"><span id="plan-task-count">1</span> tasks <span id="plan-premium-count">0</span> premium</div>
+          </header>
+          <section class="plan-grid">
+            <label>Run name<input id="plan-run-name" required></label>
+            <label>Work directory<input id="plan-workdir" required></label>
+            <label>Repository<input id="plan-repo" placeholder="/absolute/path/to/repo"></label>
+            <label>Max parallel<input id="plan-max-parallel" type="number" min="1" max="32" value="2" required></label>
+            <label class="plan-check"><input id="plan-worktrees" type="checkbox"> Isolated worktrees</label>
+          </section>
+          <section>
+            <div class="plan-section-head">
+              <h2>Worker plan</h2>
+              <button id="plan-add-task" type="button">Add task</button>
+            </div>
+            <div id="plan-tasks" class="plan-tasks"></div>
+          </section>
+          <section id="premium-approval" class="premium-approval" hidden>
+            <h2>Premium gate</h2>
+            <p>GPT-5.6 Terra, Sol, and Luna require explicit approval and a reason before launch.</p>
+            <label class="plan-check"><input id="plan-premium-approved" type="checkbox"> I approve premium quota for the named tasks</label>
+            <label>Premium reason<input id="plan-premium-reason" placeholder="Why these tasks need GPT-5.6"></label>
+          </section>
+          <section class="plan-review">
+            <div id="plan-status" class="plan-status" role="status" aria-live="polite">Loading routing policy...</div>
+            <div class="plan-actions">
+              <button id="plan-validate" type="button">Validate plan</button>
+              <button id="plan-run" type="button">Start run</button>
+            </div>
+            <details open><summary>Manifest preview</summary><pre id="plan-manifest-preview" class="mono"></pre></details>
+          </section>
+        </form>
+      </section>
+"""
+    style = """
+    .plan-panel { padding: 0 clamp(12px, 2vw, 22px) clamp(20px, 3vw, 30px); }
+    .plan-form { display: grid; gap: 22px; max-width: 1200px; padding-top: 18px; }
+    .plan-header, .plan-section-head, .plan-actions { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+    .plan-header h1, .plan-section-head h2, .premium-approval h2 { margin: 0; }
+    .plan-header p, .premium-approval p { margin: 6px 0 0; color: var(--muted); max-width: 760px; }
+    .plan-metrics, .plan-status, .premium-approval, .plan-task { border: 1px solid var(--hairline); border-radius: 8px; padding: 12px; background: var(--surface); }
+    .plan-grid, .task-route-grid, .task-proof-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .plan-form label, .plan-task label { display: grid; gap: 6px; color: var(--muted); font-size: 12px; font-weight: 700; }
+    .plan-form input, .plan-form select, .plan-form textarea { width: 100%; min-height: 38px; border: 1px solid var(--hairline); border-radius: 8px; padding: 8px 10px; background: var(--ground); color: var(--ink); font: inherit; font-size: 13px; }
+    .plan-form textarea { min-height: 110px; resize: vertical; }
+    .plan-check { display: flex !important; grid-template-columns: none !important; align-items: center; flex-direction: row; gap: 8px; color: var(--ink) !important; }
+    .plan-check input { width: auto; min-height: auto; }
+    .plan-tasks { display: grid; gap: 12px; }
+    .task-spec { grid-column: 1 / -1; }
+    .plan-status.ready { border-color: var(--pass); }
+    .plan-status.error { border-color: var(--fail); color: var(--fail); }
+    .plan-status.working { border-color: var(--accent); }
+    .plan-review pre { max-height: 320px; overflow: auto; white-space: pre-wrap; }
+    @media (max-width: 760px) { .plan-grid, .task-route-grid, .task-proof-grid { grid-template-columns: 1fr; } .plan-header, .plan-section-head, .plan-actions { align-items: stretch; flex-direction: column; } }
+"""
+    script = r"""
+    function installPlanView() {
+      const VIEW_KEY = "ringside-view";
+      const runsPanel = document.getElementById("artifacts-panel");
+      const modelsPanel = document.getElementById("models-panel");
+      const planPanel = document.getElementById("plan-panel");
+      const runsTab = document.getElementById("runs-tab");
+      const modelsTab = document.getElementById("models-tab");
+      const planTab = document.getElementById("plan-tab");
+      const tasksRoot = document.getElementById("plan-tasks");
+      if (!runsPanel || !modelsPanel || !planPanel || !runsTab || !modelsTab || !planTab || !tasksRoot) return;
+      const state = {policy: null, tasks: []};
+      let nextTaskId = 1;
+      const el = id => document.getElementById(id);
+      const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
+      const slug = value => String(value || "task").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "task";
+      const longDefaultSpec = "Implement the requested scoped change. Preserve unrelated user changes, keep edits bounded to the stated ownership paths, and leave a concise summary of the verification performed.";
+      const defaultCheck = "test -s report.md || { echo 'FAIL: report.md is missing or empty'; exit 1; }";
+
+      function setStatus(message, kind = "") {
+        const status = el("plan-status");
+        status.className = `plan-status${kind ? ` ${kind}` : ""}`;
+        status.textContent = message;
+      }
+      function lanes() {
+        const policy = state.policy || {};
+        return Array.isArray(policy.lanes) && policy.lanes.length ? policy.lanes : [
+          {id:"codex-gpt-5.5", label:"Standard Codex GPT-5.5", engine:"codex", model:"gpt-5.5", premium:false},
+          {id:"gpt-5.6-terra", label:"GPT-5.6 Terra", engine:"codex", model:"gpt-5.6-terra", premium:true},
+          {id:"gpt-5.6-sol", label:"GPT-5.6 Sol", engine:"codex", model:"gpt-5.6-sol", premium:true},
+          {id:"gpt-5.6-luna", label:"GPT-5.6 Luna", engine:"codex", model:"gpt-5.6-luna", premium:true},
+        ];
+      }
+      function addTask(seed = {}) {
+        const lane = lanes()[0];
+        state.tasks.push({
+          id: `task-${nextTaskId++}`,
+          key: seed.key || `task-${state.tasks.length + 1}`,
+          task_type: seed.task_type || "code-feature",
+          lane: seed.lane || lane.id,
+          reasoning_effort: seed.reasoning_effort || "medium",
+          spec: seed.spec || longDefaultSpec,
+          check: seed.check || defaultCheck,
+          expect_files: seed.expect_files || "report.md",
+          verified: seed.verified || "report.md exists and the task-specific check passed.",
+        });
+        renderTasks();
+      }
+      function selectedLane(task) {
+        return lanes().find(item => item.id === task.lane) || lanes()[0];
+      }
+      function renderTasks() {
+        tasksRoot.innerHTML = state.tasks.map((task, index) => `
+          <article class="plan-task" data-id="${escapeHtml(task.id)}">
+            <div class="task-route-grid">
+              <label>Task key<input data-field="key" value="${escapeHtml(task.key)}"></label>
+              <label>Lane<select data-field="lane">${lanes().map(lane => `<option value="${escapeHtml(lane.id)}"${lane.id === task.lane ? " selected" : ""}>${escapeHtml(lane.label)} - ${escapeHtml(lane.model)}</option>`).join("")}</select></label>
+              <label>Reasoning effort<select data-field="reasoning_effort">${["low","medium","high"].map(effort => `<option value="${effort}"${task.reasoning_effort === effort ? " selected" : ""}>${effort}</option>`).join("")}</select></label>
+              <label>Task type<input data-field="task_type" value="${escapeHtml(task.task_type)}"></label>
+              <label class="task-spec">Spec<textarea data-field="spec">${escapeHtml(task.spec)}</textarea></label>
+              <label>Check<textarea data-field="check">${escapeHtml(task.check)}</textarea></label>
+              <label>Expected files<input data-field="expect_files" value="${escapeHtml(task.expect_files)}"></label>
+              <label>Verified sentence<input data-field="verified" value="${escapeHtml(task.verified)}"></label>
+            </div>
+            <button type="button" data-remove="${escapeHtml(task.id)}"${state.tasks.length === 1 ? " disabled" : ""}>Remove task ${index + 1}</button>
+          </article>`).join("");
+        updatePreview();
+      }
+      function taskManifest(task) {
+        const lane = selectedLane(task);
+        const engineArgs = task.reasoning_effort ? [`-c`, `model_reasoning_effort=${task.reasoning_effort}`] : [];
+        return {
+          key: slug(task.key),
+          spec: task.spec,
+          check: task.check,
+          expect_files: String(task.expect_files || "").split(",").map(item => item.trim()).filter(Boolean),
+          engine: lane.engine,
+          model: lane.model,
+          task_type: task.task_type,
+          engine_args: engineArgs,
+          verified: task.verified,
+        };
+      }
+      function buildRequest() {
+        const repo = el("plan-repo").value.trim();
+        const manifest = {
+          run_name: el("plan-run-name").value.trim(),
+          workdir: el("plan-workdir").value.trim(),
+          max_parallel: Number(el("plan-max-parallel").value || 1),
+          worktrees: el("plan-worktrees").checked,
+          tasks: state.tasks.map(taskManifest),
+        };
+        if (repo) manifest.repo = repo;
+        return {
+          manifest,
+          premium_approved: el("plan-premium-approved").checked,
+          premium_reason: el("plan-premium-reason").value.trim(),
+        };
+      }
+      function updatePreview() {
+        const request = buildRequest();
+        const premiumCount = request.manifest.tasks.filter(task => lanes().some(lane => lane.model === task.model && lane.premium)).length;
+        el("plan-task-count").textContent = String(request.manifest.tasks.length);
+        el("plan-premium-count").textContent = String(premiumCount);
+        el("premium-approval").hidden = premiumCount === 0;
+        el("plan-manifest-preview").textContent = JSON.stringify(request.manifest, null, 2);
+      }
+      async function postPlan(path) {
+        const response = await fetch(path, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(buildRequest())});
+        const payload = await response.json();
+        if (!response.ok || payload.ok === false) throw new Error(payload.error || `HTTP ${response.status}`);
+        return payload;
+      }
+      function selectPlan(persist = true) {
+        runsPanel.hidden = true;
+        modelsPanel.hidden = true;
+        planPanel.hidden = false;
+        runsTab.setAttribute("aria-selected", "false");
+        modelsTab.setAttribute("aria-selected", "false");
+        planTab.setAttribute("aria-selected", "true");
+        if (persist) localStorage.setItem(VIEW_KEY, "plan");
+      }
+      function leavePlan() {
+        planPanel.hidden = true;
+        planTab.setAttribute("aria-selected", "false");
+      }
+      tasksRoot.addEventListener("input", event => {
+        const article = event.target.closest(".plan-task");
+        if (!article) return;
+        const task = state.tasks.find(item => item.id === article.dataset.id);
+        if (!task) return;
+        task[event.target.dataset.field] = event.target.value;
+        updatePreview();
+      });
+      tasksRoot.addEventListener("click", event => {
+        const id = event.target.dataset.remove;
+        if (!id || state.tasks.length === 1) return;
+        state.tasks = state.tasks.filter(task => task.id !== id);
+        renderTasks();
+      });
+      document.getElementById("plan-add-task").addEventListener("click", () => addTask());
+      document.getElementById("plan-validate").addEventListener("click", async () => {
+        updatePreview();
+        setStatus("Validating plan...", "working");
+        try {
+          const payload = await postPlan("/api/plan/validate");
+          setStatus(payload.ready ? "Plan is launch-ready." : `Plan validates with ${payload.findings.length} lint finding(s).`, payload.ready ? "ready" : "error");
+        } catch (error) { setStatus(error.message, "error"); }
+      });
+      document.getElementById("plan-run").addEventListener("click", async () => {
+        updatePreview();
+        setStatus("Running final preflight and starting workers...", "working");
+        try {
+          const payload = await postPlan("/api/plan/run");
+          setStatus(`Started ${payload.run_name}. Saved plan: ${payload.manifest_path}`, "ready");
+        } catch (error) { setStatus(error.message, "error"); }
+      });
+      document.querySelectorAll("#plan-form input, #plan-form textarea, #plan-form select").forEach(node => node.addEventListener("input", updatePreview));
+      planTab.addEventListener("click", () => selectPlan());
+      runsTab.addEventListener("click", leavePlan);
+      modelsTab.addEventListener("click", leavePlan);
+      fetch("/api/plan", {cache:"no-store"}).then(response => response.json()).then(policy => {
+        state.policy = policy;
+        const defaults = policy.defaults || {};
+        el("plan-run-name").value = defaults.run_name || "ringer-run";
+        el("plan-workdir").value = defaults.workdir || "";
+        el("plan-max-parallel").value = defaults.max_parallel || 2;
+        if (!state.tasks.length) addTask();
+        setStatus("Routing policy loaded.", "ready");
+        if (localStorage.getItem(VIEW_KEY) === "plan") selectPlan(false);
+      }).catch(error => {
+        setStatus(error.message || "routing policy unavailable", "error");
+        if (!state.tasks.length) addTask();
+      });
+    }
+
+"""
+    html = html.replace('      <button type="button" class="tab" id="models-tab" aria-selected="false">Models</button>\n', plan_tab + '      <button type="button" class="tab" id="models-tab" aria-selected="false">Models</button>\n', 1)
+    html = html.replace("    main {\n", style + "    main {\n", 1)
+    html = html.replace("    </main>\n", panel + "    </main>\n", 1)
+    html = html.replace("    installModelsView();\n    tickClock();\n", script + "    installModelsView();\n    installPlanView();\n    tickClock();\n", 1)
+    return html
+
+
 def read_ringside_html() -> str:
     try:
-        return inject_models_tab_into_ringside_html(RINGSIDE_HTML_PATH.read_text(encoding="utf-8"))
+        return inject_plan_tab_into_ringside_html(
+            inject_models_tab_into_ringside_html(RINGSIDE_HTML_PATH.read_text(encoding="utf-8"))
+        )
     except OSError:
         return """<!doctype html>
 <html lang="en">
@@ -4696,11 +5130,16 @@ def send_response_body(
     handler.wfile.write(body)
 
 
-def send_json_response(handler: BaseHTTPRequestHandler, data: dict[str, Any]) -> None:
+def send_json_response(
+    handler: BaseHTTPRequestHandler,
+    data: dict[str, Any],
+    *,
+    status: HTTPStatus = HTTPStatus.OK,
+) -> None:
     body = json.dumps(data, sort_keys=True).encode("utf-8")
     send_response_body(
         handler,
-        HTTPStatus.OK,
+        status,
         body,
         content_type="application/json; charset=utf-8",
         no_store=True,
@@ -4837,10 +5276,12 @@ class PersistentHudServer:
         preferred_port: int = DEFAULT_HUD_PORT,
         *,
         open_viewer: bool = True,
+        config: AppConfig | None = None,
     ) -> None:
         self.state_dir = state_dir
         self.preferred_port = preferred_port
         self.open_viewer = open_viewer
+        self.config = config
         self.httpd: ThreadingHTTPServer | None = None
         self.thread: threading.Thread | None = None
         self.port: int | None = None
@@ -4894,6 +5335,19 @@ class PersistentHudServer:
                             "rollup": [],
                             "error": str(exc) or exc.__class__.__name__,
                         }
+                    send_json_response(self, payload)
+                    return
+                if path == "/api/plan":
+                    try:
+                        config = server_ref.config or AppConfig.load()
+                        payload = build_hud_plan_payload(config)
+                    except Exception as exc:
+                        send_json_response(
+                            self,
+                            {"ok": False, "error": str(exc) or exc.__class__.__name__},
+                            status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                        )
+                        return
                     send_json_response(self, payload)
                     return
                 if path.startswith("/api/open-folder"):
@@ -4957,6 +5411,90 @@ class PersistentHudServer:
                     )
                     return
                 self.send_error(HTTPStatus.NOT_FOUND)
+
+            def do_POST(self) -> None:  # noqa: N802
+                path = urllib.parse.urlparse(self.path).path
+                if path not in {"/api/plan/validate", "/api/plan/run"}:
+                    self.send_error(HTTPStatus.NOT_FOUND)
+                    return
+                content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+                if content_type != "application/json":
+                    send_json_response(
+                        self,
+                        {"ok": False, "error": "Content-Type must be application/json"},
+                        status=HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+                    )
+                    return
+                try:
+                    content_length = int(self.headers.get("Content-Length", "0"))
+                except ValueError:
+                    content_length = -1
+                if content_length <= 0:
+                    send_json_response(
+                        self,
+                        {"ok": False, "error": "request body is empty"},
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
+                    return
+                if content_length > HUD_PLAN_BODY_LIMIT_BYTES:
+                    send_json_response(
+                        self,
+                        {"ok": False, "error": "request body is too large"},
+                        status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                    )
+                    return
+                try:
+                    payload = json.loads(self.rfile.read(content_length).decode("utf-8"))
+                    config = server_ref.config or AppConfig.load()
+                    manifest, normalized, findings, routing = validate_hud_plan_payload(
+                        payload,
+                        config,
+                        require_premium_approval=path == "/api/plan/run",
+                    )
+                    if path == "/api/plan/validate":
+                        send_json_response(
+                            self,
+                            {
+                                "ok": True,
+                                "ready": not findings and (not routing["premium_tasks"] or routing["premium_approved"]),
+                                "findings": findings,
+                                "routing": routing,
+                                "manifest": normalized,
+                            },
+                        )
+                        return
+                    preflight_engine_bins(manifest, config)
+                    manifest_path = save_hud_plan(state_dir, normalized, manifest.run_name)
+                    process = launch_hud_plan(config, manifest_path)
+                    send_json_response(
+                        self,
+                        {
+                            "ok": True,
+                            "run_name": manifest.run_name,
+                            "manifest_path": str(manifest_path),
+                            "pid": process.pid,
+                            "routing": routing,
+                        },
+                        status=HTTPStatus.ACCEPTED,
+                    )
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    send_json_response(
+                        self,
+                        {"ok": False, "error": f"invalid JSON: {exc}"},
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
+                except ValueError as exc:
+                    send_json_response(
+                        self,
+                        {"ok": False, "error": str(exc)},
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
+                except Exception as exc:
+                    send_json_response(
+                        self,
+                        {"ok": False, "error": str(exc) or exc.__class__.__name__},
+                        status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                    )
 
             def log_message(self, _format: str, *_args: Any) -> None:
                 return
@@ -9860,6 +10398,7 @@ def run_persistent_hud(config: AppConfig, *, port: int | None, open_viewer: bool
         config.state_dir,
         preferred_port=chosen_port,
         open_viewer=open_viewer,
+        config=config,
     )
     server.model_log_path = config.eval.jsonl_path
     server.default_model_log_path = config.eval.jsonl_path
