@@ -241,12 +241,10 @@ class HudPlanTests(unittest.TestCase):
 
         conn = http.client.HTTPConnection(base.removeprefix("http://"), timeout=5)
         self.addCleanup(conn.close)
-        conn.request(
-            "POST",
-            "/api/plan/validate",
-            body=b"x" * (HUD_PLAN_BODY_LIMIT_BYTES + 1),
-            headers={"Content-Type": "application/json"},
-        )
+        conn.putrequest("POST", "/api/plan/validate")
+        conn.putheader("Content-Type", "application/json")
+        conn.putheader("Content-Length", str(HUD_PLAN_BODY_LIMIT_BYTES + 1))
+        conn.endheaders()
         response = conn.getresponse()
         self.assertEqual(413, response.status)
         self.assertIn("request body is too large", response.read().decode("utf-8"))
