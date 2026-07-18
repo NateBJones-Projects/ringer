@@ -8,7 +8,7 @@
 
 Frontier models are finally good enough to trust with real implementation — but their tokens are priced like senior-engineer hours, and most of a build is not senior-engineer work. It's scaffolding, migrations, test suites, batch transforms. Mechanical labor.
 
-So split the roles. Your best model writes the specs and reviews the results. A swarm of cheap workers — Codex, Grok, anything with a CLI — does the implementation in parallel. Your premium budget stops scaling with lines of code written and starts scaling with decisions made.
+So split the roles. Your best model writes the specs and reviews the results. A swarm of cheaper workers — Claude, Codex, Grok, anything with a CLI — does the implementation in parallel. Your premium budget stops scaling with lines of code written and starts scaling with decisions made.
 
 One problem: parallel agents lie. "Done" doesn't mean working. Ringer doesn't take the worker's word for anything — it **executes your check command** against the artifact. Pass or fail is decided by running the code, not by reading the agent's summary. Failures retry once with the failure context injected, and every attempt is logged so your setup gets measurably better over time.
 
@@ -17,7 +17,7 @@ And because a swarm you can't see is a swarm you don't trust: **Ringside**, a lo
 ## How it works
 
 ```
-manifest.json ──▶ ringer.py ──▶ N parallel workers (codex exec, each in its own dir)
+manifest.json ──▶ ringer.py ──▶ N parallel workers (Claude/Codex/etc., one dir each)
                       │                │
                       │                ▼
                       │         executed checks ── fail ──▶ retry once w/ failure context
@@ -47,10 +47,10 @@ git clone https://github.com/NateBJones-Projects/ringer && cd ringer
 mkdir -p ~/.config/ringer && cp config.sample.toml ~/.config/ringer/config.toml   # optional — sane defaults without it
 ```
 
-3. Teach your agent to route work through Ringer:
+3. Teach Codex and Claude Code to route work through Ringer:
 
 ```bash
-# optional but recommended: teach your agent to route work through ringer
+# optional but recommended: installs both host skills; Claude also gets nudge hooks
 ./ringer.py install-agent
 ```
 
@@ -61,6 +61,21 @@ mkdir -p ~/.config/ringer && cp config.sample.toml ~/.config/ringer/config.toml 
 ```
 
 The demo spawns three Codex workers in parallel, verifies each artifact by executing it, and prints a verdict table — and Ringside, the live dashboard, opens in your browser on its own. If all three say PASS, that's the whole setup.
+
+### Sol Advanced orchestrator + Claude workers
+
+Ringer now ships the inverse of its original Claude-orchestrator/Codex-worker setup as a first-class path: GPT-5.6 Sol can own planning and acceptance in Codex while Claude Code and any other configured engines do bounded worker tasks.
+
+```bash
+npm install -g @anthropic-ai/claude-code
+claude auth login
+./ringer.py install-agent --target codex
+codex -m gpt-5.6-sol -c model_reasoning_effort=high
+```
+
+In the Codex app, choose GPT-5.6 Sol and High reasoning under Advanced, then invoke `$ringer`. The built-in `claude` engine is immediately selectable with `"engine": "claude"`; its default lane pins `claude-sonnet-5`, uses Claude's native sandbox in fail-closed mode, and accepts per-task effort through `"engine_args": ["--effort", "medium"]`.
+
+The architecture, setup, mixed-worker manifest, security boundaries, and acceptance rollout are in [Sol Advanced orchestrator, heterogeneous workers](docs/SOL-ORCHESTRATOR.md).
 
 Run your own batch:
 
@@ -144,7 +159,7 @@ Run one command:
 ./ringer.py install-agent
 ```
 
-It installs the ringer skill — the orchestrator playbook — user-level for Claude Code, and registers two gentle hooks: a Bash hook that notices model-calling or harness commands running outside a live Ringer run, and an edit-loop hook that notices batch editing without a run. Each hook nudges ONCE per session, pointing the agent at the skill.
+It installs the Ringer orchestrator playbook user-level for both Codex (`~/.agents/skills/ringer`) and Claude Code (`~/.claude/skills/ringer`). Claude also receives two gentle hooks: a Bash hook that notices model-calling or harness commands running outside a live Ringer run, and an edit-loop hook that notices batch editing without a run. Each hook nudges ONCE per session, pointing the agent at the skill. Use `--target codex` or `--target claude` when you want only one host, and `--project` for repo-local installation.
 
 The hooks never block anything. A user who says "just do it inline" is obeyed; uninstall with `./ringer.py uninstall-agent`.
 
@@ -154,7 +169,7 @@ For CI and evals, `config.sample.toml` includes `[engines.mock]` so the enforcem
 
 ![Identical workers, each under its own light](docs/engines.png)
 
-Ringer ships with three worker lanes: **Codex CLI** is the built-in default, and `config.sample.toml` carries verified engine blocks for **Grok Build CLI** (works as-is once you `grok login`) and **OpenCode + OpenRouter** (one edit: point `bin` at the sandbox wrapper in your clone). Anything else with a headless CLI is a config block away:
+Ringer ships with four worker lanes: **Codex CLI** is the built-in default, **Claude Code** is also built in, and `config.sample.toml` carries verified engine blocks for **Grok Build CLI** (works as-is once you `grok login`) and **OpenCode + OpenRouter** (one edit: point `bin` at the sandbox wrapper in your clone). Anything else with a headless CLI is a config block away:
 
 ```toml
 [engines.mymodel]
@@ -163,6 +178,19 @@ args_template = ["run", "{spec}", "--dir", "{taskdir}"]
 ```
 
 Per-task `"engine": "mymodel"` routes work to it — the invariants (stdin closed, process-group kill, executed verification, raw logs) apply to every engine identically.
+
+### Claude Code worker lane
+
+Install and authenticate Claude Code once:
+
+```bash
+npm install -g @anthropic-ai/claude-code
+claude auth login
+```
+
+Then route any task with `"engine": "claude"`. The built-in argv puts the spec immediately after `-p`, selects `claude-sonnet-5` explicitly, streams verbose JSON into the raw worker log, and disables session persistence. Sandboxed tasks enable Claude's native sandbox with automatic approval only inside that boundary, remove its unsandboxed-command escape hatch, and fail if the platform sandbox is unavailable. On Linux/WSL2, install `bubblewrap` and `socat`; Claude's sandbox is not available on WSL1.
+
+Use per-task `engine_args` for worker effort, for example `["--effort", "low"]` on mechanical work or `["--effort", "high"]` on a demanding bounded task. `full_access: true` switches Claude to bypass mode only when Ringer's separate `allow_full_access` gate is enabled.
 
 ### The universal harness: OpenCode + OpenRouter
 

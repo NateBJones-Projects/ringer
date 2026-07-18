@@ -48,7 +48,7 @@ description: >-
    `--no-dashboard` except in automated tests or when the user explicitly
    asks.
 
-Ringer runs manifest tasks in parallel across cheap CLI workers (Codex,
+Ringer runs manifest tasks in parallel across CLI workers (Claude Code, Codex,
 OpenCode/GLM, others via config) and verifies every task by **executing a
 check command** — exit 0 is the only PASS. Failed tasks are retried once
 with the check's actual failure output injected into the retry prompt. You —
@@ -229,6 +229,9 @@ per task via the manifest `engine` field. Defaults are deliberate:
 
 - **codex** (default): strongest general worker. Use per-task `engine_args`
   to set reasoning effort — spend it on hard tasks, not boilerplate.
+- **claude**: built-in Claude Code worker lane, pinned to `claude-sonnet-5`
+  with a fail-closed native task-directory sandbox. Use per-task
+  `engine_args` such as `["--effort", "low|medium|high"]`.
 - **opencode**: the universal lane — any OpenRouter model via the `model`
   field (engine `model_default` is GLM-5.2, the cheap-intelligence pick).
   Validate a model new to you with a trivial one-task manifest before

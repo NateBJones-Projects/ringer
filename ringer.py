@@ -50,6 +50,7 @@ ENV_VAR_PREFIX = "RINGER"
 CONFIG_DIR_NAME = TOOL_NAME
 CONFIG_FILE_NAME = "config.toml"
 DEFAULT_ENGINE_NAME = "codex"
+CLAUDE_ENGINE_NAME = "claude"
 DEFAULT_TIMEOUT_S = 900
 CHECK_TIMEOUT_S = 60
 DEFAULT_DASHBOARD_PORT_BASE = 8787
@@ -891,6 +892,56 @@ def built_in_codex_engine() -> EngineConfig:
     )
 
 
+def built_in_claude_engine() -> EngineConfig:
+    """Claude Code worker with a fail-closed, task-directory sandbox."""
+    resolved = shutil.which(CLAUDE_ENGINE_NAME) or CLAUDE_ENGINE_NAME
+    sandbox_settings = json.dumps(
+        {
+            "sandbox": {
+                "enabled": True,
+                "failIfUnavailable": True,
+                "autoAllowBashIfSandboxed": True,
+                "allowUnsandboxedCommands": False,
+            }
+        },
+        separators=(",", ":"),
+    )
+    full_access_settings = json.dumps(
+        {"sandbox": {"enabled": False}},
+        separators=(",", ":"),
+    )
+    return EngineConfig(
+        name=CLAUDE_ENGINE_NAME,
+        bin=resolved,
+        args_template=(
+            "-p",
+            "{spec}",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--no-session-persistence",
+            "--model",
+            "{model}",
+            "{access_args}",
+            "{engine_args}",
+        ),
+        full_access_args=(
+            "--dangerously-skip-permissions",
+            "--settings",
+            full_access_settings,
+        ),
+        sandbox_args=(
+            "--permission-mode",
+            "acceptEdits",
+            "--settings",
+            sandbox_settings,
+        ),
+        token_regex=None,
+        model_report_regex=r'"model"\s*:\s*"([^"]+)"',
+        model_default="claude-sonnet-5",
+    )
+
+
 def load_eval_config(raw: Any, state_dir: Path) -> EvalConfig:
     if raw is None:
         raw = {}
@@ -927,7 +978,10 @@ def load_hud_port(raw: Any) -> int:
 
 
 def load_engines(raw: Any) -> dict[str, EngineConfig]:
-    engines: dict[str, EngineConfig] = {DEFAULT_ENGINE_NAME: built_in_codex_engine()}
+    engines: dict[str, EngineConfig] = {
+        DEFAULT_ENGINE_NAME: built_in_codex_engine(),
+        CLAUDE_ENGINE_NAME: built_in_claude_engine(),
+    }
     if raw is None:
         return engines
     if not isinstance(raw, dict):
@@ -8804,7 +8858,15 @@ def effective_model_from_command(command: list[str]) -> str:
 
 def effective_reasoning_effort_from_command(command: list[str]) -> str | None:
     """Return an explicitly configured model reasoning effort from worker argv."""
-    for item in command:
+    for index, item in enumerate(command):
+        if item == "--effort":
+            if index + 1 < len(command):
+                effort = command[index + 1].strip()
+                return effort or None
+            return None
+        if item.startswith("--effort="):
+            effort = item.removeprefix("--effort=").strip()
+            return effort or None
         match = re.search(
             r"(?:^|[=,\s])model_reasoning_effort\s*=\s*[\"']?([^\"',\s]+)",
             item,
@@ -8912,6 +8974,7 @@ def print_steering_notes(manifest: Manifest, config: AppConfig) -> None:
 
 ENGINE_INSTALL_HINTS = {
     "codex": "install it with `npm install -g @openai/codex` (or `brew install --cask codex`), then run `codex login`",
+    "claude": "install it with `npm install -g @anthropic-ai/claude-code`, then run `claude auth login`",
     "opencode": "install it with `curl -fsSL https://opencode.ai/install | bash`, then run `opencode auth login`",
 }
 
@@ -9341,7 +9404,7 @@ def dry_run(
     dashboard_enabled: bool,
     force_browser: bool,
 ) -> None:
-    print("DRY RUN: no codex workers will be spawned.")
+    print("DRY RUN: no workers will be spawned.")
     print(f"Run: {manifest.run_name}")
     print(f"Identity: {identity}")
     print(f"Config: {config.path if config.path else '(safe defaults)'}")
@@ -9473,8 +9536,24 @@ def claude_root(project: bool) -> Path:
     return (Path.cwd() if project else Path.home()) / ".claude"
 
 
+def codex_skills_root(project: bool) -> Path:
+    return (Path.cwd() if project else Path.home()) / ".agents" / "skills"
+
+
 def ringer_skill_source() -> Path:
     return repo_root() / ".claude" / "skills" / "ringer" / "SKILL.md"
+
+
+def codex_ringer_skill_source() -> Path:
+    return repo_root() / ".agents" / "skills" / "ringer" / "SKILL.md"
+
+
+def copy_skill_file(source: Path, target: Path) -> None:
+    if not source.exists():
+        raise ValueError(f"ringer skill source not found: {source}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if source.resolve() != target.resolve():
+        shutil.copy2(source, target)
 
 
 def ringer_hook_command(action: str) -> str:
@@ -9587,14 +9666,11 @@ def remove_ringer_hooks(settings: dict[str, Any]) -> int:
     return removed
 
 
-def install_agent(project: bool = False) -> int:
+def install_claude_agent(project: bool = False) -> None:
     root = claude_root(project)
     skill_source = ringer_skill_source()
     skill_target = root / "skills" / "ringer" / "SKILL.md"
-    if not skill_source.exists():
-        raise ValueError(f"ringer skill source not found: {skill_source}")
-    skill_target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(skill_source, skill_target)
+    copy_skill_file(skill_source, skill_target)
 
     settings_path = root / "settings.json"
     settings = load_settings(settings_path)
@@ -9614,17 +9690,35 @@ def install_agent(project: bool = False) -> int:
     if changed or not settings_path.exists():
         write_settings(settings_path, settings)
 
-    scope = "project" if project else "user"
-    print(f"Installed ringer agent for {scope} scope.")
-    print(f"Skill: {skill_target}")
+    print(f"Claude skill: {skill_target}")
     if changed:
-        print(f"Hooks: added PreToolUse Bash and PostToolUse Edit|Write in {settings_path}")
+        print(f"Claude hooks: added PreToolUse Bash and PostToolUse Edit|Write in {settings_path}")
     else:
-        print(f"Hooks: already present in {settings_path}")
+        print(f"Claude hooks: already present in {settings_path}")
+
+
+def install_codex_agent(project: bool = False) -> None:
+    skill_source = codex_ringer_skill_source()
+    skill_target = codex_skills_root(project) / "ringer" / "SKILL.md"
+    copy_skill_file(skill_source, skill_target)
+    print(f"Codex skill: {skill_target}")
+    print(
+        "Sol Advanced: select GPT-5.6 Sol with High reasoning in the app, or run "
+        "`codex -m gpt-5.6-sol -c model_reasoning_effort=high`."
+    )
+
+
+def install_agent(project: bool = False, target: str = "all") -> int:
+    scope = "project" if project else "user"
+    print(f"Installing ringer agent support for {target} ({scope} scope).")
+    if target in {"all", "claude"}:
+        install_claude_agent(project)
+    if target in {"all", "codex"}:
+        install_codex_agent(project)
     return 0
 
 
-def uninstall_agent(project: bool = False) -> int:
+def uninstall_claude_agent(project: bool = False) -> tuple[int, bool]:
     root = claude_root(project)
     settings_path = root / "settings.json"
     removed_hooks = 0
@@ -9636,14 +9730,39 @@ def uninstall_agent(project: bool = False) -> int:
 
     skill_dir = root / "skills" / "ringer"
     removed_skill = False
-    if skill_dir.exists():
+    source_dir = ringer_skill_source().parent
+    if skill_dir.exists() and skill_dir.resolve() != source_dir.resolve():
         shutil.rmtree(skill_dir)
         removed_skill = True
 
+    return removed_hooks, removed_skill
+
+
+def uninstall_codex_agent(project: bool = False) -> bool:
+    skill_dir = codex_skills_root(project) / "ringer"
+    source_dir = codex_ringer_skill_source().parent
+    if not skill_dir.exists() or skill_dir.resolve() == source_dir.resolve():
+        return False
+    shutil.rmtree(skill_dir)
+    return True
+
+
+def uninstall_agent(project: bool = False, target: str = "all") -> int:
+    removed_hooks = 0
+    removed_claude_skill = False
+    removed_codex_skill = False
+    if target in {"all", "claude"}:
+        removed_hooks, removed_claude_skill = uninstall_claude_agent(project)
+    if target in {"all", "codex"}:
+        removed_codex_skill = uninstall_codex_agent(project)
+
     scope = "project" if project else "user"
-    print(f"Uninstalled ringer agent for {scope} scope.")
-    print(f"Hooks removed: {removed_hooks}")
-    print(f"Skill removed: {'yes' if removed_skill else 'no'}")
+    print(f"Uninstalled ringer agent support for {target} ({scope} scope).")
+    if target in {"all", "claude"}:
+        print(f"Claude hooks removed: {removed_hooks}")
+        print(f"Claude skill removed: {'yes' if removed_claude_skill else 'no'}")
+    if target in {"all", "codex"}:
+        print(f"Codex skill removed: {'yes' if removed_codex_skill else 'no'}")
     return 0
 
 
@@ -9921,7 +10040,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="disable zero-LLM HTML status/report artifacts (see [artifact] in config.toml)",
     )
-    run_parser.add_argument("--dry-run", action="store_true", help="print the plan without spawning codex")
+    run_parser.add_argument("--dry-run", action="store_true", help="print the plan without spawning workers")
     run_parser.add_argument(
         "--baseline",
         action="store_true",
@@ -9995,13 +10114,39 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="disable zero-LLM HTML status/report artifacts (see [artifact] in config.toml)",
     )
-    demo_parser.add_argument("--dry-run", action="store_true", help="print the demo plan without spawning codex")
+    demo_parser.add_argument("--dry-run", action="store_true", help="print the demo plan without spawning workers")
 
-    install_parser = subparsers.add_parser("install-agent", help="install the ringer Claude Code skill and hooks")
-    install_parser.add_argument("--project", action="store_true", help="install into ./.claude instead of ~/.claude")
+    install_parser = subparsers.add_parser(
+        "install-agent",
+        help="install Ringer orchestration support for Codex, Claude Code, or both",
+    )
+    install_parser.add_argument(
+        "--target",
+        choices=("all", "codex", "claude"),
+        default="all",
+        help="agent host to configure (default: all)",
+    )
+    install_parser.add_argument(
+        "--project",
+        action="store_true",
+        help="install repo-local skills/settings instead of user-level files",
+    )
 
-    uninstall_parser = subparsers.add_parser("uninstall-agent", help="remove the ringer Claude Code skill and hooks")
-    uninstall_parser.add_argument("--project", action="store_true", help="remove from ./.claude instead of ~/.claude")
+    uninstall_parser = subparsers.add_parser(
+        "uninstall-agent",
+        help="remove Ringer orchestration support for Codex, Claude Code, or both",
+    )
+    uninstall_parser.add_argument(
+        "--target",
+        choices=("all", "codex", "claude"),
+        default="all",
+        help="agent host to remove (default: all)",
+    )
+    uninstall_parser.add_argument(
+        "--project",
+        action="store_true",
+        help="remove repo-local skills/settings instead of user-level files",
+    )
     return parser
 
 
@@ -10047,9 +10192,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Self-update skipped: {result.reason or 'not available'}.")
             return 0
         if args.command == "install-agent":
-            return install_agent(project=args.project)
+            return install_agent(project=args.project, target=args.target)
         if args.command == "uninstall-agent":
-            return uninstall_agent(project=args.project)
+            return uninstall_agent(project=args.project, target=args.target)
 
         if args.command == "lint":
             manifest = Manifest.from_path(args.manifest)
