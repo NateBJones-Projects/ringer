@@ -1559,6 +1559,7 @@ class StateWriter:
         self.summary: dict[str, int] | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._flush_lock = threading.Lock()
         self.artifact = artifact or ArtifactConfig(
             enabled=False,
             out_template=str(state_dir / "artifacts" / "{run_id}.html"),
@@ -1604,9 +1605,15 @@ class StateWriter:
     def flush(self) -> dict[str, Any]:
         state = self.snapshot()
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
-        os.replace(tmp, self.path)
+        # The writer thread and the main thread (stop()/finish()) share one
+        # tmp path; unserialized, the loser of a concurrent os.replace dies
+        # with FileNotFoundError. stop()'s join(timeout=2) can return with
+        # the writer still mid-flush, so the lock — not the join — is what
+        # makes the final flush safe.
+        with self._flush_lock:
+            tmp = self.path.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+            os.replace(tmp, self.path)
         if self.artifact.enabled:
             self._write_status_artifact_safe(state)
             self._write_index_safe()
@@ -1749,11 +1756,14 @@ class StateWriter:
             self._append_library_version_safe(state)
             # Re-flush the plain state JSON so report_ready/report_path are accurate for
             # anything (Ringside) polling the state file right after the run ends.
-            tmp = self.path.with_suffix(".json.tmp")
-            state = dict(state)
-            state["report_ready"] = True
-            tmp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
-            os.replace(tmp, self.path)
+            # Same lock as flush(): the writer thread may still be looping when
+            # finish() runs this from the main thread.
+            with self._flush_lock:
+                tmp = self.path.with_suffix(".json.tmp")
+                state = dict(state)
+                state["report_ready"] = True
+                tmp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+                os.replace(tmp, self.path)
         except Exception as exc:
             print(f"artifact render error (final report, non-fatal): {exc}", file=sys.stderr)
 
