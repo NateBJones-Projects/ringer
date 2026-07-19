@@ -147,6 +147,28 @@ class NudgeHookTests(unittest.TestCase):
         for file_path in files:
             self.assertSilent(self.run_hook("post-edit", self.post_edit_payload(file_path, "session-2")))
 
+    def test_pre_bash_stays_silent_on_deterministic_probe_script(self) -> None:
+        proc = self.run_hook("pre-bash", self.pre_bash_payload("python3 tools/dispatch-probe.py --live"))
+        self.assertSilent(proc)
+
+    def test_pre_bash_stays_silent_on_smoke_script(self) -> None:
+        proc = self.run_hook("pre-bash", self.pre_bash_payload("python3 kos/tools/smoke-test.py"))
+        self.assertSilent(proc)
+
+    def test_pre_bash_keyword_must_be_token_initial(self) -> None:
+        # "eval" inside "retrieval" must not match (ms-20260715-1221 false positive)
+        silent = self.run_hook("pre-bash", self.pre_bash_payload("python3 tools/retrieval-transport-probe.py"))
+        self.assertSilent(silent)
+        nudged = self.run_hook("pre-bash", self.pre_bash_payload("python3 run_eval_suite.py", "session-3"))
+        self.assertNudged(nudged, "PreToolUse")
+
+    def test_post_edit_exempts_lifecycle_metadata_yaml(self) -> None:
+        yaml_paths = [
+            f"/Users/x/Projects/meridian/kos/lifecycle/pattern-observations/PO-{i}.yaml" for i in range(9)
+        ]
+        for file_path in yaml_paths:
+            self.assertSilent(self.run_hook("post-edit", self.post_edit_payload(file_path, "session-4")))
+
     def test_malformed_stdin_exits_zero_silently(self) -> None:
         proc = self.run_hook("pre-bash", "{not json")
         self.assertSilent(proc)

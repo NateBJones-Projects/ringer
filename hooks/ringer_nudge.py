@@ -23,12 +23,21 @@ PROVIDER_RE = re.compile(
     r"generativelanguage\.googleapis|/v1/chat/completions|/v1/messages)",
     re.IGNORECASE,
 )
+# probe/smoke deliberately absent: those names are mostly deterministic infra
+# scripts (false-positive on meridian dispatch/retrieval probes, ms-20260715-1221);
+# a probe that really calls a model still trips PROVIDER_RE on the command line.
+# The (?<![a-z0-9]) lookbehind keeps keywords token-initial so "eval" cannot
+# match inside "retrieval" (same feedback note).
 HARNESS_RE = re.compile(
     r"\b(?:node|python3?|bun|deno)\s+\S*"
-    r"(?:simulat|probe|smoke|harness|persona|grader|eval)\S*"
+    r"(?<![a-z0-9])(?:simulat|harness|persona|grader|eval)\S*"
     r"\.(?:mjs|js|ts|py)\b",
     re.IGNORECASE,
 )
+
+# Pipeline-prescribed single-file metadata bumps (Meridian lifecycle YAMLs) are
+# deterministic bookkeeping, not swarm-shaped editing — exempt from the counter.
+METADATA_EXEMPT_RE = re.compile(r"/kos/lifecycle/.*\.ya?ml$", re.IGNORECASE)
 
 
 def ringer_home() -> Path:
@@ -181,14 +190,21 @@ def load_post_edit_state(path: Path) -> dict[str, Any]:
 def record_post_edit(payload: dict[str, Any], home: Path) -> tuple[int, int]:
     path = post_edit_state_path(home, payload.get("session_id"))
     state = load_post_edit_state(path)
-    count = int(state["count"]) + 1
-    files = set(str(item) for item in state["file_paths"])
 
     tool_input = payload.get("tool_input")
+    file_path = None
     if isinstance(tool_input, dict):
-        file_path = tool_input.get("file_path")
-        if isinstance(file_path, str) and file_path.strip():
-            files.add(file_path)
+        candidate = tool_input.get("file_path")
+        if isinstance(candidate, str) and candidate.strip():
+            file_path = candidate
+
+    if file_path and METADATA_EXEMPT_RE.search(file_path):
+        return int(state["count"]), len(set(state["file_paths"]))
+
+    count = int(state["count"]) + 1
+    files = set(str(item) for item in state["file_paths"])
+    if file_path:
+        files.add(file_path)
 
     next_state = {"count": count, "file_paths": sorted(files)}
     write_json_atomic(path, next_state)
