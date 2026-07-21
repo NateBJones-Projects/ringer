@@ -891,6 +891,39 @@ def built_in_codex_engine() -> EngineConfig:
     )
 
 
+def built_in_opencode_engine() -> EngineConfig:
+    wrapper_name = (
+        "opencode-sandboxed.sh"
+        if sys.platform == "darwin"
+        else "opencode-sandboxed-linux.sh"
+    )
+    wrapper = (Path(__file__).resolve().parent / "engines" / wrapper_name).resolve()
+    return EngineConfig(
+        name="opencode",
+        bin=str(wrapper),
+        args_template=(
+            "{taskdir}",
+            "{access_args}",
+            "run",
+            "--pure",
+            "--auto",
+            "--format",
+            "json",
+            "--model",
+            "{model}",
+            "{engine_args}",
+            "--dir",
+            "{taskdir}",
+            "{spec}",
+        ),
+        full_access_args=("--no-sandbox",),
+        sandbox_args=(),
+        token_regex=r'"tokens"\s*:\s*\{\s*"total"\s*:\s*([0-9]+)',
+        model_report_regex=None,
+        model_default="",
+    )
+
+
 def load_eval_config(raw: Any, state_dir: Path) -> EvalConfig:
     if raw is None:
         raw = {}
@@ -928,6 +961,8 @@ def load_hud_port(raw: Any) -> int:
 
 def load_engines(raw: Any) -> dict[str, EngineConfig]:
     engines: dict[str, EngineConfig] = {DEFAULT_ENGINE_NAME: built_in_codex_engine()}
+    if sys.platform == "darwin" or sys.platform.startswith("linux"):
+        engines["opencode"] = built_in_opencode_engine()
     if raw is None:
         return engines
     if not isinstance(raw, dict):
