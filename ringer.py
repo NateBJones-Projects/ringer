@@ -9469,8 +9469,20 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parent
 
 
+def agent_base(project: bool) -> Path:
+    return Path.cwd() if project else Path.home()
+
+
 def claude_root(project: bool) -> Path:
-    return (Path.cwd() if project else Path.home()) / ".claude"
+    return agent_base(project) / ".claude"
+
+
+def codex_skill_root(project: bool) -> Path:
+    return agent_base(project) / ".agents"
+
+
+def codex_config_root(project: bool) -> Path:
+    return agent_base(project) / ".codex"
 
 
 def ringer_skill_source() -> Path:
@@ -9479,7 +9491,13 @@ def ringer_skill_source() -> Path:
 
 def ringer_hook_command(action: str) -> str:
     hook_path = repo_root() / "hooks" / "ringer_nudge.py"
-    return f"python3 {shlex.quote(str(hook_path))} {action}"
+    return shlex.join(["python3", str(hook_path), action])
+
+
+def ringer_hook_command_windows(action: str) -> str:
+    hook_path = repo_root() / "hooks" / "ringer_nudge.py"
+    python_command = [sys.executable] if os.name == "nt" else ["py", "-3"]
+    return subprocess.list2cmdline([*python_command, str(hook_path), action])
 
 
 def backup_file(path: Path) -> Path | None:
@@ -9515,38 +9533,45 @@ def hook_command_contains(value: Any, needle: str = "ringer_nudge.py") -> bool:
     return isinstance(value, dict) and needle in str(value.get("command", ""))
 
 
-def event_has_ringer_hook(groups: Any) -> bool:
-    if not isinstance(groups, list):
-        return False
-    for group in groups:
-        if not isinstance(group, dict):
-            continue
-        handlers = group.get("hooks")
-        if isinstance(handlers, list) and any(hook_command_contains(handler) for handler in handlers):
-            return True
-    return False
-
-
-def merge_ringer_hook(settings: dict[str, Any], event: str, matcher: str, command: str) -> bool:
+def merge_ringer_hook(
+    settings: dict[str, Any],
+    event: str,
+    matcher: str,
+    command: str,
+    *,
+    command_windows: str | None = None,
+) -> bool:
     hooks = settings.setdefault("hooks", {})
     if not isinstance(hooks, dict):
         raise ValueError("settings hooks field must be a JSON object")
     groups = hooks.setdefault(event, [])
     if not isinstance(groups, list):
         raise ValueError(f"settings hooks.{event} field must be a JSON array")
-    if event_has_ringer_hook(groups):
-        return False
-    groups.append(
-        {
-            "matcher": matcher,
-            "hooks": [
-                {
-                    "type": "command",
-                    "command": command,
-                }
-            ],
-        }
-    )
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        handlers = group.get("hooks")
+        if not isinstance(handlers, list):
+            continue
+        ringer_handlers = [handler for handler in handlers if hook_command_contains(handler)]
+        if not ringer_handlers:
+            continue
+        desired = {"type": "command", "command": command}
+        if command_windows:
+            desired["commandWindows"] = command_windows
+        changed = group.get("matcher") != matcher or ringer_handlers != [desired]
+        if changed:
+            group["matcher"] = matcher
+            group["hooks"] = [
+                desired if hook_command_contains(handler) else handler
+                for handler in handlers
+            ]
+        return changed
+
+    handler = {"type": "command", "command": command}
+    if command_windows:
+        handler["commandWindows"] = command_windows
+    groups.append({"matcher": matcher, "hooks": [handler]})
     return True
 
 
@@ -9587,16 +9612,25 @@ def remove_ringer_hooks(settings: dict[str, Any]) -> int:
     return removed
 
 
-def install_agent(project: bool = False) -> int:
-    root = claude_root(project)
+def install_agent(project: bool = False, agent: str = "claude") -> int:
+    if agent == "claude":
+        skill_root = claude_root(project)
+        settings_path = skill_root / "settings.json"
+        post_matcher = "Edit|Write"
+    elif agent == "codex":
+        skill_root = codex_skill_root(project)
+        settings_path = codex_config_root(project) / "hooks.json"
+        post_matcher = "apply_patch"
+    else:
+        raise ValueError(f"unsupported agent: {agent}")
+
     skill_source = ringer_skill_source()
-    skill_target = root / "skills" / "ringer" / "SKILL.md"
+    skill_target = skill_root / "skills" / "ringer" / "SKILL.md"
     if not skill_source.exists():
         raise ValueError(f"ringer skill source not found: {skill_source}")
     skill_target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(skill_source, skill_target)
 
-    settings_path = root / "settings.json"
     settings = load_settings(settings_path)
     changed = False
     changed |= merge_ringer_hook(
@@ -9604,29 +9638,41 @@ def install_agent(project: bool = False) -> int:
         "PreToolUse",
         "Bash",
         ringer_hook_command("pre-bash"),
+        command_windows=(
+            ringer_hook_command_windows("pre-bash") if agent == "codex" else None
+        ),
     )
     changed |= merge_ringer_hook(
         settings,
         "PostToolUse",
-        "Edit|Write",
+        post_matcher,
         ringer_hook_command("post-edit"),
+        command_windows=(
+            ringer_hook_command_windows("post-edit") if agent == "codex" else None
+        ),
     )
     if changed or not settings_path.exists():
         write_settings(settings_path, settings)
 
     scope = "project" if project else "user"
-    print(f"Installed ringer agent for {scope} scope.")
+    print(f"Installed ringer agent for {agent} ({scope} scope).")
     print(f"Skill: {skill_target}")
     if changed:
-        print(f"Hooks: added PreToolUse Bash and PostToolUse Edit|Write in {settings_path}")
+        print(f"Hooks: added PreToolUse Bash and PostToolUse {post_matcher} in {settings_path}")
     else:
         print(f"Hooks: already present in {settings_path}")
     return 0
 
 
-def uninstall_agent(project: bool = False) -> int:
-    root = claude_root(project)
-    settings_path = root / "settings.json"
+def uninstall_agent(project: bool = False, agent: str = "claude") -> int:
+    if agent == "claude":
+        skill_root = claude_root(project)
+        settings_path = skill_root / "settings.json"
+    elif agent == "codex":
+        skill_root = codex_skill_root(project)
+        settings_path = codex_config_root(project) / "hooks.json"
+    else:
+        raise ValueError(f"unsupported agent: {agent}")
     removed_hooks = 0
     if settings_path.exists():
         settings = load_settings(settings_path)
@@ -9634,14 +9680,14 @@ def uninstall_agent(project: bool = False) -> int:
         if removed_hooks:
             write_settings(settings_path, settings)
 
-    skill_dir = root / "skills" / "ringer"
+    skill_dir = skill_root / "skills" / "ringer"
     removed_skill = False
     if skill_dir.exists():
         shutil.rmtree(skill_dir)
         removed_skill = True
 
     scope = "project" if project else "user"
-    print(f"Uninstalled ringer agent for {scope} scope.")
+    print(f"Uninstalled ringer agent for {agent} ({scope} scope).")
     print(f"Hooks removed: {removed_hooks}")
     print(f"Skill removed: {'yes' if removed_skill else 'no'}")
     return 0
@@ -9997,11 +10043,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     demo_parser.add_argument("--dry-run", action="store_true", help="print the demo plan without spawning codex")
 
-    install_parser = subparsers.add_parser("install-agent", help="install the ringer Claude Code skill and hooks")
-    install_parser.add_argument("--project", action="store_true", help="install into ./.claude instead of ~/.claude")
+    install_parser = subparsers.add_parser("install-agent", help="install the ringer orchestrator skill and hooks")
+    install_parser.add_argument("--agent", choices=("claude", "codex"), default="claude", help="orchestrating agent to configure (default: claude)")
+    install_parser.add_argument("--project", action="store_true", help="install at project scope instead of user scope")
 
-    uninstall_parser = subparsers.add_parser("uninstall-agent", help="remove the ringer Claude Code skill and hooks")
-    uninstall_parser.add_argument("--project", action="store_true", help="remove from ./.claude instead of ~/.claude")
+    uninstall_parser = subparsers.add_parser("uninstall-agent", help="remove the ringer orchestrator skill and hooks")
+    uninstall_parser.add_argument("--agent", choices=("claude", "codex"), default="claude", help="orchestrating agent to clean up (default: claude)")
+    uninstall_parser.add_argument("--project", action="store_true", help="remove from project scope instead of user scope")
     return parser
 
 
@@ -10047,9 +10095,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Self-update skipped: {result.reason or 'not available'}.")
             return 0
         if args.command == "install-agent":
-            return install_agent(project=args.project)
+            return install_agent(project=args.project, agent=args.agent)
         if args.command == "uninstall-agent":
-            return uninstall_agent(project=args.project)
+            return uninstall_agent(project=args.project, agent=args.agent)
 
         if args.command == "lint":
             manifest = Manifest.from_path(args.manifest)
