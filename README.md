@@ -154,7 +154,7 @@ For CI and evals, `config.sample.toml` includes `[engines.mock]` so the enforcem
 
 ![Identical workers, each under its own light](docs/engines.png)
 
-Ringer ships with three worker lanes: **Codex CLI** is the built-in default, and `config.sample.toml` carries verified engine blocks for **Grok Build CLI** (works as-is once you `grok login`) and **OpenCode + OpenRouter** (one edit: point `bin` at the sandbox wrapper in your clone). Anything else with a headless CLI is a config block away:
+Ringer ships with built-in **Codex CLI** and **OpenCode + OpenRouter** lanes. OpenCode automatically selects the macOS Seatbelt wrapper or Linux/WSL2 bubblewrap wrapper; `config.sample.toml` also carries a verified **Grok Build CLI** engine block. Anything else with a headless CLI is a config block away:
 
 ```toml
 [engines.mymodel]
@@ -166,9 +166,9 @@ Per-task `"engine": "mymodel"` routes work to it — the invariants (stdin close
 
 ### The universal harness: OpenCode + OpenRouter
 
-Unless a model ships its own first-class harness (Codex does), OpenCode is the harness that runs it — one engine block covers every OpenRouter-served model. `config.sample.toml` includes a ready-to-uncomment engine whose `{model}` placeholder is filled per task from the manifest's `"model"` field, with `model_default` as the fallback. The shipped default is OpenRouter's `z-ai/glm-5.2` — roughly $0.74/M input and $2.33/M output (2026-07), about 20-30x cheaper output than frontier coding models; a complete write-code-and-pass-the-check task lands around a penny.
+Unless a model ships its own first-class harness (Codex does), OpenCode is the harness that runs it — one built-in engine covers every OpenRouter-served model. Set the manifest task's `"model"` to the full OpenRouter slug so routing cannot drift.
 
-OpenCode ships no OS sandbox, so the engine's `bin` points at an absolute path to `engines/opencode-sandboxed.sh` (ringer does not resolve engine bins relative to the repo): a macOS Seatbelt wrapper that leaves network and reads open but confines writes to the task dir, a per-run scratch dir (wired as the agent's `TMPDIR`/`XDG_CACHE_HOME`), and OpenCode's own state/config dirs. Its `--dangerously-skip-permissions` flag only silences OpenCode's interactive prompts; Seatbelt is the actual containment. Task paths reach the profile as `sandbox-exec -D` parameters rather than string interpolation, so a task dir with quotes or parens can't inject sandbox rules. `--no-sandbox` is wired as the engine's `full_access_args`, so ringer's `allow_full_access` gate still governs escapes. Non-macOS installs need their own sandbox (or full-access mode).
+OpenCode ships no OS sandbox, so Ringer selects one. The macOS Seatbelt and Linux/WSL2 bubblewrap wrappers leave network and host reads open, confine writes to the task directory and ephemeral per-run state, and clear inherited environment variables. `--no-sandbox` remains wired to Ringer's existing two-part `full_access` gate.
 
 Setting it up takes about five minutes:
 
@@ -181,13 +181,10 @@ curl -fsSL https://opencode.ai/install | bash
 # 2) Connect OpenRouter — create a key at https://openrouter.ai/settings/keys
 opencode auth login   # select OpenRouter, paste the key
 
-# 3) In ~/.config/ringer/config.toml, uncomment [engines.opencode] and set
-#    bin to the ABSOLUTE path of engines/opencode-sandboxed.sh in this clone.
-#    (Linux/WSL: the wrapper is macOS-only — set bin to the opencode binary
-#    itself; there is no OS write-confinement then, so keep manifests scoped.)
+# 3) No engine config is required. Ringer selects the platform wrapper.
 ```
 
-Route with per-task `"engine": "opencode"`, pick the model with per-task `"model": "openrouter/<any-model>"`, and set reasoning effort via `engine_args`: `["--variant", "low|high|max"]`. A sensible split: mechanical or tightly-specced tasks on the cheap lane, gnarly ones on your frontier engine — the executed check catches shortfalls either way, and `swarm_runs` rows tell you whether the cheap lane's pass rate holds.
+Route with per-task `"engine": "opencode"`, pick the model with per-task `"model": "openrouter/<any-model>"`, and set reasoning effort via `engine_args`, for example `["--variant", "high"]`.
 
 ### The plan lane: Grok Build CLI
 
