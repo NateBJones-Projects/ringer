@@ -154,7 +154,7 @@ For CI and evals, `config.sample.toml` includes `[engines.mock]` so the enforcem
 
 ![Identical workers, each under its own light](docs/engines.png)
 
-Ringer ships with three worker lanes: **Codex CLI** is the built-in default, and `config.sample.toml` carries verified engine blocks for **Grok Build CLI** (works as-is once you `grok login`) and **OpenCode + OpenRouter** (one edit: point `bin` at the sandbox wrapper in your clone). Anything else with a headless CLI is a config block away:
+Ringer ships with built-in **Codex CLI** and **Claude Code** lanes. `config.sample.toml` also carries engine blocks for **Grok Build CLI** and **OpenCode + OpenRouter**. Anything else with a headless CLI is a config block away:
 
 ```toml
 [engines.mymodel]
@@ -163,6 +163,20 @@ args_template = ["run", "{spec}", "--dir", "{taskdir}"]
 ```
 
 Per-task `"engine": "mymodel"` routes work to it — the invariants (stdin closed, process-group kill, executed verification, raw logs) apply to every engine identically.
+
+### Claude subscription lane
+
+Claude Code can use a Claude Pro or Max subscription without an Anthropic API key:
+
+```bash
+curl -fsSL https://claude.ai/install.sh | bash
+claude auth login --claudeai
+
+# Linux/WSL2 prerequisites for Claude's OS sandbox
+sudo apt-get install bubblewrap socat
+```
+
+Route a task with `"engine": "claude"` and an explicit model. Ringer enables Claude's OS sandbox, sets `failIfUnavailable=true`, disables its unsandboxed-command escape hatch, uses structured output, and records the model from Claude's init event. Full access uses Claude's explicit permission bypass only when both Ringer gates allow it.
 
 ### The universal harness: OpenCode + OpenRouter
 

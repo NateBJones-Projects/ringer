@@ -62,6 +62,16 @@ SELF_UPDATE_FETCH_TIMEOUT_S = 10
 SELF_UPDATE_STATE_FILE = "self-update.json"
 DEFAULT_TOKEN_REGEX = r"tokens\s+used\s*:?\s*([0-9][0-9,]*)"
 DEFAULT_CODEX_MODEL_REPORT_REGEX = r"(?m)^model:[ \t]*([^ \t\r\n]+)[ \t]*\r?$"
+CLAUDE_SANDBOX_SETTINGS = json.dumps(
+    {
+        "sandbox": {
+            "enabled": True,
+            "failIfUnavailable": True,
+            "allowUnsandboxedCommands": False,
+        }
+    },
+    separators=(",", ":"),
+)
 ACTIVITY_TAIL_BYTES = 2048
 ACTIVITY_TEXT_LIMIT = 80
 ARTIFACT_WRAPPER_TAIL_BYTES = 256 * 1024
@@ -891,6 +901,41 @@ def built_in_codex_engine() -> EngineConfig:
     )
 
 
+def built_in_claude_engine() -> EngineConfig:
+    resolved = shutil.which("claude") or "claude"
+    return EngineConfig(
+        name="claude",
+        bin=resolved,
+        args_template=(
+            "--print",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--no-session-persistence",
+            "--no-chrome",
+            "--disable-slash-commands",
+            "--strict-mcp-config",
+            "--mcp-config",
+            '{"mcpServers":{}}',
+            "{access_args}",
+            "--model",
+            "{model}",
+            "{engine_args}",
+            "{spec}",
+        ),
+        full_access_args=("--dangerously-skip-permissions",),
+        sandbox_args=(
+            "--permission-mode",
+            "acceptEdits",
+            "--settings",
+            CLAUDE_SANDBOX_SETTINGS,
+        ),
+        token_regex=None,
+        model_report_regex=r'"model"\s*:\s*"([^"]+)"',
+        model_default="",
+    )
+
+
 def load_eval_config(raw: Any, state_dir: Path) -> EvalConfig:
     if raw is None:
         raw = {}
@@ -927,7 +972,10 @@ def load_hud_port(raw: Any) -> int:
 
 
 def load_engines(raw: Any) -> dict[str, EngineConfig]:
-    engines: dict[str, EngineConfig] = {DEFAULT_ENGINE_NAME: built_in_codex_engine()}
+    engines: dict[str, EngineConfig] = {
+        DEFAULT_ENGINE_NAME: built_in_codex_engine(),
+        "claude": built_in_claude_engine(),
+    }
     if raw is None:
         return engines
     if not isinstance(raw, dict):
@@ -8911,6 +8959,7 @@ def print_steering_notes(manifest: Manifest, config: AppConfig) -> None:
 
 
 ENGINE_INSTALL_HINTS = {
+    "claude": "install it with `curl -fsSL https://claude.ai/install.sh | bash`, then run `claude` and choose Claude App login",
     "codex": "install it with `npm install -g @openai/codex` (or `brew install --cask codex`), then run `codex login`",
     "opencode": "install it with `curl -fsSL https://opencode.ai/install | bash`, then run `opencode auth login`",
 }
