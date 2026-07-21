@@ -141,12 +141,13 @@ Between swarms, agents drift back to invisible inline work. Reminders decay, so 
 Run one command:
 
 ```bash
-./ringer.py install-agent
+./ringer.py install-agent                  # Claude Code
+./ringer.py install-agent --agent codex    # Codex CLI / IDE
 ```
 
-It installs the ringer skill — the orchestrator playbook — user-level for Claude Code, and registers two gentle hooks: a Bash hook that notices model-calling or harness commands running outside a live Ringer run, and an edit-loop hook that notices batch editing without a run. Each hook nudges ONCE per session, pointing the agent at the skill.
+It installs the ringer skill — the orchestrator playbook — and registers two gentle hooks. Codex installs the skill under `~/.agents/skills/ringer` and hooks under `~/.codex/hooks.json`; its post-tool matcher targets the real `apply_patch` event. On Windows, Codex hook entries include `commandWindows`. Each hook nudges once per session, pointing the agent at the skill.
 
-The hooks never block anything. A user who says "just do it inline" is obeyed; uninstall with `./ringer.py uninstall-agent`.
+The hooks never block anything. A user who says "just do it inline" is obeyed; uninstall with `./ringer.py uninstall-agent` or `./ringer.py uninstall-agent --agent codex`.
 
 For CI and evals, `config.sample.toml` includes `[engines.mock]` so the enforcement stack can be tested without an API bill.
 
