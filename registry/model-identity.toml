@@ -98,3 +98,50 @@ lab = "Meta"
 confidence = "verified"
 source = "manifest model field; OpenRouter slug meta-llama/llama-3.3-70b-instruct:free"
 last_verified = 2026-07-10
+
+[engines.claude]
+harness = "Claude Code"
+access = "Claude subscription"
+default_model_key = "claude-haiku-4-5"
+
+# Claude-family identities. Evidence precedence is harness-reported model first:
+# the Claude Code worker stream self-reports the model it ran in its result
+# `modelUsage` telemetry (Ringer's reported_model column stays null only because
+# its capture regex is Codex-specific). Each source cites that self-report with
+# run names + dates, plus Anthropic's own model page for the lab.
+
+[engines.claude.models."claude-opus-4-8"]
+display = "Claude Opus 4.8"
+lab = "Anthropic"
+confidence = "verified"
+source = "Claude Code modelUsage self-report: runs claude-family-audition (2026-07-12), hello-world-bakeoff (2026-07-17); Anthropic models overview https://platform.claude.com/docs/en/about-claude/models/overview"
+last_verified = 2026-07-21
+
+[engines.claude.models."claude-sonnet-5"]
+display = "Claude Sonnet 5"
+lab = "Anthropic"
+confidence = "verified"
+source = "Claude Code modelUsage self-report: runs claude-family-audition (2026-07-12), hello-world-bakeoff (2026-07-17); Anthropic models overview https://platform.claude.com/docs/en/about-claude/models/overview"
+last_verified = 2026-07-21
+
+[engines.claude.models."claude-haiku-4-5"]
+display = "Claude Haiku 4.5"
+lab = "Anthropic"
+confidence = "verified"
+source = "Claude Code modelUsage self-report: runs claude-family-audition (2026-07-12), hello-world-site (2026-07-12); Anthropic models overview https://platform.claude.com/docs/en/about-claude/models/overview"
+last_verified = 2026-07-21
+
+# Fable 5: Anthropic's Claude 5 announcement names Fable 5 / Mythos 5 as a new
+# tier above Opus sharing one underlying model; there is no public lineage beyond
+# that. Per docs/TAXONOMY.md, registry aliases are allowed only when the actual
+# model lineage is not established, and must be marked as aliases in both the
+# registry and the displayed name and never presented as a confirmed lineage.
+# The lab (Anthropic) is verified from Anthropic's own announcement; the model
+# lineage is not, so this is entered as an unverified alias, not asserted lineage.
+[engines.claude.models."claude-fable-5"]
+display = "Claude Fable 5 (Anthropic, alias)"
+lab = "Anthropic"
+alias = true
+confidence = "unverified"
+source = "Anthropic Claude 5 announcement — Fable 5 / Mythos 5, new tier above Opus, one shared underlying model, no public lineage: https://platform.claude.com/docs/en/about-claude/models/introducing-claude-fable-5; harness self-report (Claude Code modelUsage): runs fable-audition (2026-07-12), crm-build (2026-07-16), chronoline-build (2026-07-17)"
+last_verified = 2026-07-21
