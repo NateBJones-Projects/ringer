@@ -154,7 +154,7 @@ For CI and evals, `config.sample.toml` includes `[engines.mock]` so the enforcem
 
 ![Identical workers, each under its own light](docs/engines.png)
 
-Ringer ships with three worker lanes: **Codex CLI** is the built-in default, and `config.sample.toml` carries verified engine blocks for **Grok Build CLI** (works as-is once you `grok login`) and **OpenCode + OpenRouter** (one edit: point `bin` at the sandbox wrapper in your clone). Anything else with a headless CLI is a config block away:
+Ringer ships with built-in **Codex CLI** and **Cursor Agent** lanes. `config.sample.toml` also carries engine blocks for **Grok Build CLI** and **OpenCode + OpenRouter**. Anything else with a headless CLI is a config block away:
 
 ```toml
 [engines.mymodel]
@@ -163,6 +163,18 @@ args_template = ["run", "{spec}", "--dir", "{taskdir}"]
 ```
 
 Per-task `"engine": "mymodel"` routes work to it — the invariants (stdin closed, process-group kill, executed verification, raw logs) apply to every engine identically.
+
+### Cursor account lane
+
+Install and authenticate Cursor Agent in the same POSIX environment that runs Ringer:
+
+```bash
+curl https://cursor.com/install -fsS | bash
+cursor-agent login
+cursor-agent models
+```
+
+Route a task with `"engine": "cursor"` and an explicit slug from `cursor-agent models`. Ringer invokes Cursor headlessly with stream JSON, an explicit workspace, `--force`, and `--sandbox enabled`. Full access switches to `--sandbox disabled` only when both Ringer gates allow it. A listed slug is not proof of account entitlement, so run a one-task probe before assigning a batch.
 
 ### The universal harness: OpenCode + OpenRouter
 
