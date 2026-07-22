@@ -321,3 +321,9 @@ checks and raw logs support — no vibes, no worker self-reports.
 - codex/GPT-5.6 Sol (code-review, 5 tasks): 5/5 first-try, ~100-160s each; adversarial reviews found 14 substantive P0-P2 defects the offline harnesses missed (GCS filename= P0, stability-loop no-reextract P0). Route all pre-commit review here.
 - claude/claude-sonnet-5 (docs, 1 task): clean canon edit, 25s.
 - Orchestrator lesson: a check that greps for a token (auth.uid, !=) must strip comments first — one false FAIL retry burned ~200s on fix-122-03 because the worker's explanatory comment contained the token.
+
+## 2026-07-22 — encode-model-lessons (ringer self-improvement, 8 rounds, worktrees+patch-export)
+- claude/claude-opus-4-8 (code-fix, 8 tasks): 7/8 first-try on ringer.py lint-heuristic and engine_args work, 5.5-15.5 min each. The one retry was validator brittleness (literal-grep on source), not worker error.
+- claude/claude-sonnet-5 (docs, 2 tasks): both clean; one retry on a check-format miss. Solid for README/config prose lanes.
+- codex/GPT-5.6 Sol (code-review, 8 tasks): 8/8 first-try, ~100-240s each. Blocked the core patch SIX consecutive times, each with an executed repro (applied the patch to a /tmp copy and demonstrated the failing input) — including catching a nonexistent rg flag in metadata and a silently-skipping audit test. Approved only after the lint rule adopted fail-safe abstain-on-unknown + an executed, mutation-resistant metadata audit. Lesson: enumerated-allowlist designs do not survive this reviewer; design for abstention and machine-enforced invariants before round 1.
+- Worker-env gotcha: for claude-engine workers, rg is a shell function, NOT on PATH (shutil.which('rg') → None), so binary-gated tests silently skip in worker worktrees while codex reviewers have real binaries. Make coverage assertions binary-independent.
