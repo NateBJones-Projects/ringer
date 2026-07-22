@@ -312,3 +312,18 @@ checks and raw logs support — no vibes, no worker self-reports.
 
 ## opencode / z-ai glm-5.2 (via openrouter)
 - 2026-07-09 (aicred-invoice-downloads, 4 code-fix tasks + 1 follow-up, worktrees+npm ci checks): systematic attempt-1 NO-OP — all 4 parallel workers produced zero edits and no summary on first attempt, then completed cleanly on attempt 2 after retry-prompt injection (34k-69k tokens each). Follow-up single task passed attempt 1. Suspect first-invocation session warm-up in opencode-sandboxed under parallel spawn; budget for 2 attempts on parallel GLM batches. Output quality on Next.js/Stripe route+test work: solid, spec-faithful, one boss-caught design gap (used user-scoped supabase client where RLS demanded service role — spec didn't say explicitly; say it explicitly).
+
+## GPT-5.6 Sol (codex)
+- 2026-07-20 unified-line-record round 1: research/proof lanes 4/4 (2 needed one retry on report format). Both live-Odoo probe lanes failed under default `--sandbox workspace-write` — the sandbox blocks PROCESS network (python → Odoo gateway) while codex's built-in web search still works, so research passes mask the restriction. Fix that worked first-try: per-task engine_args `-c sandbox_workspace_write.network_access=true`. Workers failed honestly (no fabricated data) — good sign for probe-type tasks.
+
+## 2026-07-20 — gsd-phase-122 (BGS unified-line-record, 7 plans, 6 rounds)
+- claude/claude-opus-4-8 (code-feature/code-fix, 7 tasks): 6/7 first-try vs executed plan-derived checks; the one retry (guardrails) was a real env issue (structlog absent under bare python3) the worker then fixed properly. Strong on long multi-file specs with embedded verify commands.
+- codex/GPT-5.6 Sol (code-review, 5 tasks): 5/5 first-try, ~100-160s each; adversarial reviews found 14 substantive P0-P2 defects the offline harnesses missed (GCS filename= P0, stability-loop no-reextract P0). Route all pre-commit review here.
+- claude/claude-sonnet-5 (docs, 1 task): clean canon edit, 25s.
+- Orchestrator lesson: a check that greps for a token (auth.uid, !=) must strip comments first — one false FAIL retry burned ~200s on fix-122-03 because the worker's explanatory comment contained the token.
+
+## 2026-07-22 — encode-model-lessons (ringer self-improvement, 8 rounds, worktrees+patch-export)
+- claude/claude-opus-4-8 (code-fix, 8 tasks): 7/8 first-try on ringer.py lint-heuristic and engine_args work, 5.5-15.5 min each. The one retry was validator brittleness (literal-grep on source), not worker error.
+- claude/claude-sonnet-5 (docs, 2 tasks): both clean; one retry on a check-format miss. Solid for README/config prose lanes.
+- codex/GPT-5.6 Sol (code-review, 8 tasks): 8/8 first-try, ~100-240s each. Blocked the core patch SIX consecutive times, each with an executed repro (applied the patch to a /tmp copy and demonstrated the failing input) — including catching a nonexistent rg flag in metadata and a silently-skipping audit test. Approved only after the lint rule adopted fail-safe abstain-on-unknown + an executed, mutation-resistant metadata audit. Lesson: enumerated-allowlist designs do not survive this reviewer; design for abstention and machine-enforced invariants before round 1.
+- Worker-env gotcha: for claude-engine workers, rg is a shell function, NOT on PATH (shutil.which('rg') → None), so binary-gated tests silently skip in worker worktrees while codex reviewers have real binaries. Make coverage assertions binary-independent.
