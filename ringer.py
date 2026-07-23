@@ -9442,7 +9442,6 @@ class RingerRunner:
                 "Ringer checks did not pass for: " + ", ".join(failed_tasks)
             )
         status = "failed" if blocked else "passed"
-        verified_at = None if blocked else utc_now_iso()
         proofs: list[dict[str, Any]] = []
         for kind in self.manifest.proof_kinds:
             proof: dict[str, Any] = {
@@ -9456,8 +9455,6 @@ class RingerRunner:
                     else f"Run {self.run_id} did not complete all declared checks."
                 ),
             }
-            if verified_at is not None:
-                proof["verified_at"] = verified_at
             proofs.append(proof)
         passed_count = sum(runtime.status == "pass" for runtime in self.runtimes)
         summary = (

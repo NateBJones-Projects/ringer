@@ -265,6 +265,10 @@ class AgentOpsLifecycleTests(unittest.TestCase):
             [proof["kind"] for proof in outcome["proofs"]],
         )
         self.assertTrue(
+            all("verified_at" not in proof for proof in outcome["proofs"]),
+            "the database stamps receipt-backed verification time so retries keep the same payload",
+        )
+        self.assertTrue(
             str(outcome["submission_key"]).startswith(f"ringer:{TASK_ID}:")
         )
 
@@ -349,6 +353,10 @@ class AgentOpsLifecycleTests(unittest.TestCase):
         self.assertEqual(
             client.outcomes[0]["submission_key"],
             client.outcomes[1]["submission_key"],
+        )
+        self.assertEqual(
+            client.outcomes[0]["proofs"],
+            client.outcomes[1]["proofs"],
         )
         self.assertFalse(client.outcomes[1]["blocked"])
         self.assertTrue(runner._agentops_outcome_attempted)
