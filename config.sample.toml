@@ -48,6 +48,9 @@ jsonl_path = "~/.ringer/runs.jsonl"
 # Optional Supabase/Postgres logging. The env file should define:
 # SUPABASE_DB_HOST, SUPABASE_DB_PORT, SUPABASE_DB_USER,
 # SUPABASE_DB_PASSWORD, SUPABASE_DB_NAME.
+# Prefer Supabase's session pooler on IPv4-only networks. A custom Postgres
+# role uses the pooler username "<role>.<project-ref>" on port 5432; the direct
+# db.<project-ref>.supabase.co host may resolve only to IPv6.
 # [eval.postgres]
 # env_file = "~/.supabase.env"
 

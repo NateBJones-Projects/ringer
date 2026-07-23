@@ -93,6 +93,7 @@ class ModelLogTests(unittest.TestCase):
             root = Path(temp)
             manifest = Manifest.from_obj(
                 {
+                    "orch_task_id": "8e748b50-f5dc-48e8-bcb5-c193d4c95664",
                     "run_name": "model-log-test",
                     "workdir": str(root / "work"),
                     "tasks": [self.task_obj(task_type="code-feature")],
@@ -116,6 +117,7 @@ class ModelLogTests(unittest.TestCase):
             )
             payload = json.loads((root / "eval.jsonl").read_text(encoding="utf-8"))
             self.assertEqual("openrouter/z-ai/glm-5.2", payload["model"])
+            self.assertEqual("8e748b50-f5dc-48e8-bcb5-c193d4c95664", payload["orch_task_id"])
             self.assertEqual("code-feature", payload["task_type"])
             self.assertIs(payload["retry"], True)
             self.assertIn("model=openrouter/z-ai/glm-5.2", payload["notes"])
@@ -152,6 +154,8 @@ class ModelLogTests(unittest.TestCase):
                 "worker_tokens": 2,
                 "notes": "retry=false",
                 "orchestrator": "tester",
+                "orch_task_id": "8e748b50-f5dc-48e8-bcb5-c193d4c95664",
+                "proof_kinds": ["test"],
                 "model": "openrouter/x",
                 "task_type": "code-feature",
                 "retry": False,
@@ -176,6 +180,8 @@ class ModelLogTests(unittest.TestCase):
                     "worker_tokens",
                     "notes",
                     "orchestrator",
+                    "orch_task_id",
+                    "proof_kinds",
                 },
                 set(fake.params),
             )

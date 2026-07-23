@@ -8,6 +8,7 @@ import threading
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -134,6 +135,45 @@ class ArtifactEndstateTests(unittest.TestCase):
             self.assertNotIn('http-equiv="refresh"', html)
             self.assertIn("Finished ", html)
             self.assertNotIn("this page refreshes itself", html)
+
+    def test_concurrent_flushes_use_distinct_atomic_temp_files(self) -> None:
+        writer = self.writer(self.runtime(status="pass"))
+        writer.artifact = ArtifactConfig(
+            enabled=False,
+            out_template=str(self.state_dir / "artifacts" / "{run_id}.html"),
+            report_template=str(
+                self.state_dir / "artifacts" / "{run_id}-report.html"
+            ),
+            index_out=self.state_dir / "artifacts" / "index.html",
+        )
+        barrier = threading.Barrier(2)
+        original_replace = os.replace
+        sources: list[Path] = []
+        errors: list[BaseException] = []
+        guard = threading.Lock()
+
+        def synchronized_replace(source: str | Path, destination: str | Path) -> None:
+            if Path(destination) == writer.path:
+                with guard:
+                    sources.append(Path(source))
+                barrier.wait(timeout=2)
+            original_replace(source, destination)
+
+        def flush() -> None:
+            try:
+                writer.flush()
+            except BaseException as exc:
+                errors.append(exc)
+
+        with mock.patch("ringer.os.replace", side_effect=synchronized_replace):
+            threads = [threading.Thread(target=flush) for _ in range(2)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=5)
+
+        self.assertEqual([], errors)
+        self.assertEqual(2, len(set(sources)))
 
     def test_live_render_keeps_refresh(self) -> None:
         html = render_status_html(

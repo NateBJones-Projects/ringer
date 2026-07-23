@@ -41,6 +41,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Iterable
+from uuid import UUID
 
 
 TOOL_NAME = "ringer"
@@ -68,6 +69,40 @@ ARTIFACT_WRAPPER_TAIL_BYTES = 256 * 1024
 ARTIFACT_LIBRARY_MAX_VERSIONS = 20
 DELIVERABLE_MAX_BYTES = 20 * 1024 * 1024
 WORKER_LOG_TAIL_BYTES = 64 * 1024
+HUD_PLAN_BODY_LIMIT_BYTES = 1024 * 1024
+PREMIUM_MODELS = frozenset({"gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra"})
+AGENTOPS_AGENT_ID = "ringer"
+AGENTOPS_RUNTIME = "ringer"
+AGENTOPS_PROOF_KINDS = frozenset(
+    {
+        "test",
+        "commit",
+        "pull_request",
+        "deployment",
+        "live_ui",
+        "database",
+        "artifact",
+        "native_distribution",
+        "physical_acceptance",
+    }
+)
+PLAN_TASK_TYPES = (
+    "code-feature",
+    "code-fix",
+    "code-review",
+    "test-hardening",
+    "docs",
+    "research",
+    "persona-review",
+    "copywriting",
+    "site-build",
+    "motion-design",
+    "image-gen",
+    "data-pipeline",
+    "format-conversion",
+    "probe",
+    "bakeoff",
+)
 TASK_REPORT_FILENAMES = ("report.md", "report.html")
 TEXT_DELIVERABLE_SUFFIXES = {".md", ".txt", ".log"}
 IMAGE_DELIVERABLE_SUFFIXES = {".avif", ".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp"}
@@ -887,6 +922,7 @@ def built_in_codex_engine() -> EngineConfig:
         full_access_args=("--dangerously-bypass-approvals-and-sandbox",),
         sandbox_args=("--sandbox", "workspace-write"),
         token_regex=DEFAULT_TOKEN_REGEX,
+        model_default="gpt-5.5",
         model_report_regex=DEFAULT_CODEX_MODEL_REPORT_REGEX,
     )
 
@@ -1074,6 +1110,9 @@ class Manifest:
     repo: Path | None
     tasks: tuple[TaskSpec, ...]
     source_path: Path | None = None
+    orch_task_id: str = ""
+    agentops_autostart: bool = False
+    proof_kinds: tuple[str, ...] = ("test",)
 
     @classmethod
     def from_path(cls, path: Path) -> "Manifest":
@@ -1089,6 +1128,9 @@ class Manifest:
             repo=manifest.repo,
             tasks=manifest.tasks,
             source_path=path,
+            orch_task_id=manifest.orch_task_id,
+            agentops_autostart=manifest.agentops_autostart,
+            proof_kinds=manifest.proof_kinds,
         )
 
     @classmethod
@@ -1107,6 +1149,43 @@ class Manifest:
             raise ValueError("max_parallel must be positive")
         repo_raw = obj.get("repo")
         repo = Path(str(repo_raw)).expanduser().resolve() if repo_raw else None
+        orch_task_id_raw = obj.get("orch_task_id", "")
+        if not isinstance(orch_task_id_raw, str):
+            raise ValueError("orch_task_id must be a UUID string")
+        orch_task_id = orch_task_id_raw.strip()
+        if orch_task_id:
+            try:
+                orch_task_id = str(UUID(orch_task_id))
+            except ValueError as exc:
+                raise ValueError("orch_task_id must be a valid UUID") from exc
+        agentops_autostart_raw = obj.get("agentops_autostart", False)
+        if not isinstance(agentops_autostart_raw, bool):
+            raise ValueError("agentops_autostart must be a boolean")
+        if agentops_autostart_raw and not orch_task_id:
+            raise ValueError("AgentOps autostart requires an existing orch_task_id")
+        proof_kinds_raw = obj.get("proof_kinds", ["test"])
+        if not isinstance(proof_kinds_raw, list) or not all(
+            isinstance(item, str) for item in proof_kinds_raw
+        ):
+            raise ValueError("proof_kinds must be a list of strings")
+        proof_kinds = tuple(
+            dict.fromkeys(item.strip() for item in proof_kinds_raw if item.strip())
+        )
+        if not proof_kinds:
+            proof_kinds = ("test",)
+        invalid_proof_kinds = sorted(set(proof_kinds) - AGENTOPS_PROOF_KINDS)
+        if invalid_proof_kinds:
+            raise ValueError(
+                "unsupported proof_kinds: " + ", ".join(invalid_proof_kinds)
+            )
+        metadata_proof_kinds = sorted(
+            set(proof_kinds) & {"native_distribution", "physical_acceptance"}
+        )
+        if metadata_proof_kinds:
+            raise ValueError(
+                "proof_kinds require explicit build/device metadata that Ringer "
+                "does not yet accept: " + ", ".join(metadata_proof_kinds)
+            )
         tasks_raw = obj.get("tasks")
         if not isinstance(tasks_raw, list) or not tasks_raw:
             raise ValueError("tasks must be a non-empty list")
@@ -1135,6 +1214,9 @@ class Manifest:
             worktrees=worktrees,
             repo=repo,
             tasks=tasks,
+            orch_task_id=orch_task_id,
+            agentops_autostart=agentops_autostart_raw,
+            proof_kinds=proof_kinds,
         )
 
     def with_max_parallel(self, value: int | None) -> "Manifest":
@@ -1150,6 +1232,9 @@ class Manifest:
             repo=self.repo,
             tasks=self.tasks,
             source_path=self.source_path,
+            orch_task_id=self.orch_task_id,
+            agentops_autostart=self.agentops_autostart,
+            proof_kinds=self.proof_kinds,
         )
 
 
@@ -1602,10 +1687,7 @@ class StateWriter:
 
     def flush(self) -> dict[str, Any]:
         state = self.snapshot()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
-        os.replace(tmp, self.path)
+        atomic_write_json(self.path, state)
         if self.artifact.enabled:
             self._write_status_artifact_safe(state)
             self._write_index_safe()
@@ -1627,10 +1709,10 @@ class StateWriter:
                     "status": runtime.status,
                     "verdict": runtime.final_verdict,
                     "engine": runtime.task.engine,
-                    "model": (
-                        runtime.task.model
-                        or (engine.model_default if engine else "")
-                        or effective_model_from_command(runtime.last_worker_command)
+                    "model": resolved_task_model(
+                        runtime.task,
+                        engine,
+                        runtime.last_worker_command,
                     ),
                     "spec": runtime.task.spec,
                     "spec_short": runtime.spec_short,
@@ -1748,11 +1830,9 @@ class StateWriter:
             self._append_library_version_safe(state)
             # Re-flush the plain state JSON so report_ready/report_path are accurate for
             # anything (Ringside) polling the state file right after the run ends.
-            tmp = self.path.with_suffix(".json.tmp")
             state = dict(state)
             state["report_ready"] = True
-            tmp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
-            os.replace(tmp, self.path)
+            atomic_write_json(self.path, state)
         except Exception as exc:
             print(f"artifact render error (final report, non-fatal): {exc}", file=sys.stderr)
 
@@ -4667,9 +4747,811 @@ def inject_models_tab_into_ringside_html(html: str) -> str:
     return html
 
 
+def inject_plan_tab_into_ringside_html(html: str) -> str:
+    if 'id="plan-panel"' in html or 'id="models-tab"' not in html:
+        return html
+    plan_tab = """      <button type="button" class="tab" id="plan-tab" aria-selected="false">Plan / Run</button>\n"""
+    panel = """
+      <section id="plan-panel" class="panel plan-panel" hidden>
+        <div class="plan-shell">
+          <header class="plan-intro">
+            <div>
+              <span class="eyebrow">Orchestration plan</span>
+              <h1>Route the work before you ring the bell.</h1>
+              <p>Define ownership, proof, concurrency, and the exact model for every worker. Premium models stay off until the plan names and approves them.</p>
+            </div>
+            <dl class="plan-metrics" aria-label="Plan summary">
+              <div><dt>Tasks</dt><dd id="plan-task-count" class="mono">1</dd></div>
+              <div><dt>Parallel</dt><dd id="plan-parallel-count" class="mono">2</dd></div>
+              <div><dt>Premium</dt><dd id="plan-premium-count" class="mono">0</dd></div>
+            </dl>
+          </header>
+
+          <form id="plan-form" class="plan-form" novalidate>
+            <fieldset class="plan-section run-settings">
+              <legend>Run settings</legend>
+              <div class="plan-grid plan-grid-settings">
+                <label class="plan-field plan-field-wide" for="plan-orch-task-id">
+                  <span>AgentOps task ID</span>
+                  <input id="plan-orch-task-id" name="orch_task_id" autocomplete="off" placeholder="00000000-0000-0000-0000-000000000000">
+                  <small>Optional for standalone runs. When supplied, every receipt links back to the canonical Fleet Task.</small>
+                </label>
+                <label class="plan-field" for="plan-run-name">
+                  <span>Run name</span>
+                  <input id="plan-run-name" name="run_name" autocomplete="off" required>
+                  <small>A durable, readable identity for this run.</small>
+                </label>
+                <label class="plan-field" for="plan-repo">
+                  <span>Repository</span>
+                  <input id="plan-repo" name="repo" autocomplete="off" placeholder="/absolute/path/to/repo">
+                  <small>Required only when isolated git worktrees are enabled.</small>
+                </label>
+                <label class="plan-field plan-field-wide" for="plan-workdir">
+                  <span>Work directory</span>
+                  <input id="plan-workdir" name="workdir" autocomplete="off" required>
+                  <small>Worker directories, logs, and intermediate output live here.</small>
+                </label>
+                <label class="plan-field" for="plan-max-parallel">
+                  <span>Max parallel</span>
+                  <input id="plan-max-parallel" name="max_parallel" type="number" min="1" max="32" required>
+                  <small>Caps simultaneous workers.</small>
+                </label>
+                <label class="plan-toggle" for="plan-worktrees">
+                  <input id="plan-worktrees" name="worktrees" type="checkbox">
+                  <span><b>Isolated worktrees</b><small>Give each task its own checkout to prevent write collisions.</small></span>
+                </label>
+              </div>
+            </fieldset>
+
+            <section class="plan-section" aria-labelledby="plan-tasks-title">
+              <div class="plan-section-head">
+                <div>
+                  <h2 id="plan-tasks-title">Worker plan</h2>
+                  <p>Each worker gets one bounded objective, one routing decision, and one executed proof.</p>
+                </div>
+                <button id="plan-add-task" class="plan-secondary" type="button">Add task</button>
+              </div>
+              <div id="plan-tasks" class="plan-tasks"></div>
+            </section>
+
+            <section id="premium-approval" class="plan-section premium-approval" hidden>
+              <div class="premium-copy">
+                <span class="eyebrow">Premium gate</span>
+                <h2>GPT-5.6 is an escalation, not a default.</h2>
+                <p id="premium-task-copy">Premium tasks require explicit approval before launch.</p>
+              </div>
+              <label class="plan-toggle premium-toggle" for="plan-premium-approved">
+                <input id="plan-premium-approved" type="checkbox">
+                <span><b>I approve premium quota for the named tasks</b><small>This approval is recorded in the saved orchestration plan.</small></span>
+              </label>
+              <label class="plan-field" for="plan-premium-reason">
+                <span>Why these tasks need premium routing</span>
+                <input id="plan-premium-reason" autocomplete="off" placeholder="Complex synthesis after the standard lane failed">
+                <small>Required whenever a GPT-5.6 lane is selected.</small>
+              </label>
+            </section>
+
+            <section class="plan-review" aria-labelledby="plan-review-title">
+              <div class="plan-review-head">
+                <div>
+                  <h2 id="plan-review-title">Preflight</h2>
+                  <p>The plan must be explicit, lint-clean, and executable before Ringer launches it.</p>
+                </div>
+                <div class="plan-actions">
+                  <button id="plan-validate" class="plan-secondary" type="button">Validate plan</button>
+                  <button id="plan-run" class="plan-primary" type="button">Start run</button>
+                </div>
+              </div>
+              <div id="plan-status" class="plan-status" role="status" aria-live="polite">Loading routing policy…</div>
+              <details class="plan-manifest">
+                <summary>Manifest preview</summary>
+                <pre id="plan-manifest-preview" class="mono"></pre>
+              </details>
+            </section>
+          </form>
+        </div>
+      </section>
+"""
+    style = """
+    .plan-panel {
+      min-height: calc(100vh - 83px);
+      background:
+        linear-gradient(90deg, transparent 0, transparent calc(72% - 1px), var(--hairline) calc(72% - 1px), var(--hairline) 72%, transparent 72%),
+        var(--ground);
+    }
+    .plan-shell {
+      width: min(1480px, 100%);
+      margin: 0 auto;
+      padding: clamp(24px, 4vw, 54px) clamp(16px, 3vw, 42px) 72px;
+    }
+    .plan-intro {
+      display: grid;
+      grid-template-columns: minmax(0, 1.7fr) minmax(260px, .65fr);
+      gap: clamp(28px, 7vw, 110px);
+      align-items: end;
+      padding-bottom: clamp(28px, 5vw, 56px);
+      border-bottom: 1px solid var(--hairline);
+    }
+    .plan-intro h1 {
+      max-width: 760px;
+      margin: 10px 0 14px;
+      font-size: clamp(32px, 4.6vw, 64px);
+      font-weight: 720;
+      letter-spacing: -.055em;
+      line-height: .98;
+    }
+    .plan-intro p,
+    .plan-section-head p,
+    .plan-review-head p,
+    .premium-copy p {
+      max-width: 66ch;
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.65;
+    }
+    .plan-metrics {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      margin: 0;
+      border-top: 1px solid var(--hairline);
+      border-bottom: 1px solid var(--hairline);
+    }
+    .plan-metrics div { padding: 16px 12px; border-right: 1px solid var(--hairline); }
+    .plan-metrics div:last-child { border-right: 0; }
+    .plan-metrics dt { color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+    .plan-metrics dd { margin: 4px 0 0; font-size: 24px; font-weight: 750; letter-spacing: -.04em; }
+    .plan-form { display: grid; }
+    .plan-section,
+    .plan-review {
+      margin: 0;
+      padding: clamp(28px, 4vw, 48px) 0;
+      border: 0;
+      border-bottom: 1px solid var(--hairline);
+    }
+    .plan-section legend,
+    .plan-section-head h2,
+    .plan-review-head h2,
+    .premium-copy h2 {
+      margin: 0 0 6px;
+      color: var(--ink);
+      font-size: 18px;
+      font-weight: 730;
+      letter-spacing: -.025em;
+    }
+    .plan-section legend { padding: 0 0 18px; }
+    .plan-section-head,
+    .plan-review-head {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 20px;
+      margin-bottom: 22px;
+    }
+    .plan-grid { display: grid; gap: 18px; }
+    .plan-grid-settings { grid-template-columns: minmax(190px, .8fr) minmax(260px, 1.2fr) 140px; }
+    .plan-field-wide { grid-column: span 2; }
+    .plan-field { display: grid; gap: 7px; min-width: 0; }
+    .plan-field > span,
+    .task-field > span {
+      color: var(--ink);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .015em;
+    }
+    .plan-field small,
+    .plan-toggle small,
+    .task-field small {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 450;
+      line-height: 1.45;
+    }
+    .plan-panel input,
+    .plan-panel textarea,
+    .plan-panel select {
+      width: 100%;
+      border: 1px solid var(--hairline);
+      border-radius: 8px;
+      background-color: color-mix(in srgb, var(--surface) 82%, var(--ground));
+      color: var(--ink);
+      font: inherit;
+      font-size: 13px;
+      transition: border-color .2s cubic-bezier(.16, 1, .3, 1), transform .2s cubic-bezier(.16, 1, .3, 1);
+    }
+    .plan-panel input { min-height: 42px; padding: 9px 11px; }
+    .plan-panel textarea { min-height: 112px; padding: 10px 11px; resize: vertical; line-height: 1.5; }
+    .plan-panel input:focus,
+    .plan-panel textarea:focus,
+    .plan-panel select:focus { border-color: var(--accent); outline: none; }
+    .plan-panel input[type="checkbox"] { width: 17px; min-height: 17px; accent-color: var(--accent); }
+    .plan-toggle {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      min-height: 42px;
+      padding: 10px 12px;
+      border: 1px solid var(--hairline);
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--surface) 56%, transparent);
+    }
+    .plan-toggle b { display: block; margin-bottom: 2px; font-size: 12px; }
+    .plan-tasks { display: grid; gap: 16px; }
+    .task-plan {
+      padding: clamp(18px, 2.4vw, 28px) 0;
+      border-top: 1px solid var(--hairline);
+      animation: plan-enter .35s cubic-bezier(.16, 1, .3, 1) both;
+    }
+    @keyframes plan-enter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    .task-plan-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+    .task-number { color: var(--muted); font-size: 11px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+    .task-remove { border: 0; background: transparent; color: var(--muted); padding: 4px 0; font-size: 12px; }
+    .task-remove:hover { color: var(--fail); }
+    .task-route-grid { display: grid; grid-template-columns: 1fr 1fr 1.35fr .8fr; gap: 14px; margin-bottom: 16px; }
+    .task-content-grid { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(280px, .75fr); gap: 18px; }
+    .task-proof-grid { display: grid; gap: 14px; }
+    .task-field { display: grid; gap: 7px; min-width: 0; }
+    .task-spec textarea { min-height: 196px; }
+    .premium-approval {
+      display: grid;
+      grid-template-columns: minmax(260px, 1fr) minmax(290px, .9fr);
+      gap: 20px 40px;
+      align-items: start;
+      padding-left: clamp(16px, 2vw, 28px);
+      border-left: 3px solid var(--accent);
+    }
+    .premium-approval .plan-field { grid-column: 2; }
+    .premium-toggle { grid-column: 2; grid-row: 1; }
+    .plan-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+    .plan-primary,
+    .plan-secondary {
+      min-height: 40px;
+      border-radius: 8px;
+      padding: 9px 16px;
+      font-size: 13px;
+      font-weight: 720;
+      transition: transform .2s cubic-bezier(.16, 1, .3, 1), border-color .2s cubic-bezier(.16, 1, .3, 1);
+    }
+    .plan-primary:active,
+    .plan-secondary:active { transform: translateY(1px) scale(.985); }
+    .plan-primary { border: 1px solid var(--accent); background: var(--accent); color: var(--ground); }
+    .plan-secondary { border: 1px solid var(--hairline); background: var(--surface); color: var(--ink); }
+    .plan-secondary:hover { border-color: var(--accent); }
+    .plan-primary:disabled,
+    .plan-secondary:disabled { cursor: wait; opacity: .55; }
+    .plan-status {
+      min-height: 44px;
+      padding: 12px 14px;
+      border-left: 2px solid var(--hairline);
+      background: color-mix(in srgb, var(--surface) 58%, transparent);
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .plan-status.ready { border-left-color: var(--pass); color: var(--ink); }
+    .plan-status.error { border-left-color: var(--fail); color: var(--fail); }
+    .plan-status.working { border-left-color: var(--accent); color: var(--ink); }
+    .plan-findings { margin: 8px 0 0; padding-left: 20px; color: var(--fail); }
+    .plan-manifest { margin-top: 14px; border-top: 1px solid var(--hairline); }
+    .plan-manifest summary { padding: 13px 0; color: var(--muted); cursor: pointer; font-size: 12px; font-weight: 700; }
+    .plan-manifest pre { max-height: 360px; overflow: auto; margin: 0; padding: 16px; background: var(--surface); color: var(--ink); font-size: 11px; line-height: 1.55; white-space: pre-wrap; }
+    @media (max-width: 900px) {
+      .plan-panel { background: var(--ground); }
+      .plan-intro,
+      .premium-approval { grid-template-columns: 1fr; }
+      .plan-grid-settings,
+      .task-route-grid,
+      .task-content-grid { grid-template-columns: 1fr 1fr; }
+      .plan-field-wide { grid-column: span 2; }
+      .premium-toggle,
+      .premium-approval .plan-field { grid-column: 1; grid-row: auto; }
+    }
+    @media (max-width: 620px) {
+      .plan-shell { padding: 26px 16px 48px; }
+      .plan-intro { grid-template-columns: 1fr; }
+      .plan-intro h1 { font-size: 38px; }
+      .plan-grid-settings,
+      .task-route-grid,
+      .task-content-grid { grid-template-columns: 1fr; }
+      .plan-field-wide { grid-column: auto; }
+      .plan-section-head,
+      .plan-review-head { align-items: flex-start; flex-direction: column; }
+      .plan-actions { width: 100%; }
+      .plan-actions button { flex: 1; }
+    }
+"""
+    script = r"""
+    function installPlanView() {
+      const VIEW_KEY = "ringside-view";
+      const DRAFT_KEY = "ringside-plan-draft-v1";
+      const runsPanel = document.getElementById("artifacts-panel");
+      const modelsPanel = document.getElementById("models-panel");
+      const planPanel = document.getElementById("plan-panel");
+      const runsTab = document.getElementById("runs-tab");
+      const modelsTab = document.getElementById("models-tab");
+      const planTab = document.getElementById("plan-tab");
+      const form = document.getElementById("plan-form");
+      const tasksRoot = document.getElementById("plan-tasks");
+      const status = document.getElementById("plan-status");
+      const preview = document.getElementById("plan-manifest-preview");
+      const validateButton = document.getElementById("plan-validate");
+      const runButton = document.getElementById("plan-run");
+      const addButton = document.getElementById("plan-add-task");
+      const premiumSection = document.getElementById("premium-approval");
+      const premiumApproved = document.getElementById("plan-premium-approved");
+      const premiumReason = document.getElementById("plan-premium-reason");
+      if (!runsPanel || !modelsPanel || !planPanel || !runsTab || !modelsTab || !planTab || !form || !tasksRoot) return;
+
+      let config = null;
+      let taskSerial = 0;
+      let tasks = [];
+
+      function html(value) {
+        return String(value ?? "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+      }
+
+      function slug(value) {
+        return String(value || "ringer-run").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "ringer-run";
+      }
+
+      function readAgentOpsPayload() {
+        const raw = new URLSearchParams(window.location.hash.replace(/^#/, "")).get("agentops");
+        if (!raw) return null;
+        try {
+          const payload = JSON.parse(raw);
+          if (!payload || payload.version !== 1 || typeof payload.id !== "string" || typeof payload.title !== "string") return null;
+          return payload;
+        } catch (_error) {
+          return null;
+        }
+      }
+
+      function isAgentOpsAutostart() {
+        const query = new URLSearchParams(window.location.search);
+        return Boolean(readAgentOpsPayload() && query.get("agentops_autostart") === "1");
+      }
+
+      function payloadLines(value) {
+        return Array.isArray(value) ? value.map(item => String(item).trim()).filter(Boolean) : [];
+      }
+
+      function agentOpsSpec(payload) {
+        const statusValue = String(payload?.status || "").trim().toLowerCase();
+        const reviewMode = statusValue === "review" || statusValue === "completed";
+        const sections = [
+          "You are the execution and verification worker for the linked AgentOps Fleet Task. Work only on this task and preserve unrelated user changes.",
+          `AgentOps task ID: ${String(payload?.id || "").trim()}`,
+          `Outcome: ${String(payload?.title || "").trim()}`,
+          statusValue ? `Current task status: ${statusValue}` : "",
+          String(payload?.description || "").trim() ? `Task description:\n${String(payload.description).trim()}` : "",
+          payloadLines(payload?.success_criteria).length ? `Success criteria:\n- ${payloadLines(payload.success_criteria).join("\n- ")}` : "",
+          payloadLines(payload?.out_of_scope).length ? `Out of scope:\n- ${payloadLines(payload.out_of_scope).join("\n- ")}` : "",
+          payloadLines(payload?.source_hierarchy).length ? `Source hierarchy:\n- ${payloadLines(payload.source_hierarchy).join("\n- ")}` : "",
+          String(payload?.result || "").trim() ? `Existing delivery/result evidence:\n${String(payload.result).trim()}` : "",
+          payloadLines(payload?.deliverables).length ? `Existing deliverables:\n- ${payloadLines(payload.deliverables).join("\n- ")}` : "",
+          reviewMode
+            ? "Delivery-state rule: inspect the current repository, Git/PR state, deployment, and other real proof surfaces before changing anything. Preserve work that is already shipped. Repair only verified gaps; do not reimplement completed scope."
+            : "Delivery-state rule: inspect current repository and delivery state before editing so existing work is preserved and duplicated implementation is avoided.",
+          "Safety boundary: follow the repository instructions. Do not mutate production data, secrets, auth, billing, or external communications. Do not touch files outside the verified task scope.",
+          "Output contract: create report.md with the current-state findings, work performed, exact proof handles, and final verification. If no explicit verification command was supplied, also create an executable verify.sh containing task-specific, fail-loud checks; Ringside will execute it independently.",
+        ];
+        return sections.filter(Boolean).join("\n\n");
+      }
+
+      function agentOpsCheck(payload) {
+        const outputCheck = "test -s report.md || { echo 'FAIL: report.md is missing or empty'; exit 1; }";
+        const explicit = String(payload?.check || "").trim();
+        if (explicit) return `${outputCheck}\n${explicit}`;
+        return `${outputCheck}\ntest -x verify.sh || { echo 'FAIL: verify.sh is missing or not executable'; exit 1; }\n./verify.sh`;
+      }
+
+      function agentOpsTask(payload) {
+        const expected = new Set(String(payload?.repo || "").trim() ? [] : ["report.md", ...payloadLines(payload?.expect_files)]);
+        if (!String(payload?.repo || "").trim() && !String(payload?.check || "").trim()) expected.add("verify.sh");
+        const task = newTask(0);
+        task.key = `task-${String(payload?.id || "agentops").slice(0, 8)}`;
+        task.spec = agentOpsSpec(payload);
+        task.check = agentOpsCheck(payload);
+        task.verified = String(payload?.verified || "").trim()
+          || "The linked task has a non-empty execution report and its task-specific verification executes successfully.";
+        task.expect_files = Array.from(expected).join("\n");
+        return task;
+      }
+
+      // Workdir mirrors the run name until the user edits workdir by hand.
+      let workdirAuto = true;
+
+      // Derive a per-run workdir from the run name so two runs launched with
+      // form defaults never squat the same directory. The server default ends
+      // with slug(defaults.run_name); swap that tail for the current name.
+      function workdirFor(runName) {
+        const base = String(config?.defaults?.workdir || "");
+        const tail = slug(config?.defaults?.run_name || "ringer-run");
+        if (base.endsWith(tail)) return base.slice(0, base.length - tail.length) + slug(runName);
+        return base;
+      }
+
+      function defaultLane() {
+        const lanes = Array.isArray(config?.lanes) ? config.lanes : [];
+        return lanes.find(lane => lane.id === "standard")?.id || lanes.find(lane => !lane.premium)?.id || lanes[0]?.id || "";
+      }
+
+      function newTask(index = tasks.length) {
+        taskSerial += 1;
+        return {
+          id: `task-${Date.now()}-${taskSerial}`,
+          key: `task-${index + 1}`,
+          task_type: "code-feature",
+          lane: defaultLane(),
+          reasoning: "medium",
+          spec: "",
+          check: "",
+          verified: "",
+          expect_files: "",
+        };
+      }
+
+      function laneFor(task) {
+        return (config?.lanes || []).find(lane => lane.id === task.lane) || null;
+      }
+
+      function options(items, selected, labelKey = "label", valueKey = "id") {
+        return items.map(item => {
+          const value = typeof item === "string" ? item : item[valueKey];
+          const label = typeof item === "string" ? item : item[labelKey];
+          return `<option value="${html(value)}"${value === selected ? " selected" : ""}>${html(label)}</option>`;
+        }).join("");
+      }
+
+      function taskMarkup(task, index) {
+        const canRemove = tasks.length > 1;
+        return `
+          <article class="task-plan" data-task-id="${html(task.id)}" style="animation-delay:${Math.min(index * 55, 220)}ms">
+            <div class="task-plan-head">
+              <span class="task-number">Task ${String(index + 1).padStart(2, "0")}</span>
+              <button class="task-remove" type="button" data-action="remove"${canRemove ? "" : " disabled"}>Remove</button>
+            </div>
+            <div class="task-route-grid">
+              <label class="task-field"><span>Task key</span><input data-field="key" value="${html(task.key)}" required><small>Stable identifier used in logs and artifacts.</small></label>
+              <label class="task-field"><span>Task type</span><select data-field="task_type">${options(config?.task_types || [], task.task_type, null, null)}</select><small>Feeds the model-performance scoreboard.</small></label>
+              <label class="task-field"><span>Worker lane</span><select data-field="lane">${options(config?.lanes || [], task.lane)}</select><small>${html(laneFor(task)?.description || "Choose an engine and exact model.")}</small></label>
+              <label class="task-field"><span>Reasoning</span><select data-field="reasoning">${options(["low", "medium", "high"], task.reasoning, null, null)}</select><small>Applied to Codex and Claude workers.</small></label>
+            </div>
+            <div class="task-content-grid">
+              <label class="task-field task-spec"><span>Bounded objective and ownership</span><textarea data-field="spec" placeholder="State the outcome, owned files, constraints, context, and what the worker must not touch." required>${html(task.spec)}</textarea><small>Workers are stateless. Put the complete brief here instead of pointing at another instruction file.</small></label>
+              <div class="task-proof-grid">
+                <label class="task-field"><span>Executed check</span><textarea data-field="check" placeholder="test -s output.md || { echo 'FAIL: output.md missing'; exit 1; }" required>${html(task.check)}</textarea><small>The command must be able to fail and print why.</small></label>
+                <label class="task-field"><span>What the check proves</span><input data-field="verified" value="${html(task.verified)}" placeholder="Output exists and contains the required sections" required></label>
+                <label class="task-field"><span>Expected files</span><textarea data-field="expect_files" placeholder="output.md&#10;review.json">${html(task.expect_files)}</textarea><small>One path per line. Declare exactly what should appear in Ringside.</small></label>
+              </div>
+            </div>
+          </article>`;
+      }
+
+      function renderTasks() {
+        tasksRoot.innerHTML = tasks.map(taskMarkup).join("");
+        updateSummary();
+      }
+
+      function parseFiles(value) {
+        return String(value || "").split(/\r?\n/).map(item => item.trim()).filter(Boolean);
+      }
+
+      function buildManifest() {
+        const maxParallel = Number(document.getElementById("plan-max-parallel").value || 1);
+        const manifestTasks = tasks.map(task => {
+          const lane = laneFor(task);
+          const engineArgs = lane?.engine === "codex"
+            ? ["-c", `model_reasoning_effort=${task.reasoning || "medium"}`]
+            : lane?.engine === "claude"
+              ? ["--effort", task.reasoning || "medium"]
+              : [];
+          return {
+            key: task.key.trim(),
+            task_type: task.task_type,
+            engine: lane?.engine || "",
+            model: lane?.model || "",
+            engine_args: engineArgs,
+            spec: task.spec.trim(),
+            check: task.check.trim(),
+            verified: task.verified.trim(),
+            expect_files: parseFiles(task.expect_files),
+          };
+        });
+        const repo = document.getElementById("plan-repo").value.trim();
+        const orchTaskId = document.getElementById("plan-orch-task-id").value.trim();
+        const manifest = {
+          run_name: document.getElementById("plan-run-name").value.trim(),
+          workdir: document.getElementById("plan-workdir").value.trim(),
+          max_parallel: maxParallel,
+          worktrees: document.getElementById("plan-worktrees").checked,
+          tasks: manifestTasks,
+        };
+        if (repo) manifest.repo = repo;
+        if (orchTaskId) manifest.orch_task_id = orchTaskId;
+        const agentOps = readAgentOpsPayload();
+        const explicitProofKinds = payloadLines(agentOps?.proof_kinds);
+        const proofKinds = explicitProofKinds.length
+          ? explicitProofKinds
+          : payloadLines(agentOps?.required_proof_kinds);
+        manifest.proof_kinds = proofKinds.length ? proofKinds : ["test"];
+        return manifest;
+      }
+
+      function requestBody() {
+        return {
+          manifest: buildManifest(),
+          agentops_autostart: isAgentOpsAutostart(),
+          premium_approved: premiumApproved.checked,
+          premium_reason: premiumReason.value.trim(),
+        };
+      }
+
+      function premiumTasks() {
+        return tasks.filter(task => laneFor(task)?.premium);
+      }
+
+      function updateSummary() {
+        const premium = premiumTasks();
+        document.getElementById("plan-task-count").textContent = String(tasks.length);
+        document.getElementById("plan-parallel-count").textContent = document.getElementById("plan-max-parallel").value || "1";
+        document.getElementById("plan-premium-count").textContent = String(premium.length);
+        premiumSection.hidden = premium.length === 0;
+        document.getElementById("premium-task-copy").textContent = premium.length
+          ? `${premium.length} task${premium.length === 1 ? "" : "s"} routed to GPT-5.6: ${premium.map(task => task.key || "unnamed").join(", ")}.`
+          : "Premium tasks require explicit approval before launch.";
+        try {
+          preview.textContent = JSON.stringify(buildManifest(), null, 2);
+        } catch (_error) {
+          preview.textContent = "Complete the required fields to preview the manifest.";
+        }
+      }
+
+      function draft() {
+        return {
+          settings: {
+            orch_task_id: document.getElementById("plan-orch-task-id").value,
+            run_name: document.getElementById("plan-run-name").value,
+            repo: document.getElementById("plan-repo").value,
+            workdir: document.getElementById("plan-workdir").value,
+            max_parallel: document.getElementById("plan-max-parallel").value,
+            worktrees: document.getElementById("plan-worktrees").checked,
+          },
+          premium_approved: premiumApproved.checked,
+          premium_reason: premiumReason.value,
+          tasks,
+        };
+      }
+
+      function saveDraft() {
+        try { localStorage.setItem(DRAFT_KEY, JSON.stringify(draft())); } catch (_error) { }
+      }
+
+      function restoreDraft() {
+        let saved = null;
+        try { saved = JSON.parse(localStorage.getItem(DRAFT_KEY) || "null"); } catch (_error) { }
+        const defaults = config?.defaults || {};
+        const settings = saved?.settings || {};
+        const queryTaskId = new URLSearchParams(window.location.search).get("orch_task_id") || "";
+        const agentOps = readAgentOpsPayload();
+        const linkedTaskId = String(agentOps?.id || queryTaskId || "").trim();
+        document.getElementById("plan-orch-task-id").value = linkedTaskId || settings.orch_task_id || "";
+        // Deep-linked from a Fleet Task: default the run identity to the task
+        // (task-<first8>) unless the saved draft already belongs to this task,
+        // in which case the user's own name wins.
+        const sameTaskDraft = Boolean(linkedTaskId) && settings.orch_task_id === linkedTaskId;
+        const taskRunName = agentOps?.title
+          ? slug(agentOps.title).slice(0, 64)
+          : linkedTaskId ? `task-${linkedTaskId.slice(0, 8)}` : "";
+        // A saved value that merely equals the shared default is not a user
+        // choice; only a name the user actually typed survives a deep-link.
+        const customRunName = settings.run_name && settings.run_name !== (defaults.run_name || "ringer-run")
+          ? settings.run_name : "";
+        const runNameValue =
+          (sameTaskDraft && customRunName) ||
+          taskRunName ||
+          customRunName ||
+          defaults.run_name ||
+          "ringer-run";
+        document.getElementById("plan-run-name").value = runNameValue;
+        const importedRepo = String(agentOps?.repo || "").trim();
+        document.getElementById("plan-repo").value = (sameTaskDraft ? settings.repo : "") || importedRepo || "";
+        const customWorkdir = settings.workdir && settings.workdir !== defaults.workdir ? settings.workdir : "";
+        const savedWorkdir = (sameTaskDraft || !linkedTaskId) ? customWorkdir : "";
+        document.getElementById("plan-workdir").value = savedWorkdir || workdirFor(runNameValue) || defaults.workdir || "";
+        workdirAuto = !savedWorkdir;
+        document.getElementById("plan-max-parallel").value = settings.max_parallel || defaults.max_parallel || 2;
+        document.getElementById("plan-worktrees").checked = importedRepo
+          ? Boolean(sameTaskDraft ? (settings.worktrees ?? true) : true)
+          : Boolean(settings.worktrees ?? defaults.worktrees);
+        premiumApproved.checked = Boolean(saved?.premium_approved);
+        premiumReason.value = saved?.premium_reason || "";
+        const savedTasks = Array.isArray(saved?.tasks) ? saved.tasks : [];
+        if (agentOps) {
+          const importedTask = agentOpsTask(agentOps);
+          if (sameTaskDraft && savedTasks.length) {
+            tasks = savedTasks.map((task, index) => ({...newTask(index), ...task}));
+            tasks[0] = {
+              ...importedTask,
+              ...tasks[0],
+              spec: String(tasks[0].spec || "").trim() ? tasks[0].spec : importedTask.spec,
+              check: String(tasks[0].check || "").trim() ? tasks[0].check : importedTask.check,
+              verified: String(tasks[0].verified || "").trim() ? tasks[0].verified : importedTask.verified,
+              expect_files: String(tasks[0].expect_files || "").trim() ? tasks[0].expect_files : importedTask.expect_files,
+            };
+          } else {
+            tasks = [importedTask];
+          }
+        } else {
+          tasks = savedTasks.map((task, index) => ({...newTask(index), ...task}));
+        }
+        if (!tasks.length) tasks = [newTask(0)];
+        const validLanes = new Set((config?.lanes || []).map(lane => lane.id));
+        tasks.forEach(task => { if (!validLanes.has(task.lane)) task.lane = defaultLane(); });
+      }
+
+      function setStatus(message, kind = "") {
+        status.className = `plan-status${kind ? ` ${kind}` : ""}`;
+        status.textContent = message;
+      }
+
+      function setBusy(busy) {
+        validateButton.disabled = busy;
+        runButton.disabled = busy;
+        addButton.disabled = busy;
+        form.setAttribute("aria-busy", String(busy));
+      }
+
+      async function postPlan(endpoint) {
+        const response = await fetch(endpoint, {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(requestBody()),
+        });
+        const payload = await response.json().catch(() => ({ok: false, error: `HTTP ${response.status}`}));
+        if (!response.ok || !payload.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+        return payload;
+      }
+
+      async function validatePlan() {
+        setBusy(true);
+        setStatus("Checking task ownership, routing, proof, and worker availability…", "working");
+        try {
+          const payload = await postPlan("/api/plan/validate");
+          preview.textContent = JSON.stringify(payload.manifest, null, 2);
+          if (payload.findings?.length) {
+            status.className = "plan-status error";
+            status.innerHTML = `Plan needs ${payload.findings.length} correction${payload.findings.length === 1 ? "" : "s"}.<ul class="plan-findings">${payload.findings.map(item => `<li>${html(item)}</li>`).join("")}</ul>`;
+          } else if (!payload.ready && payload.routing?.premium_tasks?.length) {
+            setStatus("Plan structure is clean. Approve the named premium tasks and give a reason before launch.", "working");
+          } else {
+            setStatus("Plan is clean. Every worker has an explicit model and an executable proof.", "ready");
+          }
+        } catch (error) {
+          setStatus(error?.message || "Plan validation failed.", "error");
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      async function startRun(autoStartKey = "") {
+        setBusy(true);
+        setStatus("Running final preflight and starting the planned workers…", "working");
+        try {
+          const payload = await postPlan("/api/plan/run");
+          preview.textContent = JSON.stringify({...buildManifest(), routing: payload.routing}, null, 2);
+          setStatus(`Started ${payload.run_name}. The saved plan is ${payload.manifest_path}.`, "ready");
+          localStorage.removeItem(DRAFT_KEY);
+          if (autoStartKey) sessionStorage.setItem(autoStartKey, "started");
+        } catch (error) {
+          if (autoStartKey) sessionStorage.removeItem(autoStartKey);
+          setStatus(error?.message || "Run could not start.", "error");
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      function selectPlan(persist = true) {
+        runsPanel.hidden = true;
+        modelsPanel.hidden = true;
+        planPanel.hidden = false;
+        runsTab.setAttribute("aria-selected", "false");
+        modelsTab.setAttribute("aria-selected", "false");
+        planTab.setAttribute("aria-selected", "true");
+        if (persist) localStorage.setItem(VIEW_KEY, "plan");
+      }
+
+      planTab.addEventListener("click", () => selectPlan());
+      runsTab.addEventListener("click", () => { planPanel.hidden = true; planTab.setAttribute("aria-selected", "false"); });
+      modelsTab.addEventListener("click", () => { planPanel.hidden = true; planTab.setAttribute("aria-selected", "false"); });
+      form.addEventListener("submit", event => event.preventDefault());
+      addButton.addEventListener("click", () => { tasks.push(newTask()); renderTasks(); saveDraft(); });
+      tasksRoot.addEventListener("click", event => {
+        const button = event.target.closest('[data-action="remove"]');
+        if (!button || tasks.length <= 1) return;
+        const container = button.closest("[data-task-id]");
+        tasks = tasks.filter(task => task.id !== container?.dataset.taskId);
+        renderTasks();
+        saveDraft();
+      });
+      form.addEventListener("input", event => {
+        const field = event.target.closest("[data-field]");
+        if (field) {
+          const container = field.closest("[data-task-id]");
+          const task = tasks.find(item => item.id === container?.dataset.taskId);
+          if (task) {
+            task[field.dataset.field] = field.value;
+            if (field.dataset.field === "lane") {
+              const helper = field.closest(".task-field")?.querySelector("small");
+              if (helper) helper.textContent = laneFor(task)?.description || "Choose an engine and exact model.";
+            }
+          }
+        }
+        updateSummary();
+        saveDraft();
+      });
+      validateButton.addEventListener("click", validatePlan);
+      runButton.addEventListener("click", () => startRun());
+      document.getElementById("plan-workdir").addEventListener("input", () => { workdirAuto = false; });
+      document.getElementById("plan-run-name").addEventListener("input", event => {
+        if (workdirAuto) document.getElementById("plan-workdir").value = workdirFor(event.target.value);
+      });
+
+      fetch("/api/plan", {cache: "no-store"})
+        .then(response => response.json().then(payload => ({response, payload})))
+        .then(({response, payload}) => {
+          if (!response.ok || payload.error) throw new Error(payload.error || `HTTP ${response.status}`);
+          config = payload;
+          if (!config.lanes?.length) throw new Error("No model-routable worker engines are configured.");
+          restoreDraft();
+          renderTasks();
+          setStatus("Plan the work, then validate it before launch.");
+          if (new URLSearchParams(window.location.search).has("orch_task_id") || localStorage.getItem(VIEW_KEY) === "plan") {
+            selectPlan(false);
+          }
+          const query = new URLSearchParams(window.location.search);
+          const agentOps = readAgentOpsPayload();
+          const autoStartKey = agentOps && query.get("agentops_autostart") === "1"
+            ? `ringside-agentops-autostart-v1:${agentOps.id}`
+            : "";
+          if (autoStartKey && !sessionStorage.getItem(autoStartKey)) {
+            sessionStorage.setItem(autoStartKey, "starting");
+            setStatus("AgentOps handoff loaded. Starting the linked task…", "working");
+            setTimeout(() => startRun(autoStartKey), 0);
+          }
+        })
+        .catch(error => {
+          setStatus(error?.message || "Routing policy could not be loaded.", "error");
+          setBusy(true);
+        });
+    }
+
+"""
+    html = html.replace(
+        '      <button type="button" class="tab" id="models-tab" aria-selected="false">Models</button>\n',
+        plan_tab + '      <button type="button" class="tab" id="models-tab" aria-selected="false">Models</button>\n',
+        1,
+    )
+    html = html.replace("    main {\n", style + "    main {\n", 1)
+    html = html.replace('      <section id="models-panel"', panel + '      <section id="models-panel"', 1)
+    html = html.replace(
+        "    installModelsView();\n",
+        script + "    installModelsView();\n    installPlanView();\n",
+        1,
+    )
+    return html
+
+
 def read_ringside_html() -> str:
     try:
-        return inject_models_tab_into_ringside_html(RINGSIDE_HTML_PATH.read_text(encoding="utf-8"))
+        html = inject_models_tab_into_ringside_html(RINGSIDE_HTML_PATH.read_text(encoding="utf-8"))
+        return inject_plan_tab_into_ringside_html(html)
     except OSError:
         return """<!doctype html>
 <html lang="en">
@@ -4696,15 +5578,215 @@ def send_response_body(
     handler.wfile.write(body)
 
 
-def send_json_response(handler: BaseHTTPRequestHandler, data: dict[str, Any]) -> None:
+def send_json_response(
+    handler: BaseHTTPRequestHandler,
+    data: dict[str, Any],
+    *,
+    status: HTTPStatus = HTTPStatus.OK,
+) -> None:
     body = json.dumps(data, sort_keys=True).encode("utf-8")
     send_response_body(
         handler,
-        HTTPStatus.OK,
+        status,
         body,
         content_type="application/json; charset=utf-8",
         no_store=True,
     )
+
+
+def engine_accepts_model(engine: EngineConfig) -> bool:
+    return any("{model}" in item for item in engine.args_template)
+
+
+def build_hud_plan_payload(config: AppConfig) -> dict[str, Any]:
+    engines = []
+    for name, engine in sorted(config.engines.items()):
+        engines.append(
+            {
+                "name": name,
+                "model_default": engine.model_default,
+                "supports_model": engine_accepts_model(engine),
+                "supports_reasoning": any("{engine_args}" in item for item in engine.args_template),
+            }
+        )
+
+    lanes: list[dict[str, Any]] = []
+    if "opencode" in config.engines and engine_accepts_model(config.engines["opencode"]):
+        lanes.append(
+            {
+                "id": "cheap",
+                "label": "Cheap worker",
+                "engine": "opencode",
+                "model": config.engines["opencode"].model_default or "openrouter/z-ai/glm-5.2",
+                "premium": False,
+                "description": "Mechanical, tightly checked work and high-volume batches.",
+            }
+        )
+    if "claude" in config.engines and engine_accepts_model(config.engines["claude"]):
+        lanes.append(
+            {
+                "id": "claude-sonnet",
+                "label": "Claude Sonnet",
+                "engine": "claude",
+                "model": config.engines["claude"].model_default or "claude-sonnet-5",
+                "premium": False,
+                "description": "Strong implementation and review on the flat-rate Max plan.",
+            }
+        )
+        lanes.append(
+            {
+                "id": "claude-opus",
+                "label": "Claude Opus",
+                "engine": "claude",
+                "model": "claude-opus-4-8",
+                "premium": False,
+                "description": "Heavy reasoning and hard integration work; flat-rate, but slower.",
+            }
+        )
+    if "codex" in config.engines and engine_accepts_model(config.engines["codex"]):
+        lanes.append(
+            {
+                "id": "standard",
+                "label": "Standard Codex",
+                "engine": "codex",
+                "model": config.engines["codex"].model_default or "gpt-5.5",
+                "premium": False,
+                "description": "Normal implementation, fixes, and reviews.",
+            }
+        )
+        for model, label, description in (
+            ("gpt-5.6-terra", "Premium · Terra", "Escalation for difficult implementation and reasoning."),
+            ("gpt-5.6-sol", "Premium · Sol", "Escalation for the hardest review and synthesis tasks."),
+            ("gpt-5.6-luna", "Candidate · Luna", "High-volume candidate; use only with bakeoff evidence."),
+        ):
+            lanes.append(
+                {
+                    "id": model,
+                    "label": label,
+                    "engine": "codex",
+                    "model": model,
+                    "premium": True,
+                    "description": description,
+                }
+            )
+
+    return {
+        "engines": engines,
+        "lanes": lanes,
+        "task_types": list(PLAN_TASK_TYPES),
+        "defaults": {
+            "run_name": "ringer-run",
+            "workdir": str((config.state_dir / "work" / "ringer-run").resolve()),
+            "max_parallel": 2,
+            "worktrees": False,
+        },
+        "policy": {
+            "explicit_task_models": True,
+            "premium_models": sorted(PREMIUM_MODELS),
+            "premium_requires_approval": True,
+        },
+    }
+
+
+def validate_hud_plan_payload(
+    payload: Any,
+    config: AppConfig,
+    *,
+    require_premium_approval: bool,
+) -> tuple[Manifest, dict[str, Any], list[str], dict[str, Any]]:
+    if not isinstance(payload, dict):
+        raise ValueError("request body must be a JSON object")
+    manifest_obj = payload.get("manifest")
+    if not isinstance(manifest_obj, dict):
+        raise ValueError("manifest must be a JSON object")
+    agentops_autostart = payload.get("agentops_autostart", False)
+    if not isinstance(agentops_autostart, bool):
+        raise ValueError("agentops_autostart must be a boolean")
+    manifest_obj = dict(manifest_obj)
+    if agentops_autostart:
+        manifest_obj["agentops_autostart"] = True
+
+    manifest = Manifest.from_obj(manifest_obj)
+    validate_manifest_engines(manifest, config)
+    for task in manifest.tasks:
+        engine = config.engines[task.engine]
+        if engine_accepts_model(engine) and not task.model:
+            raise ValueError(
+                f"task {task.key}: choose an explicit model in the orchestration plan; "
+                "Ringside will not inherit an engine default"
+            )
+        if task.full_access and not config.allow_full_access:
+            raise ValueError(
+                f"task {task.key}: full_access is disabled by config; choose sandboxed execution"
+            )
+
+    premium_tasks = [task.key for task in manifest.tasks if task.model in PREMIUM_MODELS]
+    approved = payload.get("premium_approved") is True
+    premium_reason = str(payload.get("premium_reason") or "").strip()
+    if require_premium_approval and premium_tasks and not approved:
+        raise ValueError(
+            "premium routing is not approved; explicitly approve the premium tasks before launch"
+        )
+    if require_premium_approval and premium_tasks and not premium_reason:
+        raise ValueError("premium routing needs a short reason before launch")
+
+    findings = lint_manifest(manifest, include_model_log_nudges=True)
+    if require_premium_approval and findings:
+        raise ValueError("plan has lint findings: " + " | ".join(findings))
+
+    routing = {
+        "planned_at": utc_now_iso(),
+        "explicit_task_models": True,
+        "premium_approved": approved if premium_tasks else False,
+        "premium_reason": premium_reason if premium_tasks else "",
+        "premium_tasks": premium_tasks,
+        "task_models": {
+            task.key: {
+                "engine": task.engine,
+                "model": task.model,
+                "task_type": task.task_type,
+                "engine_args": list(task.engine_args),
+            }
+            for task in manifest.tasks
+        },
+    }
+    normalized = dict(manifest_obj)
+    normalized["routing"] = routing
+    return manifest, normalized, findings, routing
+
+
+def save_hud_plan(state_dir: Path, manifest_obj: dict[str, Any], run_name: str) -> Path:
+    plans_dir = (state_dir / "plans").resolve()
+    plans_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    base = sanitize_artifact_name(run_name)
+    path = plans_dir / f"{base}-{stamp}.json"
+    suffix = 1
+    while path.exists():
+        path = plans_dir / f"{base}-{stamp}-{suffix}.json"
+        suffix += 1
+    atomic_write_json(path, manifest_obj)
+    return path
+
+
+def launch_hud_plan(config: AppConfig, manifest_path: Path) -> subprocess.Popen[bytes]:
+    command = [sys.executable, str(Path(__file__).resolve())]
+    if config.path is not None:
+        command.extend(["--config", str(config.path)])
+    command.extend(["run", str(manifest_path)])
+    log_path = config.state_dir / "plan-launches.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_file = log_path.open("ab")
+    try:
+        return subprocess.Popen(
+            command,
+            stdout=log_file,
+            stderr=log_file,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    finally:
+        log_file.close()
 
 
 def read_json_object(path: Path, default: dict[str, Any]) -> dict[str, Any]:
@@ -4837,10 +5919,12 @@ class PersistentHudServer:
         preferred_port: int = DEFAULT_HUD_PORT,
         *,
         open_viewer: bool = True,
+        config: AppConfig | None = None,
     ) -> None:
         self.state_dir = state_dir
         self.preferred_port = preferred_port
         self.open_viewer = open_viewer
+        self.config = config
         self.httpd: ThreadingHTTPServer | None = None
         self.thread: threading.Thread | None = None
         self.port: int | None = None
@@ -4857,6 +5941,26 @@ class PersistentHudServer:
         server_ref = self
 
         class Handler(BaseHTTPRequestHandler):
+            def do_OPTIONS(self) -> None:  # noqa: N802
+                # Chrome Private Network Access: pages on public HTTPS origins
+                # (the AgentOps task drawer) preflight loopback fetches and need
+                # Access-Control-Allow-Private-Network on the OPTIONS response;
+                # the default 501 made a RUNNING Ringside read as "down" there.
+                self.send_response(HTTPStatus.NO_CONTENT)
+                self.send_header("Access-Control-Allow-Origin", self.headers.get("Origin") or "*")
+                self.send_header("Access-Control-Allow-Private-Network", "true")
+                self.send_header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+                self.send_header("Access-Control-Allow-Headers", "*")
+                self.send_header("Access-Control-Max-Age", "86400")
+                self.end_headers()
+
+            def do_HEAD(self) -> None:  # noqa: N802
+                # Liveness probes (curl -I, monitors) previously got 501.
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Access-Control-Allow-Private-Network", "true")
+                self.end_headers()
+
             def do_GET(self) -> None:  # noqa: N802
                 path = urllib.parse.urlparse(self.path).path
                 if path == "/":
@@ -4895,6 +5999,17 @@ class PersistentHudServer:
                             "error": str(exc) or exc.__class__.__name__,
                         }
                     send_json_response(self, payload)
+                    return
+                if path == "/api/plan":
+                    try:
+                        config = server_ref.config or AppConfig.load()
+                        send_json_response(self, build_hud_plan_payload(config))
+                    except Exception as exc:
+                        send_json_response(
+                            self,
+                            {"ok": False, "error": str(exc) or exc.__class__.__name__},
+                            status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                        )
                     return
                 if path.startswith("/api/open-folder"):
                     query = urllib.parse.urlparse(path).query
@@ -4958,6 +6073,78 @@ class PersistentHudServer:
                     return
                 self.send_error(HTTPStatus.NOT_FOUND)
 
+            def do_POST(self) -> None:  # noqa: N802
+                path = urllib.parse.urlparse(self.path).path
+                if path not in {"/api/plan/validate", "/api/plan/run"}:
+                    self.send_error(HTTPStatus.NOT_FOUND)
+                    return
+                content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+                if content_type != "application/json":
+                    send_json_response(
+                        self,
+                        {"ok": False, "error": "Content-Type must be application/json"},
+                        status=HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+                    )
+                    return
+                try:
+                    content_length = int(self.headers.get("Content-Length", "0"))
+                except ValueError:
+                    content_length = -1
+                if content_length <= 0 or content_length > HUD_PLAN_BODY_LIMIT_BYTES:
+                    send_json_response(
+                        self,
+                        {"ok": False, "error": "request body is empty or too large"},
+                        status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                    )
+                    return
+                try:
+                    body = self.rfile.read(content_length)
+                    payload = json.loads(body.decode("utf-8"))
+                    config = server_ref.config or AppConfig.load()
+                    manifest, normalized, findings, routing = validate_hud_plan_payload(
+                        payload,
+                        config,
+                        require_premium_approval=path == "/api/plan/run",
+                    )
+                    if path == "/api/plan/validate":
+                        send_json_response(
+                            self,
+                            {
+                                "ok": True,
+                                "ready": not findings and (not routing["premium_tasks"] or routing["premium_approved"]),
+                                "findings": findings,
+                                "routing": routing,
+                                "manifest": normalized,
+                            },
+                        )
+                        return
+                    preflight_engine_bins(manifest, config)
+                    manifest_path = save_hud_plan(state_dir, normalized, manifest.run_name)
+                    process = launch_hud_plan(config, manifest_path)
+                    send_json_response(
+                        self,
+                        {
+                            "ok": True,
+                            "run_name": manifest.run_name,
+                            "manifest_path": str(manifest_path),
+                            "pid": process.pid,
+                            "routing": routing,
+                        },
+                        status=HTTPStatus.ACCEPTED,
+                    )
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    send_json_response(
+                        self,
+                        {"ok": False, "error": f"invalid JSON: {exc}"},
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
+                except Exception as exc:
+                    send_json_response(
+                        self,
+                        {"ok": False, "error": str(exc) or exc.__class__.__name__},
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
+
             def log_message(self, _format: str, *_args: Any) -> None:
                 return
 
@@ -5012,6 +6199,22 @@ class Dashboard:
         artifact_root = state_path.parent.parent / "artifacts"
 
         class Handler(BaseHTTPRequestHandler):
+            def do_OPTIONS(self) -> None:  # noqa: N802
+                # Same Private Network Access support as the persistent HUD.
+                self.send_response(HTTPStatus.NO_CONTENT)
+                self.send_header("Access-Control-Allow-Origin", self.headers.get("Origin") or "*")
+                self.send_header("Access-Control-Allow-Private-Network", "true")
+                self.send_header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+                self.send_header("Access-Control-Allow-Headers", "*")
+                self.send_header("Access-Control-Max-Age", "86400")
+                self.end_headers()
+
+            def do_HEAD(self) -> None:  # noqa: N802
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Access-Control-Allow-Private-Network", "true")
+                self.end_headers()
+
             def do_GET(self) -> None:  # noqa: N802
                 path = urllib.parse.urlparse(self.path).path
                 if path == "/":
@@ -5092,6 +6295,67 @@ class Dashboard:
             self.thread.join(timeout=2)
 
 
+class PostgresAgentOpsClient:
+    """Durable AgentOps lifecycle calls over Ringer's trusted Postgres session."""
+
+    def __init__(self, connection: Any) -> None:
+        self._conn = connection
+
+    @staticmethod
+    def _result(cursor: Any, operation: str) -> Any:
+        row = cursor.fetchone()
+        if row is None:
+            raise RuntimeError(f"AgentOps {operation} returned no result")
+        value = row[0]
+        if isinstance(value, str):
+            with contextlib.suppress(json.JSONDecodeError):
+                return json.loads(value)
+        return value
+
+    def claim(self, task_id: str) -> Any:
+        cursor = self._conn.execute(
+            """
+            SELECT public.agentops_claim_work_v2(
+                %s::uuid, %s::text, %s::text
+            )
+            """,
+            (task_id, AGENTOPS_AGENT_ID, AGENTOPS_RUNTIME),
+        )
+        return self._result(cursor, "claim")
+
+    def submit_outcome(
+        self,
+        *,
+        task_id: str,
+        summary: str,
+        proofs: list[dict[str, Any]],
+        remaining_risks: list[str],
+        receipt_run_ids: list[str],
+        blocked: bool,
+        submission_key: str,
+    ) -> Any:
+        cursor = self._conn.execute(
+            """
+            SELECT public.agentops_submit_outcome_v2(
+                %s::uuid, %s::text, %s::jsonb, %s::text[], %s::text[],
+                %s::text, %s::text, %s::boolean, %s::text
+            )
+            """,
+            (
+                task_id,
+                summary,
+                json.dumps(proofs, sort_keys=True),
+                remaining_risks,
+                receipt_run_ids,
+                AGENTOPS_AGENT_ID,
+                AGENTOPS_RUNTIME,
+                blocked,
+                submission_key,
+            ),
+        )
+        return self._result(cursor, "outcome submission")
+
+
 class EvalLogger:
     def __init__(self, config: EvalConfig) -> None:
         self.config = config
@@ -5108,17 +6372,21 @@ class EvalLogger:
                 for key, value in row.items()
                 if key not in {"model", "reasoning_effort", "task_type", "retry"}
             }
+            db_row.setdefault("orch_task_id", None)
+            db_row.setdefault("proof_kinds", ["test"])
             try:
                 self._conn.execute(
                     """
                     INSERT INTO swarm_runs (
                         run_id, pattern, task_key, spec, worker_engine, shepherd_model,
-                        verify_method, verdict, duration_ms, worker_tokens, notes, orchestrator
+                        verify_method, verdict, duration_ms, worker_tokens, notes, orchestrator,
+                        orch_task_id, proof_kinds
                     )
                     VALUES (
                         %(run_id)s, %(pattern)s, %(task_key)s, %(spec)s, %(worker_engine)s,
                         %(shepherd_model)s, %(verify_method)s, %(verdict)s, %(duration_ms)s,
-                        %(worker_tokens)s, %(notes)s, %(orchestrator)s
+                        %(worker_tokens)s, %(notes)s, %(orchestrator)s, %(orch_task_id)s,
+                        %(proof_kinds)s
                     )
                     """,
                     db_row,
@@ -5128,6 +6396,20 @@ class EvalLogger:
                 self._fallback_reason = f"Supabase insert failed: {exc}"
                 self._close_conn()
         self._write_jsonl(row)
+
+    def agentops_client(self) -> PostgresAgentOpsClient:
+        if self.config.backend != "postgres":
+            raise RuntimeError(
+                "AgentOps autostart requires eval.backend='postgres'; "
+                "workers were not started"
+            )
+        if self._conn is None:
+            detail = self._fallback_reason or "Postgres connection is unavailable"
+            raise RuntimeError(
+                f"AgentOps autostart cannot claim its task: {detail}; "
+                "workers were not started"
+            )
+        return PostgresAgentOpsClient(self._conn)
 
     def close(self) -> None:
         self._close_conn()
@@ -8023,6 +9305,7 @@ class RingerRunner:
         identity: str,
         dashboard_enabled: bool = True,
         force_browser: bool = False,
+        agentops_client: Any | None = None,
     ) -> None:
         self.manifest = manifest
         self.config = config
@@ -8055,6 +9338,10 @@ class RingerRunner:
             else None
         )
         self.logger = EvalLogger(config.eval)
+        self.agentops_client = agentops_client
+        self._agentops_claimed = False
+        self._agentops_outcome_attempted = False
+        self._logged_attempts = 0
         self.verifier = Verifier()
         self.semaphore = asyncio.Semaphore(manifest.max_parallel)
         self.active_processes: dict[int, asyncio.subprocess.Process] = {}
@@ -8062,13 +9349,19 @@ class RingerRunner:
     async def run(self) -> int:
         self.manifest.workdir.mkdir(parents=True, exist_ok=True)
         final_state = False
+        execution_complete = False
+        exit_code = 1
         try:
+            self._claim_agentops_task()
             self.state_writer.start()
             if self.dashboard is not None:
                 self.state_writer.set_port(self.dashboard.start())
             await asyncio.gather(*(self._run_task(runtime) for runtime in self.runtimes))
             final_state = True
-            return 0 if all(runtime.status == "pass" for runtime in self.runtimes) else 1
+            execution_complete = True
+            exit_code = 0 if all(runtime.status == "pass" for runtime in self.runtimes) else 1
+            self._submit_agentops_outcome(blocked=exit_code != 0)
+            return exit_code
         except asyncio.CancelledError:
             await self.kill_all_workers()
             with self.lock:
@@ -8080,6 +9373,28 @@ class RingerRunner:
                         runtime.ended_at_monotonic = runtime.ended_at_monotonic or now
             self.state_writer.flush()
             final_state = True
+            self._submit_agentops_outcome(
+                blocked=True,
+                extra_risks=["Ringer execution was interrupted before completion."],
+            )
+            raise
+        except Exception as exc:
+            if self._agentops_claimed:
+                try:
+                    self._submit_agentops_outcome(
+                        blocked=not execution_complete or exit_code != 0,
+                        extra_risks=(
+                            []
+                            if execution_complete
+                            else [f"Ringer failed before completion: {exc}"]
+                        ),
+                    )
+                except Exception as outcome_exc:
+                    raise RuntimeError(
+                        f"{exc}; AgentOps outcome submission also failed: {outcome_exc}"
+                    ) from outcome_exc
+                if execution_complete:
+                    return exit_code
             raise
         finally:
             if final_state:
@@ -8096,6 +9411,69 @@ class RingerRunner:
                     results_page = artifact_live_path(self.state_writer.state_dir, self.manifest.run_name)
                     print(f"\nYour results: {results_page}")
                     print("Open it in a browser, or run './ringer.py hud' for the full Ringside view (http://127.0.0.1:8700).")
+
+    def _claim_agentops_task(self) -> None:
+        if not self.manifest.agentops_autostart:
+            return
+        if not self.manifest.orch_task_id:
+            raise RuntimeError(
+                "AgentOps autostart requires an existing orch_task_id; "
+                "workers were not started"
+            )
+        if self.agentops_client is None:
+            self.agentops_client = self.logger.agentops_client()
+        self.agentops_client.claim(self.manifest.orch_task_id)
+        self._agentops_claimed = True
+
+    def _submit_agentops_outcome(
+        self,
+        *,
+        blocked: bool,
+        extra_risks: list[str] | None = None,
+    ) -> None:
+        if not self._agentops_claimed or self._agentops_outcome_attempted:
+            return
+        failed_tasks = [
+            runtime.task.key for runtime in self.runtimes if runtime.status != "pass"
+        ]
+        remaining_risks = list(extra_risks or ())
+        if failed_tasks:
+            remaining_risks.append(
+                "Ringer checks did not pass for: " + ", ".join(failed_tasks)
+            )
+        status = "failed" if blocked else "passed"
+        verified_at = None if blocked else utc_now_iso()
+        proofs: list[dict[str, Any]] = []
+        for kind in self.manifest.proof_kinds:
+            proof: dict[str, Any] = {
+                "kind": kind,
+                "status": status,
+                "label": f"Ringer {kind.replace('_', ' ')} proof",
+                "required": True,
+                "detail": (
+                    f"Run {self.run_id} executed all declared checks."
+                    if not blocked
+                    else f"Run {self.run_id} did not complete all declared checks."
+                ),
+            }
+            if verified_at is not None:
+                proof["verified_at"] = verified_at
+            proofs.append(proof)
+        passed_count = sum(runtime.status == "pass" for runtime in self.runtimes)
+        summary = (
+            f"Ringer run {self.run_id} passed {passed_count}/{len(self.runtimes)} "
+            "task checks."
+        )
+        self.agentops_client.submit_outcome(
+            task_id=self.manifest.orch_task_id,
+            summary=summary,
+            proofs=proofs,
+            remaining_risks=remaining_risks,
+            receipt_run_ids=[self.run_id] if self._logged_attempts else [],
+            blocked=blocked,
+            submission_key=f"ringer:{self.manifest.orch_task_id}:{self.run_id}",
+        )
+        self._agentops_outcome_attempted = True
 
     async def kill_all_workers(self) -> None:
         procs = list(self.active_processes.values())
@@ -8558,6 +9936,8 @@ class RingerRunner:
                 "worker_tokens": worker.tokens,
                 "notes": "\n".join(notes_parts),
                 "orchestrator": self.identity,
+                "orch_task_id": self.manifest.orch_task_id or None,
+                "proof_kinds": list(self.manifest.proof_kinds),
                 "model": stamped_model,
                 "reported_model": reported_model,
                 "expected_model": expected_model,
@@ -8566,6 +9946,7 @@ class RingerRunner:
                 "retry": retrying,
             }
         )
+        self._logged_attempts += 1
 
     def _write_steering_observation(
         self,
@@ -8822,8 +10203,8 @@ def resolved_task_model(
 ) -> str:
     return (
         task.model
-        or (engine.model_default if engine else "")
         or effective_model_from_command(command or [])
+        or (engine.model_default if engine else "")
     )
 
 
@@ -9860,6 +11241,7 @@ def run_persistent_hud(config: AppConfig, *, port: int | None, open_viewer: bool
         config.state_dir,
         preferred_port=chosen_port,
         open_viewer=open_viewer,
+        config=config,
     )
     server.model_log_path = config.eval.jsonl_path
     server.default_model_log_path = config.eval.jsonl_path

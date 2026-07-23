@@ -106,10 +106,33 @@ Each task gets its own directory, its own worker, its own log, and its own verdi
 | `verified` | One plain-English sentence saying what the check proves — shown on the results page next to "finished & checked" |
 | `full_access` | Worker runs unsandboxed — required for workers that spawn their own sub-workers; must also be enabled in config |
 | `worktrees` (run-level) | Give each task an isolated git worktree of `repo` so parallel workers can't collide |
+| `orch_task_id` (run-level) | Existing AgentOps Fleet Task UUID linked to the run and its receipts |
+| `agentops_autostart` (run-level) | Marks an approved AgentOps handoff; requires `orch_task_id` and claims it before any worker starts |
+| `proof_kinds` (run-level) | Typed AgentOps proof emitted by the checks, such as `test`, `artifact`, or `deployment`; defaults to `["test"]` |
 
 > **Worktree footgun:** on PASS the task's worktree is removed — including anything written inside it. In worktrees mode, worker logs live outside task worktrees in `workdir/logs/`; have workers write deliverables outside the worktree too, or have your `check` copy artifacts out before it exits 0.
 
 Not sure what your tasks even are yet? [`docs/interview-prompt.md`](docs/interview-prompt.md) is a prompt you paste into any chatbot; it interviews you about the job and hands back a brief your orchestrating agent can turn into a manifest. Ready-made skeletons for the patterns that work live in [`templates/`](templates/).
+
+### Plan and run in Ringside
+
+Open `http://127.0.0.1:8700/` and choose **Plan / Run** to build the orchestration plan in the browser. Each task must name its task type, worker engine, exact model, reasoning level, bounded objective, executed check, proof statement, and expected files. The form validates the generated manifest before launch and saves the routing receipt under `~/.ringer/plans/`.
+
+Cheap and standard lanes are available without a spend approval. GPT-5.6 lanes are escalation choices: Ringside shows a premium gate and will not launch them until the operator explicitly approves the named tasks and records a reason. The server enforces the same policy even if a client bypasses the form.
+
+### AgentOps handoff
+
+An AgentOps autostart is a durable lifecycle, not a fire-and-forget deep link. Ringer requires an existing task UUID, atomically claims the approved task through `agentops_claim_work_v2(task, "ringer", "ringer")`, writes the manifest's typed `proof_kinds` on every `swarm_runs` receipt, and submits exactly one final outcome with an idempotency key through `agentops_submit_outcome_v2`.
+
+Autostart fails closed before workers launch when the task is missing, not approved, assigned to another runtime, or Postgres is unavailable. Configure `[eval] backend = "postgres"` and `[eval.postgres].env_file` for this path; ordinary standalone Ringer runs can continue using the local JSONL backend.
+
+For Supabase, prefer the session pooler on port 5432 when the runner does not
+have IPv6. Custom database roles use the pooler username
+`<role>.<project-ref>`; pointing Ringer at the direct
+`db.<project-ref>.supabase.co` host on an IPv4-only machine will fail before
+claiming work.
+
+`native_distribution` and `physical_acceptance` are rejected at manifest validation for now. Those proof types require build and physical-device metadata; Ringer will not emit a structurally valid-looking claim without that evidence contract.
 
 ## Lint
 
@@ -357,6 +380,7 @@ Every community PR that lands in main is credited here — that's a project rule
 - [@davekopecek](https://github.com/davekopecek) (Dave Kopecek) — committed the design-reference fixture so the design-token guard runs on every machine (#30)
 - [@snapsynapse](https://github.com/snapsynapse) (Sam Rogers) — graceful shutdown on SIGINT/SIGTERM with worker-tree cleanup and finished state, plus the 14-test end-to-end CLI regression suite (#4)
 - [@mlava](https://github.com/mlava) (Mark Lavercombe) — named setup failures across every diagnostic surface (#37) and `run --baseline`, the no-workers check preflight (#38)
+- Greg Harned — linked AgentOps task handoff and automatic Ringside execution lifecycle.
 
 Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the philosophy and what gets a PR merged fast. The short version: small and scoped, rebased on current main, every claim backed by an executed test. Authorship is always preserved — where a maintainer pushes a mechanical fix to your branch, you remain the commit author.
 
