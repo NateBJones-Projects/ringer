@@ -51,7 +51,18 @@ CONFIG_DIR_NAME = TOOL_NAME
 CONFIG_FILE_NAME = "config.toml"
 DEFAULT_ENGINE_NAME = "codex"
 DEFAULT_TIMEOUT_S = 900
-CHECK_TIMEOUT_S = 60
+# Default wall-clock budget for a task's `check` command. Kept at 60s so manifests
+# that do not opt in behave exactly as before. A check that legitimately takes longer
+# (a real `dotnet build && dotnet test`, a container start, a browser suite) must say
+# so explicitly via the task's `check_timeout_s`, or raise the floor for a whole
+# install via `check_timeout_s` in config.toml.
+DEFAULT_CHECK_TIMEOUT_S = 60
+# Hard ceiling on any resolved check timeout. The gate must always terminate: a check
+# is the thing that decides PASS, so an unbounded check is an unbounded run.
+MAX_CHECK_TIMEOUT_S = 3600
+# Backwards-compatible alias. Prefer resolve_check_timeout(); this name is retained
+# because it was the public constant before check timeouts became configurable.
+CHECK_TIMEOUT_S = DEFAULT_CHECK_TIMEOUT_S
 DEFAULT_DASHBOARD_PORT_BASE = 8787
 DEFAULT_HUD_PORT = 8700
 DEFAULT_CATALOG_SOURCE = "https://openrouter.ai/api/v1/models"
@@ -401,6 +412,9 @@ class AppConfig:
     engines: dict[str, EngineConfig]
     artifact: ArtifactConfig
     steering: SteeringConfig = field(default_factory=SteeringConfig)
+    # Install-wide default budget for check commands; a task's own
+    # `check_timeout_s` still wins. See resolve_check_timeout().
+    check_timeout_s: int = DEFAULT_CHECK_TIMEOUT_S
 
     @classmethod
     def load(cls, path: Path | None = None) -> "AppConfig":
@@ -421,6 +435,11 @@ class AppConfig:
         if dashboard_port_base <= 0:
             raise ValueError("dashboard_port_base must be positive")
         hud_port = load_hud_port(data.get("hud"))
+        check_timeout_s = int(data.get("check_timeout_s", DEFAULT_CHECK_TIMEOUT_S))
+        if check_timeout_s <= 0:
+            raise ValueError("check_timeout_s must be positive")
+        if check_timeout_s > MAX_CHECK_TIMEOUT_S:
+            raise ValueError(f"check_timeout_s must be <= {MAX_CHECK_TIMEOUT_S}")
         identity_default = optional_string(data.get("identity_default"))
         hud_app_path = optional_path(data.get("hud_app_path"))
         allow_full_access = bool(data.get("allow_full_access", False))
@@ -445,6 +464,7 @@ class AppConfig:
             engines=engines,
             artifact=artifact_config,
             steering=steering_config,
+            check_timeout_s=check_timeout_s,
         )
 
 
@@ -629,6 +649,9 @@ class TaskSpec:
     engine: str = DEFAULT_ENGINE_NAME
     expect_files: tuple[str, ...] = ()
     timeout_s: int = DEFAULT_TIMEOUT_S
+    # Wall-clock budget for this task's `check` command. None means "not specified" —
+    # the config default applies, and failing that DEFAULT_CHECK_TIMEOUT_S.
+    check_timeout_s: int | None = None
     full_access: bool = False
     engine_args: tuple[str, ...] = ()
     verified: str = ""
@@ -664,6 +687,19 @@ class TaskSpec:
         timeout_s = int(obj.get("timeout_s", DEFAULT_TIMEOUT_S))
         if timeout_s <= 0:
             raise ValueError(f"task {key}: timeout_s must be positive")
+        check_timeout_raw = obj.get("check_timeout_s")
+        check_timeout_s: int | None
+        if check_timeout_raw is None:
+            check_timeout_s = None
+        else:
+            check_timeout_s = int(check_timeout_raw)
+            if check_timeout_s <= 0:
+                raise ValueError(f"task {key}: check_timeout_s must be positive")
+            if check_timeout_s > MAX_CHECK_TIMEOUT_S:
+                raise ValueError(
+                    f"task {key}: check_timeout_s must be <= {MAX_CHECK_TIMEOUT_S} "
+                    "(a check is the gate; it must always terminate)"
+                )
         engine_args = obj.get("engine_args", [])
         if not isinstance(engine_args, list) or not all(isinstance(item, str) for item in engine_args):
             raise ValueError(f"task {key}: engine_args must be a list of strings")
@@ -683,6 +719,7 @@ class TaskSpec:
             engine=engine,
             expect_files=tuple(str(item) for item in expect_files),
             timeout_s=timeout_s,
+            check_timeout_s=check_timeout_s,
             full_access=bool(obj.get("full_access", False)),
             engine_args=tuple(engine_args),
             verified=verified.strip(),
@@ -7288,9 +7325,29 @@ def run_models_command(config: AppConfig, args: argparse.Namespace) -> int:
     return 0
 
 
+def resolve_check_timeout(
+    task: TaskSpec,
+    default_check_timeout_s: int = DEFAULT_CHECK_TIMEOUT_S,
+) -> int:
+    """Wall-clock budget for one task's check command.
+
+    Precedence: the task's explicit `check_timeout_s` > the install-wide default
+    (config.toml `check_timeout_s`) > DEFAULT_CHECK_TIMEOUT_S. Always clamped to
+    MAX_CHECK_TIMEOUT_S so the gate is guaranteed to terminate.
+    """
+    resolved = task.check_timeout_s or default_check_timeout_s or DEFAULT_CHECK_TIMEOUT_S
+    return max(1, min(int(resolved), MAX_CHECK_TIMEOUT_S))
+
+
 class Verifier:
+    def __init__(self, default_check_timeout_s: int = DEFAULT_CHECK_TIMEOUT_S) -> None:
+        self.default_check_timeout_s = default_check_timeout_s
+
     async def verify(self, task: TaskSpec, taskdir: Path) -> VerifyResult:
-        check_returncode, check_timed_out, output = await self._run_check(task.check, taskdir)
+        check_timeout_s = resolve_check_timeout(task, self.default_check_timeout_s)
+        check_returncode, check_timed_out, output = await self._run_check(
+            task.check, taskdir, check_timeout_s
+        )
         missing_files = tuple(
             rel for rel in task.expect_files if not self._is_nonempty_file(self._expect_file_path(taskdir, rel))
         )
@@ -7328,7 +7385,11 @@ class Verifier:
         return candidate if candidate.is_absolute() else taskdir / candidate
 
     @staticmethod
-    async def _run_check(command: str, cwd: Path) -> tuple[int | None, bool, str]:
+    async def _run_check(
+        command: str,
+        cwd: Path,
+        timeout_s: int = DEFAULT_CHECK_TIMEOUT_S,
+    ) -> tuple[int | None, bool, str]:
         proc = await asyncio.create_subprocess_shell(
             command,
             cwd=str(cwd),
@@ -7339,7 +7400,7 @@ class Verifier:
         )
         timed_out = False
         try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=CHECK_TIMEOUT_S)
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
         except asyncio.TimeoutError:
             timed_out = True
             terminate_process_group(proc)
@@ -7350,7 +7411,7 @@ class Verifier:
                 stdout, _ = await proc.communicate()
         output = stdout.decode("utf-8", errors="replace") if stdout else ""
         if timed_out:
-            output += f"\n[ringer.py] check timed out after {CHECK_TIMEOUT_S}s\n"
+            output += f"\n[ringer.py] check timed out after {timeout_s}s\n"
         return proc.returncode, timed_out, output
 
 
@@ -7394,7 +7455,7 @@ class RingerRunner:
             else None
         )
         self.logger = EvalLogger(config.eval)
-        self.verifier = Verifier()
+        self.verifier = Verifier(default_check_timeout_s=config.check_timeout_s)
         self.semaphore = asyncio.Semaphore(manifest.max_parallel)
         self.active_processes: dict[int, asyncio.subprocess.Process] = {}
 

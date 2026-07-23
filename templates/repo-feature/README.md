@@ -36,6 +36,10 @@ The check verifies four things: `notes.md` exists in the scratch task directory,
 
 This cannot be gamed by creating a loose artifact in the task directory because the real repo command executes in `{{REPO_PATH}}` and the git porcelain check catches unrelated edits.
 
+### Check budget
+
+Because the check runs a real build or test suite, it declares `"check_timeout_s": 1800` rather than relying on the 60-second default. A check is killed when it exceeds its budget, and a killed check reports `TIMEOUT` — indistinguishable, on the scoreboard, from a worker that produced nothing. Any kit whose check shells out to a compiler, a test runner, a container, or a browser must set this. Tune it to your suite: keep it as low as the slowest honest run allows, so a genuinely hung check still surfaces quickly.
+
 ## Mix with
 
 Use `launch-kit` before this when a standalone launch page needs to be installed into a Next.js or React repo. Use `asset-swarm` after this when the new route should be captured as real footage. Use `adversarial-review` before merge when the repo change touches auth, billing, data access, or high-visibility UI.
