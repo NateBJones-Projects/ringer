@@ -312,3 +312,42 @@ checks and raw logs support — no vibes, no worker self-reports.
 
 ## opencode / z-ai glm-5.2 (via openrouter)
 - 2026-07-09 (aicred-invoice-downloads, 4 code-fix tasks + 1 follow-up, worktrees+npm ci checks): systematic attempt-1 NO-OP — all 4 parallel workers produced zero edits and no summary on first attempt, then completed cleanly on attempt 2 after retry-prompt injection (34k-69k tokens each). Follow-up single task passed attempt 1. Suspect first-invocation session warm-up in opencode-sandboxed under parallel spawn; budget for 2 attempts on parallel GLM batches. Output quality on Next.js/Stripe route+test work: solid, spec-faithful, one boss-caught design gap (used user-scoped supabase client where RLS demanded service role — spec didn't say explicitly; say it explicitly).
+
+## Small local models via the claude engine (Anthropic-compatible endpoints)
+
+- 2026-07-24 — probe (new `claude` engine, a 27B qwen3.6 served by Ollama over a
+  LAN, `claude -p --output-format json`): two failed probe cycles before the
+  cause was isolated, then a pass. The failures were not the model's reasoning —
+  they were harness context. Headless `claude` inherits the operator's entire
+  interactive environment, and a small model cannot tell that injected
+  background apart from the task spec:
+  - Cycle 1 (no `--strict-mcp-config`): the worker inherited the operator's full
+    MCP server roster, made an unrelated tool call, hit a schema error, and
+    abandoned the task — its final answer was an essay on an unrelated topic.
+    Neither required file was written.
+  - Cycle 2 (`--strict-mcp-config` only): MCP tool calls stopped, but
+    `--strict-mcp-config` does not stop plugin hooks or the always-loaded global
+    `~/.claude/CLAUDE.md`. The worker hallucinated a blocker that reads as
+    prior-session context bleeding in (an unrelated host being unreachable),
+    then ran past the 32k output-token ceiling without finishing.
+  - Cycle 3 (`--bare` + `--strict-mcp-config`): PASS on attempt 2 of the same
+    one-task manifest, with an executed check (run the generated script, compare
+    output and SHA-256) confirming the artifact — not a worker self-report.
+    Before rewiring anything, an isolated `claude -p --bare` "reply PONG" probe
+    against the same endpoint verified the mode: harness input dropped from
+    ~16k-32k tokens per turn to ~1.2k, and the reply was correct.
+- Transferable lessons, both of which apply to any model behind this engine, not
+  just this one:
+  - Pass `--bare` **and** `--strict-mcp-config` when the worker is a small model.
+    `--bare` is the one that actually fixes it (it skips hooks, plugin sync,
+    auto-memory, and CLAUDE.md auto-discovery); `--strict-mcp-config` is
+    belt-and-suspenders, since worker tasks have no business calling the
+    operator's MCP servers regardless. The token drop is a side benefit — the
+    point is that the spec stops competing with injected context.
+  - `--bare` honors `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` even though its
+    `--help` text documents auth in that mode as strictly `ANTHROPIC_API_KEY` or
+    `apiKeyHelper` (verified 2026-07-24, claude CLI on macOS). The help text
+    reads like a blocker for alternative-endpoint setups and is not one.
+- Latency/concurrency: one local model on one box serves one request at a time,
+  so parallel lanes queue behind it. Give a local-endpoint engine 1-2 tasks per
+  batch; wider inflates wall time with no real concurrency.

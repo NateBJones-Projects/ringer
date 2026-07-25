@@ -170,6 +170,77 @@ model_report_regex = "(?m)^model:[ \\t]*([^ \\t\\r\\n]+)[ \\t]*\\r?$"
 # full_access_args = ["--no-sandbox"]
 # token_regex = '"tokens":\{"total":([0-9]+)'
 
+# Claude Code (`claude`) as a headless worker. Two ways to use this engine:
+#   1. Normal Anthropic auth — your usual `claude` login/API key. Leave the
+#      endpoint alone and set model_default to an Anthropic model slug.
+#   2. Any Anthropic-compatible /v1/messages endpoint — Ollama, LM Studio,
+#      LiteLLM, a self-hosted gateway. This is the free-worker lane: real model
+#      output with no API bill (the mock engine's no-bill purpose, but with an
+#      actual model), and the prompt never leaves hardware you control.
+# Endpoint config is machine-specific, so it lives OUTSIDE the repo: the wrapper
+# sources ~/.config/ringer/claude-engine.env if that file exists, e.g.
+#   export ANTHROPIC_BASE_URL="http://your-ollama-host:11434"
+#   export ANTHROPIC_AUTH_TOKEN="local"   # any non-empty value; local servers
+#                                         # generally ignore it
+#   export ANTHROPIC_API_KEY=             # empty: no silent fallback to a real
+#                                         # key or to keychain/OAuth auth,
+#                                         # which is unreachable headlessly
+# With no such file, plain `claude` auth applies. Set `model` per task (or
+# model_default here) to whatever slug the endpoint serves — for Ollama, the
+# local tag, e.g. "qwen3.6:latest".
+# claude has no OS sandbox of its own (headless -p needs
+# --dangerously-skip-permissions), so `bin` points at
+# engines/claude-sandboxed.sh (macOS Seatbelt: network + reads open, writes
+# confined to the task dir, a per-run scratch dir, and claude's own state/config
+# locations: ~/.claude, ~/.claude.json, ~/.cache/claude).
+#
+# --bare and --strict-mcp-config are both load-bearing for small local models,
+# and are here rather than in the wrapper so a fully-configured Claude Code
+# worker stays possible. Probe evidence (2026-07-24, 27B qwen3.6 over Ollama —
+# see docs/MODEL-NOTES.md): headless claude otherwise inherits the operator's
+# whole interactive environment — MCP server rosters, plugin hooks, auto-memory,
+# global ~/.claude/CLAUDE.md — and a small model answers that injected context
+# instead of the task spec (an unrelated MCP tool call in one probe, a
+# hallucinated blocker copied from prior-session context in the next). --bare
+# skips hooks, plugin sync, auto-memory, and CLAUDE.md auto-discovery;
+# --strict-mcp-config with no --mcp-config loads zero MCP servers. Together they
+# also drop harness overhead from 16k-32k input tokens per turn to ~1.2k.
+# Note: --bare honors ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN even though its
+# --help text documents only ANTHROPIC_API_KEY/apiKeyHelper auth (verified
+# 2026-07-24, claude CLI on macOS) — so mode 2 above works under --bare.
+# Latency/concurrency caveat for local endpoints: one local model on one box
+# serves one request at a time, so parallel Ringer lanes just queue behind it.
+# Give such an engine 1-2 tasks per batch; wider only inflates wall time.
+# Uncomment and set an absolute path for `bin` to enable.
+# [engines.claude]
+# bin = "/absolute/path/to/ringer/engines/claude-sandboxed.sh"
+# model_default = "qwen3.6:latest"
+# args_template = [
+#   "{taskdir}",
+#   "{access_args}",
+#   "-p",
+#   "--output-format",
+#   "json",
+#   "--dangerously-skip-permissions",
+#   "--bare",
+#   "--strict-mcp-config",
+#   "--model",
+#   "{model}",
+#   "{engine_args}",
+#   "{spec}",
+# ]
+# sandbox_args = []
+# full_access_args = ["--no-sandbox"]
+# Claude's JSON has no single combined total-tokens field the way Codex and
+# OpenCode do; usage reports input_tokens and output_tokens separately.
+# output_tokens is the meaningful per-attempt count — what the model actually
+# generated. input_tokens is dominated by harness context and swings with that,
+# not with task difficulty.
+# token_regex = '"output_tokens":\s*([0-9]+)'
+# modelUsage.canonicalModel self-reports the exact slug served, so scoreboard
+# attribution stays exact even when the endpoint is a local server.
+# model_report_regex = '"canonicalModel":"([^"]+)"'
+
 [artifact]
 # Zero-LLM, self-contained HTML artifacts rendered directly from state — no model calls, no
 # network. Three files per config, all pure stdlib templates:
