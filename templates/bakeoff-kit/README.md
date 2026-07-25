@@ -32,6 +32,26 @@ ringer-bakeoff-kit/
 Everything runs locally. The validator uses Python 3.11 or newer, imports only
 the standard library, and makes no network calls.
 
+## About score-sheet.csv — do not re-enter what Ringer already tracks
+
+Eight of the fourteen columns are already computed for you on the **Models view
+in Ringside** (`./ringer.py hud`, then switch to Models), built from your own
+attempt history:
+
+`exact_model_id` · `lab` · `harness` · `provider_or_plan` ·
+`first_try_acceptance` · `acceptance_after_retry` · `total_duration` ·
+`reported_tokens`
+
+Copy those across, or just read them there. The six that are genuinely yours to
+fill are the ones Ringer cannot see:
+
+`case_type` · `ringer_commit` · `human_repair_minutes` · `provider_charge` ·
+`tool_and_infrastructure_cost` · `failure_type`
+
+That split is the point of the sheet. Ringer knows what happened; it does not
+know what it cost you. The money and the minutes are what turn a pass rate into
+a business decision.
+
 ## Prove the checker
 
 Go to the included kit and run the known-good fixture:
