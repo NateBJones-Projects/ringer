@@ -1,0 +1,24 @@
+{
+  "schema_version": 3,
+  "run_name": "jac-3443-planned-retirement-remediation-v2",
+  "workdir": "/private/tmp/ringer-jac-3443-retirement-remediation-v2",
+  "max_parallel": 1,
+  "worktrees": false,
+  "default_engine": "codex",
+  "identity": "aegis",
+  "tasks": [
+    {
+      "key": "planned-retirement-successor-v2",
+      "task_type": "planning",
+      "engine": "codex",
+      "model": "gpt-5.6-luna",
+      "engine_args": ["-c", "model_reasoning_effort=high"],
+      "timeout_s": 600,
+      "full_access": false,
+      "spec": "You are a read-only planning agent. Do not modify any repository, tracker, service, runtime, or host. Write one substantive Markdown deliverable named plan-planned-retirement.md in the current task directory.\n\nThis is a versioned remediation of the planned_retirement_successor task from run jac-3443-luna-high-planning-v1-20260715T002005Z-p84371. That run reached a durable terminal failure after its permitted attempts. The original check output was exactly: [ringer] check failed silently (exit 1, no output). Prefer checks that print WHY they fail — the retry prompt and the eval log both depend on it. Independent diagnosis found that the prior artifact existed and was substantive (30,559 bytes), but its wording did not contain the exact lowercase literal repeat-sweep required by the executable contract. Do not claim the prior run passed and do not mutate or reuse its task directory.\n\nProduce a self-contained successor plan for retiring the rogue-artifact adjudication state after approved salvage. It must define: (1) the planned-retirement successor transition and immutable predecessor record; (2) exact repeat-sweep boundaries, including the literal lowercase phrase repeat-sweep, clean convergence, governed convergence, pass/time budgets, owner/blocker/decision-path requirements, and straggler handling; (3) a post-retirement operational checklist with explicit owners, timing, evidence, failure routing, and delivery-state labels; (4) rollback and abort rules; (5) fixed Aegis-first then Talaris restart sequencing; and (6) a final approval boundary. The plan must remain planning-only and explicitly state that salvage, merges, cleanup, tracker mutations, service restarts, and deployment require separate human approval. End at that approval boundary.",
+      "check": "set -eu; f=plan-planned-retirement.md; if [ ! -s \"$f\" ]; then echo 'FAIL: plan-planned-retirement.md is missing or empty' >&2; exit 1; fi; for term in 'planned-retirement' 'repeat-sweep' 'convergence' 'operational checklist' 'rollback' 'Aegis' 'Talaris' 'approval boundary'; do if ! grep -Fiq -- \"$term\" \"$f\"; then printf 'FAIL: required phrase missing: %s\\n' \"$term\" >&2; exit 1; fi; done; bytes=$(wc -c < \"$f\" | tr -d ' '); if [ \"$bytes\" -lt 4000 ]; then printf 'FAIL: plan is too small: %s bytes\\n' \"$bytes\" >&2; exit 1; fi; printf 'EXECUTED_CHECK=PASS planned-retirement-remediation bytes=%s\\n' \"$bytes\"",
+      "expect_files": ["plan-planned-retirement.md"],
+      "verified": "The successor plan explicitly covers repeat-sweep convergence, operational gates, rollback, ordered host restart, and the final human approval boundary."
+    }
+  ]
+}

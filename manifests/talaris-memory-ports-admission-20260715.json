@@ -1,0 +1,37 @@
+{
+  "run_name": "talaris-memory-ports-admission-20260715",
+  "workdir": "/Users/hermes/ringer/jobs/talaris-memory-ports-admission-20260715",
+  "max_parallel": 2,
+  "_purpose": "Read-only admission for Beads hermes-w5kk, hermes-2wn4, and hermes-24i8. Verify the premises before any Talaris memory-service mutation.",
+  "_safety": {
+    "control_plane_authority": "read_only",
+    "live_mutation": false,
+    "credential_access": false,
+    "dispatch_rule": "Inspect only non-secret process, launchd, config-path, script, endpoint, and network-namespace evidence. Do not edit, restart, unload, bootstrap, claim, close, or synchronize anything."
+  },
+  "tasks": [
+    {
+      "key": "ob1-network-topology",
+      "task_type": "system-diagnosis",
+      "engine": "codex",
+      "model": "gpt-5.6-sol",
+      "timeout_s": 900,
+      "engine_args": ["-c", "model_reasoning_effort=medium"],
+      "expect_files": ["ob1-network-topology.json"],
+      "spec": "You are an independent read-only network and service investigator. The target is Talaris, reachable as ssh talaris. Assess Beads hermes-w5kk and hermes-2wn4, both titled Fix OB1 port conflict on Talaris; hermes-2wn4 claims Talaris localhost:8787 conflicts with Aegis localhost:8787 and proposes 8788. Do not accept that premise. Collect live non-secret evidence: host identities, listener ownership on both machines, loopback binding semantics, current health from Aegis and Talaris, and any SSH forwarding or remote URL configuration that could create an actual collision. Do not read secrets or print environment values. Write ./ob1-network-topology.json as valid JSON with schema_version, checked_at, beads, duplicate_relationship, aegis (hostname, probes, listener_evidence), talaris (hostname, probes, listener_evidence), forwarding_evidence, conflict_definition, observed_conflict, conclusion, recommended_bead_disposition, safe_followup, commands_run, and caveats. observed_conflict must be a boolean. Every command in commands_run must be read-only. Distinguish same numeric port on separate hosts from a genuine same-network-namespace bind collision. Make no changes anywhere.",
+      "check": "/Users/hermes/homebrew/bin/python3 -c \"import json,subprocess,sys,urllib.request; d=json.load(open('ob1-network-topology.json')); ah=json.loads(urllib.request.urlopen('http://127.0.0.1:8787/health',timeout=5).read()); th=json.loads(subprocess.check_output(['ssh','-o','BatchMode=yes','talaris','curl -fsS --max-time 5 http://127.0.0.1:8787/health'],text=True)); req=['schema_version','checked_at','beads','duplicate_relationship','aegis','talaris','conflict_definition','conclusion','recommended_bead_disposition','commands_run']; miss=[k for k in req if d.get(k) in (None,'',[],{})]; probes=str(d.get('aegis'))+str(d.get('talaris')); (not miss and isinstance(d.get('observed_conflict'),bool) and ah.get('ok') is True and th.get('ok') is True and '8787' in probes and all(isinstance(x,str) for x in d.get('commands_run',[]))) or sys.exit('FAIL missing=%r observed_conflict=%r aegis=%r talaris=%r' % (miss,d.get('observed_conflict'),ah,th)); print('OB1 topology report verified against fresh healthy :8787 probes on both independent hosts')\"",
+      "verified": "The report is schema-valid and its topology conclusion is checked against fresh health probes to localhost:8787 on both Aegis and Talaris."
+    },
+    {
+      "key": "hindsight-bind-audit",
+      "task_type": "configuration-audit",
+      "engine": "opencode",
+      "model": "ollama/qwen3-coder:30b",
+      "timeout_s": 900,
+      "expect_files": ["hindsight-bind-audit.json"],
+      "spec": "You are an independent read-only launchd and process investigator. The target is Talaris, reachable as ssh talaris. Assess Bead hermes-24i8, which claims a Hindsight daemon flag says 9177 while the service binds 8888 and proposes normalization to 8888. Inspect only non-secret metadata: live health on likely ports, listener/process command lines, relevant launchd plist labels and ProgramArguments, and referenced script/config paths. Never dump environment variables, credential files, API keys, or file contents unrelated to the bind/port setting. Determine whether 9177 is active configuration, stale documentation, a wrapper argument, an ignored flag, or an unsupported assumption. Write ./hindsight-bind-audit.json as valid JSON with schema_version, checked_at, bead, talaris_hostname, endpoint_probes, listener_evidence, process_evidence, launchd_evidence, script_or_config_evidence, configured_port_claim, observed_bind_port, mismatch_verified, root_cause, minimal_reversible_fix, no_change_option, executable_verification_plan, rollback, commands_run, and caveats. mismatch_verified must be a boolean. The fix is a proposal only. Make no edits and do not restart or signal any process.",
+      "check": "/Users/hermes/homebrew/bin/python3 -c \"import json,subprocess,sys; d=json.load(open('hindsight-bind-audit.json')); live=json.loads(subprocess.check_output(['ssh','-o','BatchMode=yes','talaris','curl -fsS --max-time 5 http://127.0.0.1:8888/health'],text=True)); req=['schema_version','checked_at','bead','talaris_hostname','endpoint_probes','listener_evidence','process_evidence','launchd_evidence','configured_port_claim','observed_bind_port','root_cause','minimal_reversible_fix','executable_verification_plan','rollback','commands_run']; miss=[k for k in req if d.get(k) in (None,'',[],{})]; (not miss and isinstance(d.get('mismatch_verified'),bool) and str(d.get('observed_bind_port'))=='8888' and live.get('status')=='healthy' and all(isinstance(x,str) for x in d.get('commands_run',[]))) or sys.exit('FAIL missing=%r mismatch=%r bind=%r live=%r' % (miss,d.get('mismatch_verified'),d.get('observed_bind_port'),live)); print('Hindsight bind report verified against fresh healthy Talaris :8888 probe')\"",
+      "verified": "The report is schema-valid and its observed bind is independently checked against a fresh Talaris Hindsight health probe on localhost:8888."
+    }
+  ]
+}

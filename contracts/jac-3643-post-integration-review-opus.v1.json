@@ -1,0 +1,23 @@
+{
+  "receipt_version": 1,
+  "receipt_id": "cr-01KZX7R6Q8M4H2C9V5T3N1P0AB",
+  "verdict": "PASS",
+  "contract_sha256": "0f9857b4287e728c7d2f5aede5fdf5de19886f041a9355e4b0c0a21a01d593a9",
+  "reviewed_at": "2026-07-17T03:33:45Z",
+  "reviewer": {
+    "provider": "anthropic",
+    "model": "claude-opus-4-8",
+    "family": "claude-4.8",
+    "runtime": "claude-cli-2.1.195"
+  },
+  "harness_attestation": "fresh session fbea47e5-2912-4e8b-872c-d7160a18917a reviewed 874ac17370e84a2fd613651fbb78b4861233c7d1..71dd9ca0c754b4223e0d3d452f7d1ff2ec67bb3d; CLI JSON modelUsage attested claude-opus-4-8; subtype=success; no fallback",
+  "requirement_gaps": [],
+  "required_changes": [],
+  "advisories": [
+    "The read-only Judge could inspect files but its restricted Bash allowlist blocked independent pytest/hash execution; the orchestrator's executable evidence and pre-dispatch review remain authoritative.",
+    "Add a defense-in-depth contract-review assertion inside RingerRunner for future programmatic callers that bypass main().",
+    "The two baseline failures are unrelated: a missing external design-reference file and a date-sensitive scoreboard assertion.",
+    "Memoizing Manifest.contract_sha256 could avoid redundant serialization; correctness is unaffected.",
+    "Document that template_unfilled is advisory-only; placeholder/hash/cross-family/harness validation is the actual gate."
+  ]
+}

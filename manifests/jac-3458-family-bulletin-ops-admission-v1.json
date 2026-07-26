@@ -1,0 +1,37 @@
+{
+  "schema_version": 3,
+  "run_name": "jac-3458-family-bulletin-ops-admission-v1",
+  "workdir": "/private/tmp/ringer-jac-3458-family-bulletin-ops-admission-v1",
+  "max_parallel": 1,
+  "worktrees": false,
+  "default_engine": "codex",
+  "identity": "aegis",
+  "_correlation": {
+    "paperclip_issue": "JAC-3458",
+    "bead_ref": "notes-io59y.3.7",
+    "project": "Agentic OS",
+    "mode": "read-only-admission"
+  },
+  "tasks": [
+    {
+      "key": "ops-runbook-admission",
+      "task_type": "planning",
+      "engine": "codex",
+      "model": "gpt-5.6-sol",
+      "engine_args": [
+        "-c",
+        "model_reasoning_effort=high"
+      ],
+      "timeout_s": 900,
+      "full_access": false,
+      "paperclip_issue": "JAC-3458",
+      "bead_id": "notes-io59y.3.7",
+      "spec": "You are the read-only admission planner for Paperclip JAC-3458 / Bead reference notes-io59y.3.7: Add health, observability, operator runbook, and recovery documentation for Family Bulletin in Agentic OS. Do not modify repositories, services, launchd, routing, Paperclip, Beads, calendars, vaults, or memory systems. Do not deploy. Write exactly one substantive Markdown artifact named ./family-bulletin-ops-runbook-plan.md in the current task directory. The plan must be self-contained and implementation-ready. It must define Health, Observability, Backup, Restore, Kill switch, Rollback, Source ownership, Proposal-only boundary, Public/private separation, Monitoring hooks, Commands, Evidence, and Fresh Judge. Every proposed command must be safe to copy, identify its target host and path, state expected output or exit condition, and avoid secret or family-content disclosure. Health must be non-content and expose no family content. Define logs and metrics without private payloads; deterministic backup/restore evidence; reversible kill-switch and rollback procedures; ownership boundaries; stale/failure behavior; and a non-content health monitor. Explicitly state that this artifact is proposal-only and that implementation, deployment, service mutation, tracker mutation, and source-tree writes require separate human approval. The future fresh Judge must use a non-local model route: explicitly prohibit local Qwen for both implementation execution and judging, name the intended Judge as an independent Codex gpt-5.6-sol lane (or another separately approved non-local frontier route), require its model/identity and run ID in evidence, and require executed checks rather than summaries. Include an ordered implementation sequence, acceptance matrix, rollback matrix, and exact evidence bundle. Do not claim JAC-3458 complete.",
+      "check": "set -eu; f=family-bulletin-ops-runbook-plan.md; if [ ! -s \"$f\" ]; then echo 'FAIL: family-bulletin-ops-runbook-plan.md is missing or empty' >&2; exit 1; fi; bytes=$(wc -c < \"$f\" | tr -d ' '); if [ \"$bytes\" -lt 5000 ]; then printf 'FAIL: plan is too small: %s bytes (minimum 5000)\\n' \"$bytes\" >&2; exit 1; fi; for term in 'Health' 'Observability' 'Backup' 'Restore' 'Kill switch' 'Rollback' 'Source ownership' 'Proposal-only boundary' 'Public/private separation' 'Monitoring hooks' 'Commands' 'Evidence' 'Fresh Judge' 'no family content' 'separate human approval' 'local Qwen' 'gpt-5.6-sol' 'run ID' 'executed checks'; do if ! grep -Fiq -- \"$term\" \"$f\"; then printf 'FAIL: required phrase missing: %s\\n' \"$term\" >&2; exit 1; fi; done; if ! grep -Eiq 'implementation.*deployment.*tracker.*separate human approval|separate human approval.*implementation' \"$f\"; then echo 'FAIL: approval boundary does not explicitly cover implementation/deployment/tracker writes' >&2; exit 1; fi; printf 'EXECUTED_CHECK=PASS JAC-3458 admission plan bytes=%s non-content-health-and-nonlocal-judge-contract=verified\\n' \"$bytes\"",
+      "expect_files": [
+        "family-bulletin-ops-runbook-plan.md"
+      ],
+      "verified": "The read-only JAC-3458 admission plan is substantive, covers every required operations and recovery boundary, explicitly forbids family content in health, preserves the human change gate, and specifies an independent non-local fresh Judge with executed evidence."
+    }
+  ]
+}

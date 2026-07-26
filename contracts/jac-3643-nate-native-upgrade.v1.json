@@ -1,0 +1,120 @@
+{
+  "contract_version": "ringer-fleet-contract.v1",
+  "contract_id": "jac-3643-nate-native-upgrade-v1",
+  "title": "Upgrade fleet to the Nate-native Ringer + Paperclip pattern",
+  "authority": {
+    "bead": "notes-hbq1q",
+    "paperclip_issue": "JAC-3643",
+    "lifecycle_ssot": "beads",
+    "knowledge_ssot": "vault",
+    "execution_evidence": "ringer",
+    "trigger_and_telemetry_projection": "paperclip",
+    "observation_only": "ringside"
+  },
+  "risk": "high",
+  "orchestrator": {
+    "provider": "openai",
+    "model": "gpt-5.6-sol",
+    "runtime": "openai-codex",
+    "attestation": "openclaw session_status for agent:local:main:thread:7618822262:40264"
+  },
+  "purpose": "Make Ringer a frontier-orchestrated, executable-evaluation, economical-worker control loop whose immutable receipts improve later routing. Paperclip records triggers, progress, and work products without becoming lifecycle authority.",
+  "requirements": [
+    "Add optional run-level risk, orchestrator, and contract_review metadata to Ringer manifests without breaking existing manifests.",
+    "Compute a deterministic SHA-256 contract hash from the semantic worker contract: run name plus each task key, spec, check, expected files, engine, model, task type, and verification sentence.",
+    "Expose the risk, orchestrator metadata, contract-review metadata, and contract hash in live/final run state and attempt evidence.",
+    "For high or critical risk, lint must report a finding unless a cross-family reviewer is harness-attested and has a PASS verdict. A semantic reviewer can veto green checks but can never turn a red executable check into PASS.",
+    "Ship a reusable Nate-native template and fleet policy describing canonical, contract-reviewed, semantic-review, and bakeoff modes.",
+    "Keep the one-retry rule and inject raw failure output into that retry. Do not add indefinite retries.",
+    "Use existing task_type/model scoreboard data for worker selection; do not encode a permanent global model ranking.",
+    "Keep Ringside observational and Paperclip non-authoritative. No new queue, dispatch gate, or lifecycle ledger is allowed.",
+    "Preserve backwards compatibility for existing tests, manifests, hooks, receipts, and dashboard consumers."
+  ],
+  "implementation_lanes": [
+    {
+      "key": "core-contract-metadata",
+      "worker": {
+        "engine": "codex",
+        "model": "gpt-5.4-mini",
+        "selection_evidence": "Ringer scoreboard: code-feature 23 tasks, 23 first-try passes"
+      },
+      "owned_paths": [
+        "ringer.py",
+        "tests/test_contract_metadata.py"
+      ],
+      "deliverable": "A binary-applicable patch exported outside the worker worktree."
+    },
+    {
+      "key": "policy-and-template",
+      "worker": {
+        "engine": "codex",
+        "model": "gpt-5.4-mini",
+        "selection_evidence": "Ringer scoreboard: code-feature 23 tasks, 23 first-try passes"
+      },
+      "owned_paths": [
+        "docs/nate-native-fleet-policy.md",
+        "schema/ringer-contract-review.v1.json",
+        "templates/frontier-worker-loop/README.md",
+        "templates/frontier-worker-loop/manifest.json",
+        "tests/test_frontier_worker_template.py"
+      ],
+      "deliverable": "A binary-applicable patch exported outside the worker worktree."
+    }
+  ],
+  "worker_boundaries": [
+    "Each worker receives this complete contract plus only its owned paths and must leave changes uncommitted.",
+    "Workers run in isolated Git worktrees and may not push, merge, restart services, edit Paperclip state, or touch the hot Aegis checkout.",
+    "The orchestrator integrates exported patches only after the task-local executable check passes.",
+    "A worker cannot declare completion; Ringer's executed check decides PASS or FAIL.",
+    "A failed task receives exactly one retry with Ringer's raw verifier output."
+  ],
+  "contract_review": {
+    "required": true,
+    "reviewer_provider": "anthropic",
+    "reviewer_model": "claude-opus-4-8",
+    "reviewer_runtime": "claude-cli",
+    "required_verdict": "PASS",
+    "review_scope": [
+      "requirement completeness",
+      "authority-boundary safety",
+      "backwards compatibility",
+      "testability and falsifiers",
+      "worker collision boundaries",
+      "receipt sufficiency"
+    ]
+  },
+  "acceptance": [
+    "The frozen contract receives a fresh, harness-attested Claude Opus 4.8 PASS before worker dispatch.",
+    "Ringer lint accepts the concrete upgrade manifest and reports no finding that undermines executable verification or worker isolation.",
+    "Both gpt-5.4-mini worker tasks PASS under Ringer; any failure is retried at most once with raw verifier output.",
+    "The two exported patches apply cleanly to the isolated integration branch.",
+    "Targeted tests for contract metadata and the template pass.",
+    "The complete Ringer test suite passes from the integrated branch.",
+    "A fresh cross-family semantic review of the integrated diff returns PASS; it may not override a red test.",
+    "A real post-integration Ringer canary linked to JAC-3643 and notes-hbq1q emits a finished state containing the contract hash and attested identities.",
+    "Paperclip comments/work products and Ringside API readback point to the same immutable run/receipt and do not claim lifecycle authority.",
+    "The implementation commit, artifact hashes, verification commands, and rollback command are captured in a durable handoff."
+  ],
+  "falsifiers": [
+    "Existing manifests fail to parse or existing tests regress.",
+    "High/critical manifests can silently omit an independent PASS contract review.",
+    "The contract hash changes when JSON key order changes but semantic task fields do not.",
+    "Paperclip or Ringside becomes an authoritative lifecycle store or blocks dispatch.",
+    "A worker writes outside its owned paths or the hot checkout is mutated before integration.",
+    "A semantic review turns a failed executable check into PASS.",
+    "A retry occurs more than once or omits raw failure context."
+  ],
+  "integration": {
+    "branch": "feat/nate-native-ringer-paperclip-20260716",
+    "base_commit": "8c837910840fd6f4dac8c3792a48fd4624a14d8c",
+    "deploy_mode": "content-addressed additive deployment after commit and full verification",
+    "rollback": "Revert the isolated implementation commit and restore the prior live Ringer file set; do not reset or clean the dirty Aegis checkout."
+  },
+  "out_of_scope": [
+    "Cold restart of Paperclip, Ringside, Aegis, or Talaris.",
+    "Changing Beads or Vault authority.",
+    "Implementing the separate Obsidian CLI projection design.",
+    "Making Analyst-Opus, Sol, Luna, or any worker model a permanent global default.",
+    "Replacing executable checks with model opinion."
+  ]
+}

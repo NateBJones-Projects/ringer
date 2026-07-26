@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/JackReis/ringer/schema/launch-receipt.v1.json",
+  "title": "Fleet launch receipt v1",
+  "description": "One append-only JSONL line per launch lifecycle event. Latest line per receipt_id wins. Fields may contain identities, IDs, hashes, paths, and coarse capability classes only — never prompt text, URLs with query strings, tokens, authorization codes, OAuth state, PKCE material, cookies, or headers.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["receipt_version", "receipt_id", "event", "emitted_at", "host", "launcher"],
+  "properties": {
+    "receipt_version": { "const": 1 },
+    "receipt_id": {
+      "type": "string",
+      "pattern": "^lr-[0-9A-HJKMNP-TV-Z]{26}$",
+      "description": "lr- prefix plus a 26-character Crockford-base32 ULID."
+    },
+    "event": {
+      "type": "string",
+      "enum": ["launched", "bound", "completed", "failed", "abandoned"]
+    },
+    "emitted_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+    },
+    "host": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "launcher": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["identity", "kind"],
+      "properties": {
+        "identity": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "kind": {
+          "type": "string",
+          "enum": ["human", "agent", "orchestrator", "scheduler"]
+        },
+        "pid": { "type": ["integer", "null"], "minimum": 1 },
+        "run_id": { "type": ["string", "null"], "maxLength": 200 },
+        "session_id": { "type": ["string", "null"], "maxLength": 200 }
+      }
+    },
+    "launched": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "entrypoint", "cwd"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["claude-code-session", "worker", "command"]
+        },
+        "entrypoint": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "session_id": {
+          "type": ["string", "null"],
+          "maxLength": 200,
+          "description": "Null at launch; a follow-up 'bound' line fills it once the child's own session id is known."
+        },
+        "model": { "type": ["string", "null"], "maxLength": 200 },
+        "cwd": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "permission_mode": {
+          "type": ["string", "null"],
+          "enum": ["default", "plan", "bypassPermissions", "full_access", "sandbox", null]
+        },
+        "prompt_sha256": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "SHA-256 of the prompt/spec text. Hash only — the text itself is never recorded."
+        }
+      }
+    },
+    "work": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["intent"],
+      "properties": {
+        "bead_id": {
+          "type": ["string", "null"],
+          "maxLength": 120,
+          "description": "Reference only, validated opportunistically — never a join dependency; the bead may not be resolvable on the emitting host."
+        },
+        "intent": { "type": "string", "minLength": 1, "maxLength": 140 }
+      }
+    },
+    "side_effect_grants": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "string",
+        "maxLength": 120,
+        "pattern": "^[A-Za-z0-9*:_.-]+$",
+        "description": "Coarse capability classes only (e.g. mcp-oauth:cloudflare:*, engine:full-access). The pattern forbids slashes, spaces, '?', and '=' so URLs and query fragments cannot fit."
+      }
+    },
+    "notes": { "type": "string", "maxLength": 180 }
+  },
+  "if": { "properties": { "event": { "const": "launched" } } },
+  "then": { "required": ["launched", "work"] }
+}

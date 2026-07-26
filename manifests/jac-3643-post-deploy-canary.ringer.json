@@ -1,0 +1,31 @@
+{
+  "run_name": "jac-3643-post-deploy-canary",
+  "workdir": "/Users/hermes/.ringer/work/jac-3643/canary-final",
+  "risk": "medium",
+  "orchestrator": {
+    "provider": "openai",
+    "model": "gpt-5.6-sol",
+    "family": "gpt-5.6",
+    "runtime": "openclaw-codex",
+    "attestation": "OpenClaw selected openai/gpt-5.6-sol at xhigh for the JAC-3643 integration session"
+  },
+  "max_parallel": 1,
+  "worktrees": false,
+  "tasks": [
+    {
+      "key": "post-deploy-canary",
+      "engine": "codex",
+      "model": "gpt-5.4-mini",
+      "task_type": "ringer-canary",
+      "paperclip_issue": "JAC-3643",
+      "bead_id": "notes-hbq1q",
+      "spec": "You are the economical worker for the post-deployment Ringer canary. In the current task directory, create only canary.json. It must be a JSON object with exactly these string fields and values: status=ready, issue=JAC-3643, pattern=nate-native, authority=executable-check. Do not edit any other file. Do not claim PASS; the executable check decides.",
+      "check": "python3 -c 'import json; from pathlib import Path; expected = {\"status\": \"ready\", \"issue\": \"JAC-3643\", \"pattern\": \"nate-native\", \"authority\": \"executable-check\"}; actual = json.loads(Path(\"canary.json\").read_text(encoding=\"utf-8\")); failures = [] if actual == expected else [\"canary.json must equal the frozen expected object\"]; print(\"FAIL: \" + \"; \".join(failures) if failures else \"PASS: exact canary object verified\"); raise SystemExit(1 if failures else 0)'",
+      "expect_files": [
+        "canary.json"
+      ],
+      "timeout_s": 600,
+      "verified": "The canary file parses as JSON and exactly equals the four-field frozen object; the check prints a named failure and exits nonzero on drift."
+    }
+  ]
+}

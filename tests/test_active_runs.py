@@ -14,7 +14,9 @@ sys.path.insert(0, str(ROOT))
 from ringer import (  # noqa: E402
     active_runs_path,
     read_active_runs,
+    read_active_runs_file,
     register_active_run,
+    scan_hud_run_states,
     unregister_active_run,
 )
 
@@ -84,6 +86,51 @@ class ActiveRunsTests(unittest.TestCase):
         register_active_run("live-run", "agent-a", "Live", Path(self.tmp.name))
         data = json.loads(marker.read_text(encoding="utf-8"))
         self.assertEqual(["live-run"], sorted(data))
+
+    def test_hud_active_reader_prunes_dead_pids(self) -> None:
+        marker = active_runs_path()
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(
+            json.dumps(
+                {
+                    "dead-run": {
+                        "pid": 99999999,
+                        "identity": "old",
+                        "run_name": "Dead",
+                        "workdir": str(Path(self.tmp.name) / "dead"),
+                        "started_at": "2026-07-05T00:00:00+00:00",
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        self.assertEqual({}, read_active_runs_file())
+        self.assertEqual({}, json.loads(marker.read_text(encoding="utf-8")))
+
+    def test_hud_projects_orphaned_live_state_as_died(self) -> None:
+        state_dir = Path(self.tmp.name) / "state"
+        runs_dir = state_dir / "runs"
+        runs_dir.mkdir(parents=True)
+        state_path = runs_dir / "orphaned-run.json"
+        state_path.write_text(
+            json.dumps(
+                {
+                    "run_id": "orphaned-run",
+                    "run_name": "Orphaned",
+                    "identity": "old",
+                    "state": "live",
+                    "finished": False,
+                    "pid": 99999999,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        runs = scan_hud_run_states(state_dir)
+        self.assertEqual(1, len(runs))
+        self.assertEqual("died", runs[0]["state"])
+        self.assertEqual("live", json.loads(state_path.read_text(encoding="utf-8"))["state"])
 
 
 if __name__ == "__main__":

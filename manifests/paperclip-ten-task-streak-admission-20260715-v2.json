@@ -1,0 +1,25 @@
+{
+  "schema_version": 3,
+  "run_name": "paperclip-ten-task-streak-admission-20260715-v2",
+  "workdir": "/private/tmp/ringer-paperclip-ten-task-streak-admission-20260715-v2",
+  "max_parallel": 1,
+  "worktrees": false,
+  "default_engine": "codex",
+  "identity": "aegis",
+  "tasks": [
+    {
+      "key": "independent_live_protocol_gate",
+      "task_type": "planning",
+      "engine": "codex",
+      "model": "gpt-5.5",
+      "engine_args": ["-c", "model_reasoning_effort=high"],
+      "timeout_s": 600,
+      "full_access": false,
+      "bead_id": "hermes-jxk0",
+      "spec": "Perform a fresh, independent, read-only admission gate for Bead hermes-jxk0. Do not mutate Paperclip, Beads, repositories, services, or configuration. Query the live Paperclip API using the absolute executable /usr/bin/curl at http://127.0.0.1:3100/api for company 87c32b8e-f131-4df8-ad8e-963d01b458e7. Inspect current issues plus enough agent/run state to decide whether ten DISTINCT agent-safe Paperclip issues can be executed consecutively now. Write exactly one artifact named streak-gate.md. It must contain these exact headings: # Verdict, ## Live evidence, ## Eligibility rules, ## Sequential execution protocol, ## Reset conditions, ## Receipt schema, ## Current candidate assessment, ## Safe next action. Immediately after # Verdict, state exactly ADMIT or HOLD on its own nonblank line. ADMIT is allowed only if at least ten distinct currently actionable, non-personal, non-running issues with safe autonomous completion paths are proven live. Include these exact literal contract phrases somewhere in the artifact: one-at-a-time; pre/post live read-back; successful terminal run state; done issue state; zero adapter/runtime errors; reset to zero; issue UUID; run UUID; sequence number; personal/human-owned; blocked issues; already-running; synthetic repetitions; duplicate IDs. The sequential protocol must require immutable evidence and one-at-a-time execution. The reset rule must reset the entire streak to zero after any error. The receipt schema must include issue UUID, identifier, agent UUID, run UUID, start/end timestamps, terminal state, exit code, error reason, evidence path, and sequence number. Exclude personal/human-owned work, blocked issues, already-running work, synthetic repetitions, duplicates, and unsafe or approval-gated work. Never print or store credentials. Do not claim task execution occurred; this is only an admission gate. Be conservative and factual.",
+      "check": "set -eu; f=streak-gate.md; test -s \"$f\" || { echo 'FAIL: streak-gate.md missing or empty' >&2; exit 1; }; for heading in '# Verdict' '## Live evidence' '## Eligibility rules' '## Sequential execution protocol' '## Reset conditions' '## Receipt schema' '## Current candidate assessment' '## Safe next action'; do grep -Fxq -- \"$heading\" \"$f\" || { printf 'FAIL: missing exact heading: %s\\n' \"$heading\" >&2; exit 1; }; done; for term in 'one-at-a-time' 'pre/post live read-back' 'successful terminal run state' 'done issue state' 'zero adapter/runtime errors' 'reset to zero' 'issue UUID' 'run UUID' 'sequence number' 'personal/human-owned' 'blocked issues' 'already-running' 'synthetic repetitions' 'duplicate IDs'; do grep -Fiq -- \"$term\" \"$f\" || { printf 'FAIL: missing required contract phrase: %s\\n' \"$term\" >&2; exit 1; }; done; verdict=$(awk '/^# Verdict$/{getline; while ($0 ~ /^[[:space:]]*$/) getline; print; exit}' \"$f\"); case \"$verdict\" in ADMIT|HOLD) ;; *) printf 'FAIL: verdict must be ADMIT or HOLD, found: %s\\n' \"$verdict\" >&2; exit 1;; esac; bytes=$(wc -c < \"$f\" | tr -d ' '); test \"$bytes\" -ge 3000 || { printf 'FAIL: streak gate too small: %s bytes\\n' \"$bytes\" >&2; exit 1; }; printf 'EXECUTED_CHECK=PASS live-protocol-gate verdict=%s bytes=%s\\n' \"$verdict\" \"$bytes\"",
+      "expect_files": ["streak-gate.md"],
+      "verified": "A fresh independent live gate applied the strict ten-distinct-task Paperclip admission and reset contract."
+    }
+  ]
+}

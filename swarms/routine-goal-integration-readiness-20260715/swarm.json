@@ -1,0 +1,50 @@
+{
+  "schema_version": 3,
+  "run_name": "routine-goal-integration-readiness-20260715",
+  "workdir": "/private/tmp/ringer-routine-goal-integration-readiness-20260715",
+  "max_parallel": 3,
+  "worktrees": false,
+  "default_engine": "codex",
+  "identity": "aegis",
+  "tasks": [
+    {
+      "key": "source-contract-audit",
+      "task_type": "code-review",
+      "engine": "codex",
+      "model": "gpt-5.5",
+      "engine_args": ["-c", "model_reasoning_effort=high"],
+      "timeout_s": 600,
+      "full_access": false,
+      "spec": "Act as a read-only source-contract auditor. Do not modify /Users/hermes/ringer, Paperclip, Beads, git state, services, or any tracker. You may write only source-contract-audit.md in your current task directory. Inspect the live /Users/hermes/ringer checkout and the current Paperclip issue JAC-3487 at http://127.0.0.1:3100/api/issues/303e72fa-2be7-44b2-a28b-68900708da84. Evaluate the implementation state against every acceptance criterion in that issue: TaskSpec/schema support for routine_id and goal_id, manifest validation, projector behavior for issue plus Routine/Goal targets, routine-fanout template, Ringside display, and a real end-to-end run. Distinguish PRESENT, PARTIAL, MISSING, and UNVERIFIED. Cite exact file paths, symbols or line ranges, commands you actually ran, and observed outputs. Identify any dirty-tree or concurrent-work caveat. Do not claim an acceptance criterion passes without executed evidence. Include sections titled Scope, Evidence, Acceptance Matrix, Findings, Risks, and Recommended Next Gate. End with a clear READ_ONLY verdict.",
+      "check": "set -eu; f=source-contract-audit.md; if [ ! -s \"$f\" ]; then echo 'FAIL: source-contract-audit.md missing or empty' >&2; exit 1; fi; for term in 'Acceptance Matrix' 'routine_id' 'goal_id' 'projector' 'Ringside' 'READ_ONLY'; do if ! grep -Fiq -- \"$term\" \"$f\"; then printf 'FAIL: source audit missing phrase: %s\\n' \"$term\" >&2; exit 1; fi; done; bytes=$(wc -c < \"$f\" | tr -d ' '); if [ \"$bytes\" -lt 5000 ]; then printf 'FAIL: source audit too small: %s bytes\\n' \"$bytes\" >&2; exit 1; fi; printf 'EXECUTED_CHECK=PASS source-contract-audit bytes=%s\\n' \"$bytes\"",
+      "expect_files": ["source-contract-audit.md"],
+      "verified": "The report maps every JAC-3487 acceptance criterion to concrete live-source evidence and labels gaps without changing shared state."
+    },
+    {
+      "key": "verification-design-audit",
+      "task_type": "test-hardening",
+      "engine": "codex",
+      "model": "gpt-5.5",
+      "engine_args": ["-c", "model_reasoning_effort=medium"],
+      "timeout_s": 540,
+      "full_access": false,
+      "spec": "Act as a read-only verification architect. This is a focused acceptance-design review, not an exhaustive repository security scan; do not load or execute broad security-scan workflows. Do not modify /Users/hermes/ringer, Paperclip, Beads, git state, services, or any tracker. Write only verification-design-audit.md in the current task directory. Inspect /Users/hermes/ringer and JAC-3487 at http://127.0.0.1:3100/api/issues/303e72fa-2be7-44b2-a28b-68900708da84. Design the smallest rigorous executable acceptance suite for Routine/Goal manifest references. Cover positive parsing, malformed UUID or wrong-type rejection, backward compatibility, post-run projection idempotency, target resolution when no active issue exists, network/auth failure behavior, issue+routine+goal coexistence, Ringside rendering, and a real three-task end-to-end run. Where safe and read-only, run existing tests or help/lint commands and record exact command/exit evidence; do not edit tests. For each proposed test give setup, command or pseudocode, expected result, and the requirement it proves. Explicitly identify checks that could falsely pass and how to make failures diagnostic. Include sections titled Current Evidence, Acceptance Test Matrix, Negative Cases, End-to-End Gate, False-Pass Risks, and Recommended Execution Order. End with READ_ONLY and an explicit GO or NO_GO recommendation for declaring JAC-3487 complete today.",
+      "check": "set -eu; f=verification-design-audit.md; if [ ! -s \"$f\" ]; then echo 'FAIL: verification-design-audit.md missing or empty' >&2; exit 1; fi; for term in 'Acceptance Test Matrix' 'Negative Cases' 'End-to-End Gate' 'False-Pass Risks' 'READ_ONLY' 'GO'; do if ! grep -Fiq -- \"$term\" \"$f\"; then printf 'FAIL: verification audit missing phrase: %s\\n' \"$term\" >&2; exit 1; fi; done; bytes=$(wc -c < \"$f\" | tr -d ' '); if [ \"$bytes\" -lt 5000 ]; then printf 'FAIL: verification audit too small: %s bytes\\n' \"$bytes\" >&2; exit 1; fi; printf 'EXECUTED_CHECK=PASS verification-design-audit bytes=%s\\n' \"$bytes\"",
+      "expect_files": ["verification-design-audit.md"],
+      "verified": "The report defines diagnostic positive, negative, failure-mode, rendering, and end-to-end gates for the integration."
+    },
+    {
+      "key": "operational-risk-audit",
+      "task_type": "security-design-audit",
+      "engine": "codex",
+      "model": "gpt-5.6-luna",
+      "engine_args": ["-c", "model_reasoning_effort=high"],
+      "timeout_s": 600,
+      "full_access": false,
+      "spec": "Act as a read-only operational and security reviewer. Do not modify /Users/hermes/ringer, Paperclip, Beads, git state, services, or any tracker. Write only operational-risk-audit.md in the current task directory. Inspect the live Ringer implementation, ~/.ringer/hooks/paperclip_projector.py if present, relevant schemas/templates/tests, and JAC-3487 at http://127.0.0.1:3100/api/issues/303e72fa-2be7-44b2-a28b-68900708da84. Analyze failure containment and governance for routine_id and goal_id projection: authorization headers and secret handling, untrusted identifier/path/URL input, duplicate comments and retry idempotency, cross-company targeting, stale or missing active issues, partial success across issue/routine/goal destinations, timeout/network failure, hook fail-open behavior, auditability, and preservation of immutable Ringer verdicts. Cite concrete evidence and distinguish observed behavior from recommendations. Provide a severity-ranked risk register with exploit or failure scenario, evidence, impact, and minimum mitigation. Include sections titled Trust Boundaries, Observed Controls, Risk Register, Failure Semantics, Governance Gates, and Final Verdict. End with READ_ONLY and one of ACCEPTABLE, ACCEPTABLE_WITH_GATES, or NOT_ACCEPTABLE.",
+      "check": "set -eu; f=operational-risk-audit.md; if [ ! -s \"$f\" ]; then echo 'FAIL: operational-risk-audit.md missing or empty' >&2; exit 1; fi; for term in 'Trust Boundaries' 'Risk Register' 'Failure Semantics' 'Governance Gates' 'READ_ONLY' 'Final Verdict'; do if ! grep -Fiq -- \"$term\" \"$f\"; then printf 'FAIL: risk audit missing phrase: %s\\n' \"$term\" >&2; exit 1; fi; done; bytes=$(wc -c < \"$f\" | tr -d ' '); if [ \"$bytes\" -lt 5000 ]; then printf 'FAIL: risk audit too small: %s bytes\\n' \"$bytes\" >&2; exit 1; fi; printf 'EXECUTED_CHECK=PASS operational-risk-audit bytes=%s\\n' \"$bytes\"",
+      "expect_files": ["operational-risk-audit.md"],
+      "verified": "The report evaluates concrete security, idempotency, partial-failure, governance, and auditability risks without mutating fleet state."
+    }
+  ]
+}
