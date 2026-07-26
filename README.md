@@ -154,7 +154,7 @@ For CI and evals, `config.sample.toml` includes `[engines.mock]` so the enforcem
 
 ![Identical workers, each under its own light](docs/engines.png)
 
-Ringer ships with three worker lanes: **Codex CLI** is the built-in default, and `config.sample.toml` carries verified engine blocks for **Grok Build CLI** (works as-is once you `grok login`) and **OpenCode + OpenRouter** (one edit: point `bin` at the sandbox wrapper in your clone). Anything else with a headless CLI is a config block away:
+Ringer ships with four worker lanes: **Codex CLI** is the built-in default, and `config.sample.toml` carries verified engine blocks for **Grok Build CLI** (works as-is once you `grok login`), **OpenCode + OpenRouter**, and **Claude Code** (the last two need one edit: point `bin` at the sandbox wrapper in your clone). Anything else with a headless CLI is a config block away:
 
 ```toml
 [engines.mymodel]
@@ -205,6 +205,14 @@ grok login
 ```
 
 Route with per-task `"engine": "grok"` and pick the model with `"model": "grok-build"` or `"model": "grok-composer-2.5-fast"` (the shipped default — the speed pick). Grok brings its own OS sandbox on macOS (profile `workspace`: read everywhere, writes confined to the task dir, temp, and `~/.grok`), and its JSON output exposes no token counts — plan-billed workers report cost as included in plan.
+
+### The free lane: Claude Code, optionally against a local endpoint
+
+`config.sample.toml` also carries a `[engines.claude]` block that runs the `claude` CLI headlessly. Point `bin` at an absolute path to `engines/claude-sandboxed.sh` (same Seatbelt design as the OpenCode wrapper: network and reads open, writes confined to the task dir, a per-run scratch dir, and claude's own state/config locations) and it works with your normal Anthropic auth.
+
+It also runs against **any Anthropic-compatible `/v1/messages` endpoint** — Ollama, LM Studio, LiteLLM, a self-hosted gateway — which makes it the lane with no API bill at all and no prompt leaving hardware you control. Endpoint config is machine-specific, so it stays out of the repo: the wrapper sources `~/.config/ringer/claude-engine.env` when that file exists, where you export `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, and an empty `ANTHROPIC_API_KEY`. With no such file, plain `claude` auth applies.
+
+Two things the sample block does deliberately, both from probe evidence in [`docs/MODEL-NOTES.md`](docs/MODEL-NOTES.md): it passes `--bare` and `--strict-mcp-config`, because headless claude otherwise inherits the operator's whole interactive environment (MCP rosters, plugin hooks, auto-memory, global `CLAUDE.md`) and a small local model answers that injected context instead of the spec; and it documents that `--bare` honors `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN` even though its `--help` text describes auth in that mode as API-key-only. One local model on one box serves one request at a time, so give a local-endpoint engine 1-2 tasks per batch.
 
 `args_template` is an argv array, not a shell string. Ringer replaces `{taskdir}`, `{spec}`, and `{model}` inside each argv element. `{access_args}`, `{sandbox_args}`, `{full_access_args}`, `{model_args}` (becomes `-m <resolved model>` when the task or engine names one), and `{engine_args}` (the task's per-task `engine_args`) expand to multiple argv elements only when they appear as their own array item.
 
@@ -357,6 +365,7 @@ Every community PR that lands in main is credited here — that's a project rule
 - [@davekopecek](https://github.com/davekopecek) (Dave Kopecek) — committed the design-reference fixture so the design-token guard runs on every machine (#30)
 - [@snapsynapse](https://github.com/snapsynapse) (Sam Rogers) — graceful shutdown on SIGINT/SIGTERM with worker-tree cleanup and finished state, plus the 14-test end-to-end CLI regression suite (#4)
 - [@mlava](https://github.com/mlava) (Mark Lavercombe) — named setup failures across every diagnostic surface (#37) and `run --baseline`, the no-workers check preflight (#38)
+- [@perpetualsec](https://github.com/perpetualsec) (Alex Cox) — the `claude` engine: headless Claude Code workers, incl. free local inference via Anthropic-compatible endpoints
 
 Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the philosophy and what gets a PR merged fast. The short version: small and scoped, rebased on current main, every claim backed by an executed test. Authorship is always preserved — where a maintainer pushes a mechanical fix to your branch, you remain the commit author.
 
