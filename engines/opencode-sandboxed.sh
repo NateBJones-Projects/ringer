@@ -5,7 +5,9 @@
 # flag (required for headless runs) disables ALL of its interactive approval
 # prompts. This wrapper supplies the real containment: full network and reads,
 # writes confined to the task dir, a per-run scratch/cache dir, and OpenCode's
-# own state dirs.
+# own state dirs. The scratch root also carries a private per-run XDG_DATA_HOME,
+# which is what keeps concurrent workers off one shared session database (see the
+# comment on that export below — it is a correctness fix for parallel runs).
 #
 # Usage (as a ringer engine bin):
 #   opencode-sandboxed.sh <taskdir> [--no-sandbox] <opencode args...>
@@ -28,6 +30,9 @@ if ! OPENCODE_BIN="$(command -v opencode)" || [ -z "$OPENCODE_BIN" ]; then
 fi
 
 if [ "$SANDBOX" = "0" ]; then
+  # Full-access mode keeps OpenCode's real ~/.local/share/opencode, so it also
+  # keeps the shared-session-DB contention documented below. Fine for a lone
+  # full-access task; do not fan out several at once.
   exec "$OPENCODE_BIN" "$@" < /dev/null
 fi
 
@@ -59,7 +64,8 @@ cat > "$PROFILE" <<'SBEOF'
   (subpath (param "SCRATCH"))
   (subpath (param "OC_SHARE"))
   (subpath (param "OC_STATE"))
-  (subpath (param "OC_CONFIG")))
+  (subpath (param "OC_CONFIG"))
+  (subpath (param "OC_BASE")))
 ; /dev is needed for /dev/null, /dev/urandom, etc.; writes there can't create
 ; persistent files without root, so a few literals are allowed rather than via param.
 (allow file-write-data
@@ -72,6 +78,25 @@ export TMPDIR="$SCRATCH"
 export XDG_CACHE_HOME="$SCRATCH/cache"
 mkdir -p "$XDG_CACHE_HOME"
 
+# Per-run DATA root — this is a concurrency fix, not just containment. OpenCode
+# keeps its session store at $XDG_DATA_HOME/opencode/opencode.db, defaulting to
+# ~/.local/share/opencode: one file, shared by every worker, opened for write,
+# growing without bound. On 2026-07-27 it stood at 1.78 GB and two of three
+# workers launched simultaneously died before their first tool call with
+# "Error: Unexpected error / database is locked" — recorded as model failures
+# though no model had run. Since every non-Codex model routes through this
+# engine, shared-DB contention penalises exactly the cheap tier, and worsens as
+# parallelism rises. A private store per worker removes the contention entirely.
+# Credentials live beside the DB, so seed the fresh root with auth.json — copy,
+# never symlink: the profile denies writes outside SCRATCH, and a symlink would
+# resolve straight back to the shared file this exists to avoid.
+export XDG_DATA_HOME="$SCRATCH/share"
+mkdir -p "$XDG_DATA_HOME/opencode"
+if [ -f "$HOME/.local/share/opencode/auth.json" ]; then
+  cp "$HOME/.local/share/opencode/auth.json" "$XDG_DATA_HOME/opencode/auth.json"
+  chmod 600 "$XDG_DATA_HOME/opencode/auth.json"
+fi
+
 # Run as a child (not exec) so the EXIT trap fires and cleans up the profile +
 # scratch dir even on the success path; propagate the child's exit status.
 set +e
@@ -81,6 +106,7 @@ set +e
   -D "OC_SHARE=$HOME/.local/share/opencode" \
   -D "OC_STATE=$HOME/.local/state/opencode" \
   -D "OC_CONFIG=$HOME/.config/opencode" \
+  -D "OC_BASE=$HOME/.opencode" \
   -f "$PROFILE" "$OPENCODE_BIN" "$@" < /dev/null
 status=$?
 set -e
