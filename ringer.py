@@ -741,6 +741,7 @@ class EngineConfig:
     # its own "model" — this is what makes a harness engine (OpenCode) model
     # agnostic instead of hard-coding one model into the command line.
     model_default: str = ""
+    token_json_paths: tuple[str, ...] = ()
 
     @property
     def process_name(self) -> str:
@@ -1602,6 +1603,13 @@ def load_engines(raw: Any) -> dict[str, EngineConfig]:
         model_default = str(
             section.get("model_default", base.model_default if base else "")
         ).strip()
+        token_json_paths = as_string_tuple(
+            section.get("token_json_paths", list(base.token_json_paths) if base else []),
+            key=f"engines.{clean_name}.token_json_paths",
+        )
+        for p in token_json_paths:
+            if not p.strip():
+                raise ValueError(f"engines.{clean_name}.token_json_paths cannot contain empty strings")
         engines[clean_name] = EngineConfig(
             name=clean_name,
             bin=bin_path,
@@ -1611,6 +1619,7 @@ def load_engines(raw: Any) -> dict[str, EngineConfig]:
             token_regex=token_regex,
             model_report_regex=model_report_regex,
             model_default=model_default,
+            token_json_paths=token_json_paths,
         )
     return engines
 
@@ -9126,7 +9135,7 @@ class RingerRunner:
                     await reader
             self.active_processes.pop(proc.pid, None)
         output_tail = capture.text()
-        tokens = parse_token_count(output_tail, engine.token_regex)
+        tokens = resolve_worker_tokens(output_tail, engine)
         reported_model = parse_reported_model(output_tail, engine.model_report_regex)
         if timed_out:
             append_text(log_path, f"\n[ringer.py] worker timed out after {runtime.task.timeout_s}s\n")
@@ -9449,6 +9458,64 @@ def parse_token_count(text: str, token_regex: str | None = DEFAULT_TOKEN_REGEX) 
     if not matches:
         return None
     return int(matches[-1].replace(",", ""))
+
+
+def parse_token_stats_json(text: str, paths: tuple[str, ...]) -> int | None:
+    if not paths:
+        return None
+
+    candidates: list[int] = []
+    current_pos = 0
+    lines = text.splitlines(keepends=True)
+    for line in lines:
+        stripped = line.lstrip()
+        if stripped.startswith('{'):
+            candidates.append(current_pos + (len(line) - len(stripped)))
+        current_pos += len(line)
+
+    for pos in reversed(candidates):
+        try:
+            obj, _ = json.JSONDecoder().raw_decode(text, pos)
+            if isinstance(obj, dict):
+                total = 0
+                matched_any = False
+
+                for path in paths:
+                    parts = path.split('.')
+
+                    def traverse(current_obj: Any, path_parts: list[str]) -> None:
+                        nonlocal total, matched_any
+                        if not path_parts:
+                            if isinstance(current_obj, int) and not isinstance(current_obj, bool):
+                                total += current_obj
+                                matched_any = True
+                            return
+                        if not isinstance(current_obj, dict):
+                            return
+                        part = path_parts[0]
+                        if part == '*':
+                            for val in current_obj.values():
+                                traverse(val, path_parts[1:])
+                        elif part in current_obj:
+                            traverse(current_obj[part], path_parts[1:])
+
+                    traverse(obj, parts)
+
+                if matched_any:
+                    return total
+                return None
+        except json.JSONDecodeError:
+            continue
+
+    return None
+
+
+def resolve_worker_tokens(text: str, engine: EngineConfig) -> int | None:
+    if engine.token_json_paths:
+        result = parse_token_stats_json(text, engine.token_json_paths)
+        if result is not None:
+            return result
+    return parse_token_count(text, engine.token_regex)
 
 
 def parse_reported_model(text: str, model_report_regex: str | None) -> str | None:
