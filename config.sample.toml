@@ -80,6 +80,15 @@ args_template = [
 ]
 
 # Never rely on an engine's default sandbox. Be explicit.
+# Tasks with task_type "probe" on this engine get
+# "-c sandbox_workspace_write.network_access=true" injected, but only for
+# tasks that are not full_access: workspace-write blocks process-level
+# network (e.g. a live API/DB probe), but codex's built-in web search still
+# works and can mask the restriction. A task's own engine_args mentioning
+# sandbox_workspace_write.network_access overrides this default. Full-access
+# probe tasks skip this injection entirely -- they run with full_access_args
+# ("--dangerously-bypass-approvals-and-sandbox") instead, where the sandbox
+# network setting is moot.
 sandbox_args = ["--sandbox", "workspace-write"]
 full_access_args = ["--dangerously-bypass-approvals-and-sandbox"]
 

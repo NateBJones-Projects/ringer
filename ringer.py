@@ -1175,6 +1175,12 @@ def lint_manifest(
             findings.append(
                 f"{task.key}: check may fail without printing why; retry prompt and eval log depend on failure output."
             )
+        if asserts_absence_without_comment_strip(task.check):
+            findings.append(
+                f"{task.key}: check greps for a token's ABSENCE without stripping "
+                "comments first; an explanatory comment containing the token will "
+                "false-FAIL it — strip comments (sed/grep -v/awk) before asserting absence."
+            )
         if manifest.worktrees and any(is_relative_expect_file(path) for path in task.expect_files):
             findings.append(
                 f"{task.key}: deliverable would be deleted with the worktree; write it outside the worktree or export it in the check."
@@ -1376,6 +1382,460 @@ def is_quiet_grep(command: str) -> bool:
         return False
     return bool(tokens) and tokens[0] == "grep" and any(
         token == "-q" or (token.startswith("-") and "q" in token[1:]) for token in tokens[1:]
+    )
+
+
+GREP_COMMANDS = {"grep", "egrep", "fgrep", "rg"}
+
+
+def pipeline_stages(command: str) -> list[list[str]]:
+    """Split one command segment into its pipeline stages (token lists).
+
+    Uses shlex so a '|' inside a quoted grep pattern (e.g. 'a|b') stays with
+    its stage instead of being read as a pipe separator.
+    """
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return []
+    stages: list[list[str]] = []
+    current: list[str] = []
+    for token in tokens:
+        if token == "|":
+            if current:
+                stages.append(current)
+                current = []
+            continue
+        current.append(token)
+    if current:
+        stages.append(current)
+    return stages
+
+
+# grep and rg do NOT share an option set: rg has -g/--glob and -t/--type
+# (value-taking) that GNU grep lacks, and GNU grep's --color takes an OPTIONAL
+# argument (bound only via '--color=WHEN', never the next token) while rg's
+# --color requires one. Using a single shared table mislabels these and
+# corrupts operand identification, so each command carries its own metadata.
+class GrepOptionSpec:
+    """Per-command grep/rg option metadata.
+
+    FAIL-SAFE CONTRACT: these tables list what we POSITIVELY RECOGNIZE, not
+    everything the CLIs accept. Three review rounds each found another
+    value-taking option missing here (rg -j, GNU grep --exclude-from, ...), and
+    a missing value option makes the following token look like a file operand,
+    which false-fires the absence-grep lint. An enumerated table can always be
+    found incomplete, so parse_grep treats ANY option NOT listed here as
+    ambiguous and abstains (returns None) rather than guessing its arity. Adding
+    an option below only makes the parser MORE precise; forgetting one costs a
+    (safe) abstention, never a false fire.
+
+    INTERSECTION CONTRACT: manifests may run under more than one implementation
+    of the same command (grep resolves to GNU grep on Linux but BSD grep on
+    macOS), so a listed option must be valid with IDENTICAL ARITY in EVERY
+    implementation a manifest may run under (both GNU and BSD grep; for rg, only
+    options stable across commonly deployed ripgrep versions). An
+    implementation-divergent spelling -- one impl accepts it, another rejects it,
+    or they disagree on whether it takes a value -- is treated as unknown and
+    left unlisted, so the rule abstains rather than trusting a spelling only one
+    side recognizes. When in doubt, leave it out: abstention is free, a false
+    fire is not.
+
+    - boolean_short: short flags that take NO value (q, i, v, ...).
+    - value_short: short flags whose value is the rest of the token or, failing
+      that, the next token (e.g. -m1 or -m 1).
+    - boolean_long: long options that take NO value.
+    - value_long: long options with a REQUIRED argument (via '--opt=val' or the
+      next token '--opt val').
+    - optional_long: long options with an OPTIONAL argument, GNU-getopt style --
+      a value binds ONLY through '--opt=val'; a separate following token is
+      never consumed (GNU grep --color/--colour).
+    - pattern_long: long options that (like -e/-f) supply the search pattern
+      rather than a file operand.
+    Short flags -e/-f always supply the pattern for both commands. A long option
+    is "known" iff its name is in value_long, optional_long, boolean_long, or
+    pattern_long; a short letter is "known" iff in boolean_short or value_short.
+    """
+
+    __slots__ = (
+        "boolean_short",
+        "value_short",
+        "boolean_long",
+        "value_long",
+        "optional_long",
+        "pattern_long",
+    )
+
+    def __init__(
+        self,
+        boolean_short: str,
+        value_short: str,
+        boolean_long: set,
+        value_long: set,
+        optional_long: set,
+        pattern_long: set,
+    ) -> None:
+        self.boolean_short = set(boolean_short)
+        self.value_short = set(value_short)
+        self.boolean_long = boolean_long
+        self.value_long = value_long
+        self.optional_long = optional_long
+        self.pattern_long = pattern_long
+
+    def known_short(self, ch: str) -> bool:
+        return ch in self.boolean_short or ch in self.value_short
+
+    def known_long(self, name: str) -> bool:
+        return (
+            name in self.value_long
+            or name in self.optional_long
+            or name in self.boolean_long
+            or name in self.pattern_long
+        )
+
+
+# grep (also egrep/fgrep). A manifest's `grep` is GNU grep on Linux but BSD grep
+# on macOS, so this table is the INTERSECTION of the two: every option here is
+# valid with identical arity in BOTH implementations. GNU-only spellings that
+# BSD grep rejects -- e.g. --exclude-from, --group-separator,
+# --no-group-separator, --no-ignore-case, --perl-regexp/-P,
+# --dereference-recursive -- are deliberately absent, so a manifest using them
+# parses as unknown and the rule abstains instead of trusting a spelling only
+# GNU recognizes. BSD support verified against the local `grep` (2.6.0-FreeBSD)
+# via probing each option; GNU support from GNU grep documentation. Of the
+# common set: -e/-f/-m and -A/-B/-C take values; -d/-D (--directories/--devices)
+# take an ACTION; --color/--colour take an OPTIONAL WHEN argument (both impls).
+_GREP_SPEC = GrepOptionSpec(
+    # Boolean/selection flags carrying NO value, present in BOTH GNU and BSD grep
+    # (GNU-only -P/--perl-regexp is excluded: BSD grep rejects it).
+    boolean_short="qinvlLcswxFEohHrRazUbZ",
+    value_short="efmABCDd",
+    boolean_long={
+        "quiet",
+        "silent",
+        "invert-match",
+        "ignore-case",
+        "line-number",
+        "line-buffered",
+        "files-with-matches",
+        "files-without-match",
+        "count",
+        "no-messages",
+        "word-regexp",
+        "line-regexp",
+        "fixed-strings",
+        "basic-regexp",
+        "extended-regexp",
+        "only-matching",
+        "no-filename",
+        "with-filename",
+        "recursive",
+        "text",
+        "null",
+        "null-data",
+        "byte-offset",
+        "help",
+        "version",
+    },
+    value_long={
+        "regexp",
+        "file",
+        "max-count",
+        "after-context",
+        "before-context",
+        # '--context' is deliberately UNLISTED for grep: arity diverges between
+        # implementations. GNU grep accepts '--context NUM' as a separate token,
+        # but BSD grep binds the value ONLY via '--context=NUM' and treats a
+        # separated NUM as the pattern. Per the INTERSECTION CONTRACT an option
+        # whose arity differs across implementations is unknown -- parse_grep
+        # abstains rather than trust a spelling only GNU consumes. Short -C
+        # (value_short) consumes its value on both implementations and stays.
+        "include",
+        "exclude",
+        "exclude-dir",
+        "devices",
+        "directories",
+        "binary-files",
+        "label",
+    },
+    optional_long={"color", "colour"},
+    pattern_long={"regexp", "file"},
+)
+
+# ripgrep. A single implementation, so its intersection is across VERSIONS: only
+# options stable across commonly deployed ripgrep releases are listed (all below
+# have been present since ripgrep 13.x). Verified against `rg --help`: -e/-f/-m
+# and -A/-B/-C mirror grep; additionally -g/--glob, --iglob, -t/--type,
+# -T/--type-not, -M/--max-columns, -r/--replace, -E/--encoding take required
+# values, and --color requires WHEN (unlike GNU grep). rg has no
+# optional-argument long options.
+_RG_SPEC = GrepOptionSpec(
+    # rg booleans include grep's plus rg-specific -N/-I/-u/-uu/-uuu, -S/-U, etc.
+    # (verified vs `rg --help`, ripgrep 14.1.1). Unlike GNU grep, rg's -E is
+    # --encoding and -r is --replace -- both take REQUIRED values, so they live
+    # in value_short below, NOT here. Note -j/--threads takes a value too.
+    boolean_short="qinvlLcswxFPohHazNISUu",
+    value_short="efmABCgtTMrEj",
+    boolean_long={
+        "quiet",
+        "invert-match",
+        "ignore-case",
+        "case-sensitive",
+        "smart-case",
+        "line-number",
+        "no-line-number",
+        "count",
+        "count-matches",
+        "word-regexp",
+        "line-regexp",
+        "fixed-strings",
+        "only-matching",
+        "files",
+        "files-with-matches",
+        "files-without-match",
+        "no-filename",
+        "with-filename",
+        "heading",
+        "no-heading",
+        "text",
+        "null",
+        "null-data",
+        "byte-offset",
+        "hidden",
+        "follow",
+        "no-ignore",
+        "search-zip",
+        "multiline",
+        "pcre2",
+        "help",
+        "version",
+    },
+    value_long={
+        "regexp",
+        "file",
+        "max-count",
+        "after-context",
+        "before-context",
+        "context",
+        "glob",
+        "iglob",
+        "type",
+        "type-not",
+        "type-add",
+        "type-clear",
+        "max-columns",
+        "replace",
+        "encoding",
+        "max-depth",
+        "threads",
+        "sort",
+        "sortr",
+        "pre",
+        "ignore-file",
+        "color",
+        "colors",
+    },
+    optional_long=set(),
+    pattern_long={"regexp", "file"},
+)
+
+
+def _grep_spec(command: str) -> GrepOptionSpec:
+    """Return the option metadata for the invoked grep/rg command."""
+    return _RG_SPEC if command == "rg" else _GREP_SPEC
+
+
+class GrepInvocation:
+    """A parsed grep/rg stage: the flags it carries and its positional operands,
+    with combined short flags, '--', and value-taking options resolved so
+    operand identification survives real-world invocations."""
+
+    def __init__(self) -> None:
+        self.flags: set[str] = set()  # short letters and long option names
+        self.positional: list[str] = []  # pattern and/or file operands
+        self.pattern_from_option = False  # -e/-f/--regexp/--file supplied it
+
+    @property
+    def files(self) -> list[str]:
+        # When the pattern rides on -e/-f, every positional is a file;
+        # otherwise the first positional is the pattern and the rest are files.
+        if self.pattern_from_option:
+            return list(self.positional)
+        return self.positional[1:]
+
+    @property
+    def inverted(self) -> bool:
+        return "v" in self.flags or "invert-match" in self.flags
+
+    @property
+    def files_without_match(self) -> bool:
+        return "L" in self.flags or "files-without-match" in self.flags
+
+    @property
+    def counts(self) -> bool:
+        return "c" in self.flags or "count" in self.flags
+
+
+def parse_grep(tokens: list[str]) -> "GrepInvocation | None":
+    """Parse a grep/rg stage into a GrepInvocation, or None if AMBIGUOUS.
+
+    FAIL-SAFE CONTRACT: the _grep_spec tables list what we POSITIVELY RECOGNIZE,
+    not everything the CLIs accept. Any option token (short letter or long name)
+    that is NOT in the command's tables makes the invocation ambiguous -- we
+    cannot know whether it swallows the next token as a value, so we return None
+    and every downstream predicate treats the stage as NOT a file-reading grep.
+    The lint rule then ABSTAINS rather than guess an operand and false-fire.
+    Returns None too when tokens is empty or not a grep/rg command.
+
+    Option semantics are command-specific (see _grep_spec): rg's -g/--glob,
+    -t/--type and -j/--threads take values GNU grep lacks, and GNU grep's --color
+    argument is optional (only '--color=WHEN' binds a value). Handles combined
+    short flags (-vq, -lv), value-taking options (-e/-f/-m/-A.../--glob/-j/...),
+    '--' end-of-options, and '--long=value' forms. Combined short groups: all
+    letters must be known; a group of known booleans stays boolean, a group
+    ending in exactly one known value-short letter binds a value; ANY unknown
+    letter anywhere -> ambiguous (None)."""
+    if not tokens or tokens[0] not in GREP_COMMANDS:
+        return None
+    spec = _grep_spec(tokens[0])
+    inv = GrepInvocation()
+    end_of_options = False
+    i = 1
+    while i < len(tokens):
+        token = tokens[i]
+        if end_of_options:
+            inv.positional.append(token)
+            i += 1
+            continue
+        if token == "--":
+            end_of_options = True
+            i += 1
+            continue
+        if token.startswith("--"):
+            name, sep, _ = token[2:].partition("=")
+            if not spec.known_long(name):
+                return None  # unknown long option -> abstain (fail safe)
+            inv.flags.add(name)
+            if name in spec.pattern_long:
+                inv.pattern_from_option = True
+            # A required-argument long option with no '--opt=val' consumes the
+            # next token. An optional-argument option (GNU grep --color) never
+            # does: its value must arrive inline as '--opt=val'.
+            if name in spec.value_long and not sep:
+                i += 1  # consume the next token as this option's value
+            i += 1
+            continue
+        if token.startswith("-") and len(token) > 1:
+            j = 1
+            while j < len(token):
+                ch = token[j]
+                if not spec.known_short(ch):
+                    return None  # unknown short flag anywhere -> abstain
+                inv.flags.add(ch)
+                if ch in ("e", "f"):
+                    inv.pattern_from_option = True
+                if ch in spec.value_short:
+                    # The value is the rest of this token if any, else the next
+                    # token; either way, stop scanning flags here.
+                    if j + 1 >= len(token):
+                        i += 1
+                    break
+                j += 1
+            i += 1
+            continue
+        inv.positional.append(token)
+        i += 1
+    return inv
+
+
+def grep_reads_file(tokens: list[str]) -> bool:
+    """True when a grep/rg stage reads a file path directly (has both a pattern
+    source and at least one file operand), not command output piped into it."""
+    inv = parse_grep(tokens)
+    return inv is not None and len(inv.files) >= 1
+
+
+def stage_strips_comments(tokens: list[str]) -> bool:
+    """True when a pipeline stage removes comments ahead of a later grep — a
+    sed/awk transform or an inverting 'grep -v' filter (MODEL-NOTES
+    2026-07-20)."""
+    if not tokens:
+        return False
+    if tokens[0] in {"sed", "awk"}:
+        return True
+    inv = parse_grep(tokens)
+    return inv is not None and inv.inverted
+
+
+def asserts_absence_without_comment_strip(check: str) -> bool:
+    """A check that greps for a token's ABSENCE from files without stripping
+    comments first. Such checks false-FAIL when an explanatory comment contains
+    the token — one such false FAIL burned a ~200s retry (MODEL-NOTES
+    2026-07-20). The required core form is a '!'-prefixed grep/rg reading a file
+    path; a 'grep -c ... | grep -q ^0' count-is-zero pipeline is the same
+    absence assertion by another spelling. This is a separate axis from
+    strip_shell_comments, which strips comments from the check STRING itself.
+    """
+    stripped = strip_shell_comments(check)
+    for segment in command_parts(stripped):
+        if negated_absence_grep(segment) or absence_count_pipeline(segment):
+            return True
+    return False
+
+
+def _first_file_grep_index(stages: list[list[str]], *, counts: bool = False) -> int | None:
+    """Index of the first stage that greps a file directly (optionally in count
+    mode), or None. That stage is the one whose exit status the absence
+    assertion turns on; a strip that lands after it cannot help."""
+    for idx, stage in enumerate(stages):
+        inv = parse_grep(stage)
+        if inv is None or not grep_reads_file(stage):
+            continue
+        if counts and not inv.counts:
+            continue
+        return idx
+    return None
+
+
+def _strip_before(stages: list[list[str]], idx: int) -> bool:
+    """True when some stage strictly before `idx` strips comments."""
+    return any(stage_strips_comments(stages[k]) for k in range(idx))
+
+
+def negated_absence_grep(segment: str) -> bool:
+    text = segment.strip()
+    if not text.startswith("!"):
+        return False
+    stages = pipeline_stages(text[1:].strip())
+    idx = _first_file_grep_index(stages)
+    if idx is None:
+        return False
+    inv = parse_grep(stages[idx])
+    # -v (negative filter) and -L/--files-without-match (files LACKING the
+    # token — a presence assertion once negated) are not comment-blind absence
+    # assertions, so they must not fire.
+    if inv is None or inv.inverted or inv.files_without_match:
+        return False
+    # A comment strip BEFORE the file-reading grep makes the check safe; a
+    # strip after it does not (the grep already saw the comments).
+    return not _strip_before(stages, idx)
+
+
+def absence_count_pipeline(segment: str) -> bool:
+    stages = pipeline_stages(segment.strip())
+    if len(stages) < 2:
+        return False
+    idx = _first_file_grep_index(stages, counts=True)
+    if idx is None:
+        return False
+    # Only a strip BEFORE the counting file-grep can help; a sed/grep -v after
+    # it operates on the count, not the source comments, so it must still fire.
+    if _strip_before(stages, idx):
+        return False
+    return any(
+        stages[j][0] in GREP_COMMANDS
+        and any(token in {"^0", "^0$"} for token in stages[j][1:])
+        for j in range(idx + 1, len(stages))
     )
 
 
@@ -8355,12 +8815,13 @@ class RingerRunner:
                     "but config allow_full_access is false"
                 ),
             )
+        effective_args = effective_engine_args(runtime.task)
         cmd = build_worker_command(
             engine,
             taskdir=runtime.taskdir,
             spec=spec,
             full_access=runtime.task.full_access,
-            engine_args=runtime.task.engine_args,
+            engine_args=effective_args,
             model=runtime.task.model,
         )
         if self.config.steering.dir is not None:
@@ -8396,7 +8857,7 @@ class RingerRunner:
                         taskdir=runtime.taskdir,
                         spec=injected_spec,
                         full_access=runtime.task.full_access,
-                        engine_args=runtime.task.engine_args,
+                        engine_args=effective_args,
                         model=runtime.task.model,
                     )
             except Exception:
@@ -8825,6 +9286,49 @@ def resolved_task_model(
         or (engine.model_default if engine else "")
         or effective_model_from_command(command or [])
     )
+
+
+# Codex's default '--sandbox workspace-write' blocks process-level network
+# (python -> gateway) while its built-in web search still works, so live-probe
+# lanes fail while research lanes mask the restriction. Opening network access
+# for the sandbox is the fix that worked first-try (MODEL-NOTES 2026-07-20).
+CODEX_PROBE_NETWORK_KEY = "sandbox_workspace_write.network_access"
+CODEX_PROBE_NETWORK_ARGS = ("-c", "sandbox_workspace_write.network_access=true")
+
+
+def effective_engine_args(task: TaskSpec) -> tuple[str, ...]:
+    """The engine_args to actually pass to build_worker_command for a task.
+
+    build_worker_command does not know the task, so the codex-probe network
+    injection is computed here and used at every spawn/plan site. A probe task
+    that resolves to the codex engine (and is not full_access) gets sandbox
+    network access unless the task already sets that key explicitly — an
+    explicit per-task setting always wins.
+    """
+    args = task.engine_args
+    if (
+        task.engine == "codex"
+        and task.task_type == "probe"
+        and not task.full_access
+        and not _sets_codex_network_key(args)
+    ):
+        return tuple(args) + CODEX_PROBE_NETWORK_ARGS
+    return tuple(args)
+
+
+def _sets_codex_network_key(args: "tuple[str, ...] | list[str]") -> bool:
+    """True when engine_args already set the codex network-access key via a
+    '-c KEY=VALUE' pair (or a bare '-c KEY'). Matches the KEY exactly — the
+    part before '=', whitespace-tolerant — so a longer dotted key that merely
+    shares the prefix (e.g. sandbox_workspace_write.network_access_log) does NOT
+    count as an explicit override."""
+    for prev, item in zip(args, args[1:]):
+        if prev != "-c":
+            continue
+        key = item.split("=", 1)[0].strip()
+        if key == CODEX_PROBE_NETWORK_KEY:
+            return True
+    return False
 
 
 def build_worker_command(
@@ -9374,7 +9878,7 @@ def dry_run(
                 taskdir=taskdir,
                 spec=task.spec,
                 full_access=task.full_access,
-                engine_args=task.engine_args,
+                engine_args=effective_engine_args(task),
                 model=task.model,
             )
             if engine is not None

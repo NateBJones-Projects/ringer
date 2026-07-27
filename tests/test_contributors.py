@@ -23,10 +23,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 # Maintainer/bot identities that are never listed as community contributors.
+# "alex (bgs fleet)" is the fleet operator running the orchestrator; its only
+# commits are internal MODEL-NOTES field notes (swarm infrastructure), not
+# merged community PRs — maintainer-side authorship, same category as the bots.
 EXCLUDED_AUTHORS = {
     "jonathan edwards",
     "nate jones",
     "github",
+    "alex (bgs fleet)",
 }
 EXCLUDED_AUTHOR_PREFIXES = ("claude",)
 EXCLUDED_HANDLES = {

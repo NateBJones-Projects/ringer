@@ -288,6 +288,144 @@ class LintManifestTests(unittest.TestCase):
             f"worktrees manifest should not be flagged for expect_files: {findings}",
         )
 
+    ABSENCE_FINDING = (
+        "one: check greps for a token's ABSENCE without stripping "
+        "comments first; an explanatory comment containing the token will "
+        "false-FAIL it — strip comments (sed/grep -v/awk) before asserting absence."
+    )
+
+    def test_negated_grep_over_file_fires(self) -> None:
+        manifest = self.manifest(
+            [self.task(check="! grep -q 'auth.uid' src/policy.sql")]
+        )
+        self.assertHasFinding(lint_manifest(manifest), self.ABSENCE_FINDING)
+
+    def test_positive_grep_does_not_fire(self) -> None:
+        manifest = self.manifest(
+            [self.task(check="grep -q 'auth.uid' src/policy.sql")]
+        )
+        self.assertNotIn(self.ABSENCE_FINDING, lint_manifest(manifest))
+
+    def test_stripped_comments_before_grep_does_not_fire(self) -> None:
+        manifest = self.manifest(
+            [self.task(check="! sed 's/#.*//' src/policy.sql | grep -q 'auth.uid'")]
+        )
+        self.assertNotIn(self.ABSENCE_FINDING, lint_manifest(manifest))
+
+    def test_grep_over_pipe_output_does_not_fire(self) -> None:
+        # The grep reads command output, not a file path — not the bug class.
+        manifest = self.manifest(
+            [self.task(check="! cat src/policy.sql | grep -q 'auth.uid'")]
+        )
+        self.assertNotIn(self.ABSENCE_FINDING, lint_manifest(manifest))
+
+    def test_rg_recursive_is_unknown_and_abstains(self) -> None:
+        # Regression: ripgrep has NO --recursive flag (recursion is its default;
+        # real rg rejects it with 'unrecognized flag'). _RG_SPEC must NOT list
+        # 'recursive', so parse_grep sees an unknown long option and ABSTAINS --
+        # the fail-safe contract requires abstention, not a false absence-fire.
+        manifest = self.manifest(
+            [self.task(check="! rg --recursive auth.uid src/policy.sql")]
+        )
+        self.assertNotIn(self.ABSENCE_FINDING, lint_manifest(manifest))
+
+    def test_absence_grep_semantics_table(self) -> None:
+        # (check, should_fire, why) â grep-semantics-preserving classification.
+        cases = [
+            ("! grep -q 'auth.uid' src/policy.sql", True,
+             "plain negated file grep is a comment-blind absence assertion"),
+            ("! grep -L 'auth.uid' src/policy.sql", False,
+             "-L selects files WITHOUT the token — negated, a presence assertion"),
+            ("! grep --files-without-match 'auth.uid' src/policy.sql", False,
+             "rg-style --files-without-match is the same presence assertion"),
+            ("! grep -vq 'auth.uid' src/policy.sql", False,
+             "combined -vq is a negative filter, not a plain absence grep"),
+            ("! grep -lv 'auth.uid' src/policy.sql", False,
+             "combined -lv is inverted (has -v) — not plain absence"),
+            ("! grep -l 'auth.uid' src/policy.sql", True,
+             "-l lists files WITH match; negated it is still an absence assertion"),
+            ("grep -c 'auth.uid' src/policy.sql | grep -q '^0'", True,
+             "count-is-zero pipeline is absence by another spelling"),
+            ("grep -c 'auth.uid' src/policy.sql | sed 's/x//' | grep -q '^0'", True,
+             "a strip AFTER the file grep cannot strip source comments — must fire"),
+            ("! sed 's/#.*//' src/policy.sql | grep -q 'auth.uid'", False,
+             "comment strip BEFORE the grep makes it safe"),
+            ("! cat src/policy.sql | grep -q 'auth.uid'", False,
+             "grep reads piped output, not a file path"),
+            ("! grep -e '-auth.uid' src/policy.sql", True,
+             "a pattern beginning with '-' via -e is an operand, not a flag"),
+            ("test -f src/policy.sql && ! grep -q 'auth.uid' src/policy.sql", True,
+             "one &&-joined segment is the absence grep"),
+            ("! grep -q 'auth.uid' src/policy.sql ; test -s report.md", True,
+             "one ;-joined segment is the absence grep"),
+            ("! rg -q 'auth.uid' src/policy.sql", True,
+             "plain negated rg over a file is a comment-blind absence assertion"),
+            ("! cat src/policy.sql | rg -g '*.sql' -q 'auth.uid'", False,
+             "rg -g/--glob consumes '*.sql' as its value; rg reads piped "
+             "output, not a file path"),
+            ("! rg -g '*.sql' -q 'auth.uid' src/policy.sql", True,
+             "rg -g eats the glob, leaving pattern+file operands -- a direct "
+             "file absence grep"),
+            ("! rg -t sql -q 'auth.uid' src/policy.sql", True,
+             "rg -t/--type takes a value; pattern+file remain operands"),
+            ("! rg --recursive auth.uid src/policy.sql", False,
+             "rg has NO --recursive flag (recursion is its default) -- unknown "
+             "long option makes the stage ambiguous, so parse_grep abstains"),
+            ("! grep --color 'auth.uid' src/policy.sql", True,
+             "GNU grep --color takes an OPTIONAL arg (never the next token); "
+             "pattern+file stay operands"),
+            ("! grep --color=always 'auth.uid' src/policy.sql", True,
+             "--color=always binds inline; pattern+file stay operands"),
+            ("! grep --colour 'auth.uid' src/policy.sql", True,
+             "--colour is the same optional-arg spelling"),
+            # FAIL-SAFE: unknown option -> abstain (parse_grep returns None),
+            # so the rule cannot false-fire on a table gap. The enumerated
+            # tables list what we positively recognize, not everything grep/rg
+            # accept -- three rounds each surfaced another missing value option.
+            ("! cat src/policy.sql | rg -j 1 -q 'auth.uid'", False,
+             "rg -j/--threads takes a value ('1'); rg reads piped output, "
+             "not a file path"),
+            ("! rg -j 1 'auth.uid' src/policy.sql", True,
+             "rg -j eats its thread count, leaving pattern+file operands -- a "
+             "direct file absence grep"),
+            # INTERSECTION CONTRACT: GNU-only spellings that BSD grep rejects are
+            # left UNLISTED, so a file-target invocation using them abstains
+            # instead of false-firing on macOS. --exclude-from / --group-separator
+            # are the reviewer-reproduced cases (BSD grep 2.6.0 rejects both).
+            ("! grep --exclude-from ignore 'auth.uid' src/policy.sql", False,
+             "--exclude-from is GNU-only (BSD grep rejects it) so it is unlisted; "
+             "parse_grep abstains rather than assume it swallows 'ignore' -- no "
+             "false fire on a spelling only GNU recognizes"),
+            ("! grep --group-separator=-- 'auth.uid' src/policy.sql", False,
+             "--group-separator is GNU-only (BSD grep rejects it) so it is "
+             "unlisted; the inline =-- cannot be trusted, parse_grep abstains"),
+            ("! cat src/policy.sql | grep --exclude-from ignore -q 'auth.uid'", False,
+             "GNU-only --exclude-from is unlisted -> abstain; grep also reads "
+             "piped output here, so no fire either way"),
+            ("! grep --frobnicate 'auth.uid' src/policy.sql", False,
+             "unknown long option makes the stage ambiguous -- parse_grep "
+             "abstains rather than guess whether it swallows a value"),
+            ("! grep -Q 'auth.uid' src/policy.sql", False,
+             "unknown short flag -Q makes the stage ambiguous -- abstain"),
+            ("! grep --context 1 auth.uid f", False,
+             "grep --context arity diverges (GNU takes a separate NUM, BSD "
+             "binds only via --context=NUM), so it is unlisted -- parse_grep "
+             "abstains rather than guess whether '1' is a value or the pattern"),
+            ("! grep --color 'auth.uid' src/policy.sql", True,
+             "known optional-arg --color still fires (regression guard)"),
+            ("! grep -q 'auth.uid' src/policy.sql", True,
+             "all-known flags: plain negated file grep still fires"),
+            ("! rg -q 'auth.uid' src/policy.sql", True,
+             "all-known rg flags: plain negated file grep still fires"),
+        ]
+        for check, should_fire, why in cases:
+            with self.subTest(check=check):
+                findings = lint_manifest(self.manifest([self.task(check=check)]))
+                if should_fire:
+                    self.assertIn(self.ABSENCE_FINDING, findings, why)
+                else:
+                    self.assertNotIn(self.ABSENCE_FINDING, findings, why)
+
     def test_compliant_manifest_is_clean(self) -> None:
         manifest = self.manifest(
             [

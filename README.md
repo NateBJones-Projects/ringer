@@ -86,7 +86,7 @@ Run your own batch:
 
 Each task gets its own directory, its own worker, its own log, and its own verdict. `check` is any shell command — exit 0 is the only thing Ringer believes.
 
-> **Write checks that print why they fail.** A silent `exit 1` (the `git diff --quiet` style) costs you twice: the retry prompt gets no failure context to fix against, and the eval log records an undiagnosable row. `diff` beats `diff -q`; an assert with a message beats a bare test.
+> **Write checks that print why they fail.** A silent `exit 1` (the `git diff --quiet` style) costs you twice: the retry prompt gets no failure context to fix against, and the eval log records an undiagnosable row. `diff` beats `diff -q`; an assert with a message beats a bare test. If a check asserts a token is *absent* from source files, strip comments first — workers legitimately mention forbidden tokens in explanatory comments, and a naive grep false-fails on those.
 
 **Identity**: runs are stamped with an orchestrator identity (shown in Ringside and eval rows). Resolution order: `--identity` > `FLEET_IDENTITY`/`RINGER_IDENTITY` env > a `.fleet-agent` file found walking up from the working directory (drop one in a repo root to give that repo's swarms their own name) > `identity_default` in config > short hostname.
 
@@ -113,7 +113,7 @@ Not sure what your tasks even are yet? [`docs/interview-prompt.md`](docs/intervi
 
 ## Lint
 
-Lint checks a manifest for the mistakes that make swarms hard to trust: checks that cannot fail, silent checks, worktree deliverables that disappear, worker commits that die with deleted worktrees, serial fan-out, write collisions, and underspecified specs.
+Lint checks a manifest for the mistakes that make swarms hard to trust: checks that cannot fail, silent checks, worktree deliverables that disappear, worker commits that die with deleted worktrees, serial fan-out, write collisions, underspecified specs, and comment-blind negated greps (a check asserting a token is absent from source files false-fails when a code comment mentions the token, so lint now warns unless comments are stripped first).
 
 ```bash
 ./ringer.py lint templates/review-swarm/manifest.json
@@ -187,7 +187,7 @@ opencode auth login   # select OpenRouter, paste the key
 #    itself; there is no OS write-confinement then, so keep manifests scoped.)
 ```
 
-Route with per-task `"engine": "opencode"`, pick the model with per-task `"model": "openrouter/<any-model>"`, and set reasoning effort via `engine_args`: `["--variant", "low|high|max"]`. A sensible split: mechanical or tightly-specced tasks on the cheap lane, gnarly ones on your frontier engine — the executed check catches shortfalls either way, and `swarm_runs` rows tell you whether the cheap lane's pass rate holds.
+Route with per-task `"engine": "opencode"`, pick the model with per-task `"model": "openrouter/<any-model>"`, and set reasoning effort via `engine_args`: `["--variant", "low|high|max"]`. A sensible split: mechanical or tightly-specced tasks on the cheap lane, gnarly ones on your frontier engine — the executed check catches shortfalls either way, and `swarm_runs` rows tell you whether the cheap lane's pass rate holds. Code-review is one lane worth pinning: on 2026-07-20 (gsd-phase-122, 5 review tasks) codex/GPT-5.6 Sol went 5/5 first-try at ~100-160s per review and surfaced 14 substantive P0-P2 defects that offline check harnesses missed — route pre-commit code-review tasks to codex; the review-swarm template now defaults to it.
 
 ### The plan lane: Grok Build CLI
 
