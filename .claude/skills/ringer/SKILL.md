@@ -21,6 +21,24 @@ description: >-
 
 # Ringer orchestrator playbook
 
+## A normal request should stay normal
+
+When the human asks one bounded, read-only question or edit and you already
+have the relevant file paths, call `ringer.py ask` yourself. Pass the human's
+current request and those paths. Do not ask the human to create a manifest,
+start a new chat, summarize the history, or learn Ringer.
+
+```bash
+./ringer.py ask "<current request>" --source /absolute/path/to/source
+```
+
+Use `--state` only for a small file of settled decisions. The command selects
+passages with local code, caps the packet, launches one clean worker, and
+allows one attempt. If the supplied sources yield no usable text, it stops
+before the model call. This path is for a final answer that needs no tools.
+Research, external actions, code changes, and work that needs a real content
+check still use a normal manifest.
+
 ## Read this first — the four rules that actually get broken
 
 1. **You review; workers type.** Your lane: specs, checks, pattern choice,

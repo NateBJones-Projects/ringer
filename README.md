@@ -86,6 +86,77 @@ Each task gets its own directory, its own worker, its own log, and its own verdi
 
 > **Write checks that print why they fail.** A silent `exit 1` (the `git diff --quiet` style) costs you twice: the retry prompt gets no failure context to fix against, and the eval log records an undiagnosable row. `diff` beats `diff -q`; an assert with a message beats a bare test.
 
+## One normal request without the old chat
+
+An agent can hand one ordinary request to a fresh worker without making the
+human write a manifest:
+
+```bash
+./ringer.py ask \
+  "What did we decide about Wednesday?" \
+  --source /path/to/transcript.txt
+```
+
+`ask` searches the supplied files with local code, selects matching passages,
+and caps the request packet at 16,000 bytes before it starts a model. It uses
+one clean, read-only Codex worker with tools and optional features removed. It
+allows one Ringer attempt, so a failed or oversized request is not sent a
+second time.
+
+The intended interface is still normal conversation. The orchestrating agent
+takes the current request and any attachment paths it already has, calls
+`ask`, and returns the answer. The human should not have to type this command,
+start a clean chat, prepare a brief, or know what Ringer is.
+
+### Install only the token-saving skill
+
+You can use the token-saving strategies in Codex and Claude Code without
+installing the Ringer gateway or changing how you chat:
+
+```bash
+python3 scripts/install_token_saver.py
+```
+
+This installs the same standalone `token-saver` skill under
+`~/.agents/skills/token-saver` for Codex and
+`~/.claude/skills/token-saver` for Claude Code. The agents find source files,
+select useful passages, and keep the accepted result plus the next change
+themselves. The human does not run those helper commands.
+
+Running the installer again is safe. It leaves an identical install alone and
+refuses to replace a different existing skill. Use `--force` only after
+reviewing the existing copy.
+
+### Optional gateway before the model call
+
+The standalone skill begins after Codex or Claude has already received the
+current turn. If a Codex CLI workflow needs a check before the provider call,
+Ringer also includes a local gateway. The verified Codex path can return a
+fixed code result or an explicitly approved exact answer with no model call,
+select a small source packet, make at most one provider call, or stop.
+
+See [`docs/RINGER-GATEWAY.md`](docs/RINGER-GATEWAY.md) for setup and limits.
+The real Codex CLI path is verified. The Anthropic request adapter is
+experimental and is not yet compatible with the real Claude Code client.
+
+Important limits:
+
+- The byte cap covers the request packet, not Codex's own hidden starting
+  instructions. The command reports actual provider input after a live run.
+- If supplied files are missing, unreadable, or produce no selected text,
+  Ringer stops before the model call.
+- The default check proves that a nonempty answer came back. It does not prove
+  the answer is correct.
+- The full packet is not saved by default. Use `--keep-packet` only when you
+  intentionally want it for debugging.
+- This command does not shrink the chat that launched it. It keeps that chat
+  out of the fresh worker's job.
+
+Use `--state` for a small file of settled decisions that should be considered
+before ordinary sources. State is capped so it cannot consume the whole
+packet and crowd out a stronger current match. Use `--dry-run` to inspect
+selected paths, line ranges, and byte counts without making a model call.
+
 **Identity**: runs are stamped with an orchestrator identity (shown in Ringside and eval rows). Resolution order: `--identity` > `FLEET_IDENTITY`/`RINGER_IDENTITY` env > a `.fleet-agent` file found walking up from the working directory (drop one in a repo root to give that repo's swarms their own name) > `identity_default` in config > short hostname.
 
 ### Manifest fields
@@ -100,6 +171,7 @@ Each task gets its own directory, its own worker, its own log, and its own verdi
 | `model` | Which model a harness engine runs for this task — fills the engine's `{model}` placeholder (e.g. `"openrouter/moonshotai/kimi-k2.7"`); empty uses the engine's `model_default` |
 | `task_type` | Optional free-form string naming the kind of work this task is, so the model-performance log can slice pass rates by task shape rather than only by model. Suggested vocabulary: `code-feature`, `code-fix`, `code-review`, `test-hardening`, `docs`, `research`, `persona-review`, `copywriting`, `site-build`, `motion-design`, `image-gen`, `data-pipeline`, `format-conversion`, `probe`, `bakeoff`. Empty is allowed; the log just reports it under `(none)`. |
 | `timeout_s` | Per-task kill timer (default 900) |
+| `max_attempts` | Maximum Ringer worker starts for this task (default 2; use 1 for a hard no-retry lane) |
 | `engine_args` | Extra CLI flags for this task's worker, spliced in at the engine's `{engine_args}` placeholder — e.g. `["-c", "model_reasoning_effort=low"]` so the orchestrator picks reasoning depth per task |
 | `verified` | One plain-English sentence saying what the check proves — shown on the results page next to "finished & checked" |
 | `full_access` | Worker runs unsandboxed — required for workers that spawn their own sub-workers; must also be enabled in config |

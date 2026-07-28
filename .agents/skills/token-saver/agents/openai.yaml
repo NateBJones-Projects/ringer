@@ -1,0 +1,4 @@
+interface:
+  display_name: "Token Saver"
+  short_description: "Reduce model input without changing your workflow"
+  default_prompt: "Use $token-saver to finish this work with the fewest useful model tokens."

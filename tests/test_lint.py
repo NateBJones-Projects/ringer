@@ -77,6 +77,16 @@ class LintManifestTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, r"task key must be a string"):
             self.manifest([task])
 
+    def test_max_attempts_must_be_positive(self) -> None:
+        task = self.task()
+        task["max_attempts"] = 0
+        with self.assertRaisesRegex(ValueError, r"task one: max_attempts must be positive"):
+            self.manifest([task])
+
+        task["max_attempts"] = 1
+        manifest = self.manifest([task])
+        self.assertEqual(1, manifest.tasks[0].max_attempts)
+
     def test_w1_unverifiable_check(self) -> None:
         manifest = self.manifest([self.task(check="echo ok && echo done")])
         self.assertHasFinding(

@@ -42,6 +42,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Iterable
 
+from context_packet import ContextPacket, build_context_packet
+
 
 TOOL_NAME = "ringer"
 STATE_DIR_NAME = ".ringer"
@@ -58,6 +60,36 @@ DEFAULT_CATALOG_SOURCE = "https://openrouter.ai/api/v1/models"
 CATALOG_AUTO_REFRESH_MAX_AGE_S = 24 * 60 * 60
 CATALOG_FETCH_TIMEOUT_S = 5
 DEFAULT_TOKEN_REGEX = r"tokens\s+used\s*:?\s*([0-9][0-9,]*)"
+CODEX_THIN_DISABLED_FEATURES = (
+    "apps",
+    "auth_elicitation",
+    "browser_use",
+    "browser_use_external",
+    "browser_use_full_cdp_access",
+    "chronicle",
+    "code_mode_host",
+    "computer_use",
+    "goals",
+    "guardian_approval",
+    "hooks",
+    "image_generation",
+    "in_app_browser",
+    "memories",
+    "mentions_v2",
+    "multi_agent",
+    "personality",
+    "plugin_sharing",
+    "plugins",
+    "remote_plugin",
+    "shell_snapshot",
+    "shell_tool",
+    "skill_mcp_dependency_install",
+    "skill_search",
+    "tool_call_mcp_elicitation",
+    "tool_suggest",
+    "unified_exec",
+    "workspace_dependencies",
+)
 ACTIVITY_TAIL_BYTES = 2048
 ACTIVITY_TEXT_LIMIT = 80
 ARTIFACT_WRAPPER_TAIL_BYTES = 256 * 1024
@@ -291,6 +323,37 @@ def built_in_codex_engine() -> EngineConfig:
     )
 
 
+def built_in_codex_thin_engine() -> EngineConfig:
+    resolved = shutil.which(DEFAULT_ENGINE_NAME) or DEFAULT_ENGINE_NAME
+    disabled: list[str] = []
+    for feature in CODEX_THIN_DISABLED_FEATURES:
+        disabled.extend(("--disable", feature))
+    return EngineConfig(
+        name="codex-thin",
+        bin=resolved,
+        args_template=(
+            "exec",
+            "--json",
+            "--ignore-user-config",
+            "--ignore-rules",
+            "--ephemeral",
+            "--skip-git-repo-check",
+            "--sandbox",
+            "read-only",
+            *disabled,
+            "{engine_args}",
+            "-C",
+            "{taskdir}",
+            "-o",
+            "answer.md",
+            "{spec}",
+        ),
+        full_access_args=(),
+        sandbox_args=(),
+        token_regex=r'"input_tokens"\s*:\s*([0-9]+)',
+    )
+
+
 def load_eval_config(raw: Any, state_dir: Path) -> EvalConfig:
     if raw is None:
         raw = {}
@@ -327,7 +390,10 @@ def load_hud_port(raw: Any) -> int:
 
 
 def load_engines(raw: Any) -> dict[str, EngineConfig]:
-    engines: dict[str, EngineConfig] = {DEFAULT_ENGINE_NAME: built_in_codex_engine()}
+    engines: dict[str, EngineConfig] = {
+        DEFAULT_ENGINE_NAME: built_in_codex_engine(),
+        "codex-thin": built_in_codex_thin_engine(),
+    }
     if raw is None:
         return engines
     if not isinstance(raw, dict):
@@ -388,6 +454,8 @@ class TaskSpec:
     engine: str = DEFAULT_ENGINE_NAME
     expect_files: tuple[str, ...] = ()
     timeout_s: int = DEFAULT_TIMEOUT_S
+    max_attempts: int = 2
+    redact_spec: bool = False
     full_access: bool = False
     engine_args: tuple[str, ...] = ()
     verified: str = ""
@@ -423,6 +491,9 @@ class TaskSpec:
         timeout_s = int(obj.get("timeout_s", DEFAULT_TIMEOUT_S))
         if timeout_s <= 0:
             raise ValueError(f"task {key}: timeout_s must be positive")
+        max_attempts = int(obj.get("max_attempts", 2))
+        if max_attempts <= 0:
+            raise ValueError(f"task {key}: max_attempts must be positive")
         engine_args = obj.get("engine_args", [])
         if not isinstance(engine_args, list) or not all(isinstance(item, str) for item in engine_args):
             raise ValueError(f"task {key}: engine_args must be a list of strings")
@@ -442,6 +513,8 @@ class TaskSpec:
             engine=engine,
             expect_files=tuple(str(item) for item in expect_files),
             timeout_s=timeout_s,
+            max_attempts=max_attempts,
+            redact_spec=bool(obj.get("redact_spec", False)),
             full_access=bool(obj.get("full_access", False)),
             engine_args=tuple(engine_args),
             verified=verified.strip(),
@@ -964,10 +1037,7 @@ class StateWriter:
 
     def flush(self) -> dict[str, Any]:
         state = self.snapshot()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
-        os.replace(tmp, self.path)
+        atomic_write_json(self.path, state)
         if self.artifact.enabled:
             self._write_status_artifact_safe(state)
             self._write_index_safe()
@@ -991,14 +1061,23 @@ class StateWriter:
                         "verdict": runtime.final_verdict,
                         "engine": runtime.task.engine,
                         "model": runtime.task.model or (engine.model_default if engine else ""),
-                        "spec": runtime.task.spec,
-                        "spec_short": runtime.spec_short,
+                        "spec": (
+                            "[redacted request packet]"
+                            if runtime.task.redact_spec
+                            else runtime.task.spec
+                        ),
+                        "spec_short": (
+                            "[redacted request packet]"
+                            if runtime.task.redact_spec
+                            else runtime.spec_short
+                        ),
                         "verified": runtime.task.verified,
                         "check": runtime.task.check,
                         "check_returncode": runtime.last_check_returncode,
                         "check_timed_out": runtime.last_check_timed_out,
                         "check_output_tail": shorten(runtime.last_check_output, 4000),
                         "timeout_s": runtime.task.timeout_s,
+                        "max_attempts": runtime.task.max_attempts,
                         "taskdir": str(runtime.taskdir),
                         "log_path": str(runtime.log_path),
                         "report_paths": {
@@ -6878,7 +6957,7 @@ class RingerRunner:
                 await self._record_prepare_error(runtime, prepare_error or "taskdir preparation failed")
                 return
             current_spec = runtime.task.spec
-            max_attempts = 2
+            max_attempts = runtime.task.max_attempts
             for attempt in range(1, max_attempts + 1):
                 retrying = attempt > 1
                 with self.lock:
@@ -7100,7 +7179,12 @@ class RingerRunner:
             "\n"
             f"[ringer.py] attempt {attempt} started {datetime.now(timezone.utc).isoformat()}\n"
             f"[ringer.py] engine: {runtime.task.engine}\n"
-            f"[ringer.py] command: {shell_command_for_display(cmd)} < /dev/null\n",
+            f"[ringer.py] command: {shell_command_for_display(
+                [
+                    '[request packet omitted]' if runtime.task.redact_spec and part == spec else part
+                    for part in cmd
+                ]
+            )} < /dev/null\n",
         )
         capture = RollingBytes(max_bytes=1_000_000)
         try:
@@ -7201,7 +7285,7 @@ class RingerRunner:
                 "run_id": self.run_id,
                 "pattern": "ringer-py",
                 "task_key": runtime.task.key,
-                "spec": spec[:500],
+                "spec": "[redacted request packet]" if runtime.task.redact_spec else spec[:500],
                 "worker_engine": runtime.task.engine,
                 "shepherd_model": SHEPHERD_MODEL,
                 "verify_method": VERIFY_METHOD,
@@ -7764,6 +7848,7 @@ def dry_run(
         print(f"    engine: {task.engine}")
         print(f"    dir: {taskdir}")
         print(f"    timeout_s: {task.timeout_s}")
+        print(f"    max_attempts: {task.max_attempts}")
         if task.full_access:
             print(f"    full_access: true allowed={full_access_allowed}")
         else:
@@ -7835,6 +7920,198 @@ def create_demo_manifest() -> Path:
     path = root / "ringer.json"
     path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return path
+
+
+def read_one_request(request: str | None, request_file: Path | None) -> str:
+    if request and request_file is not None:
+        raise ValueError("give the request as text or with --request-file, not both")
+    if request_file is not None:
+        try:
+            text = request_file.expanduser().resolve().read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ValueError(f"could not read request file {request_file}: {exc}") from exc
+    else:
+        text = request or ""
+    text = text.strip()
+    if not text:
+        raise ValueError("a request is required")
+    return text
+
+
+def one_request_workdir(config: AppConfig, supplied: Path | None) -> Path:
+    if supplied is not None:
+        workdir = supplied.expanduser().resolve()
+    else:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+        workdir = (config.state_dir / "requests" / f"{stamp}-p{os.getpid()}").resolve()
+    taskdir = workdir / "answer"
+    if taskdir.exists():
+        raise ValueError(f"refusing to reuse an existing answer directory: {taskdir}")
+    return workdir
+
+
+def one_request_manifest(
+    *,
+    packet: ContextPacket,
+    workdir: Path,
+    engine: str,
+    timeout_s: int,
+    reasoning_effort: str,
+    model: str | None,
+) -> Manifest:
+    engine_args: list[str] = []
+    if engine in {DEFAULT_ENGINE_NAME, "codex-thin"}:
+        engine_args.extend(("-c", f"model_reasoning_effort={reasoning_effort}"))
+        if model:
+            engine_args.extend(("-m", model))
+    elif model:
+        raise ValueError("--model is currently supported only by codex and codex-thin")
+    return Manifest(
+        run_name="one-request",
+        workdir=workdir,
+        max_parallel=1,
+        worktrees=False,
+        repo=None,
+        tasks=(
+            TaskSpec(
+                key="answer",
+                spec=packet.text,
+                check=(
+                    "test -s answer.md || "
+                    "{ echo 'FAIL: answer.md was not created or is empty'; exit 1; }"
+                ),
+                engine=engine,
+                expect_files=("answer.md",),
+                timeout_s=timeout_s,
+                max_attempts=1,
+                redact_spec=True,
+                engine_args=tuple(engine_args),
+                verified=(
+                    "answer.md exists and is not empty; this does not prove that the answer is correct"
+                ),
+                task_type="one-request",
+            ),
+        ),
+    )
+
+
+def print_packet_report(packet: ContextPacket, workdir: Path) -> None:
+    selected_source_bytes = sum(
+        len(chunk.text.encode("utf-8")) for chunk in packet.selected
+    )
+    removed = max(0, packet.source_bytes - selected_source_bytes)
+    percent = (removed / packet.source_bytes * 100.0) if packet.source_bytes else 0.0
+    print(
+        f"Built a {packet.packet_bytes:,}-byte request packet. It contains "
+        f"{selected_source_bytes:,} of {packet.source_bytes:,} source bytes "
+        f"({percent:.1f}% of source text left out before the model call)."
+    )
+    for chunk in packet.selected:
+        kind = "state" if chunk.state else "source"
+        location = f"{chunk.path}:{chunk.start_line}-{chunk.end_line}"
+        if chunk.start_line == chunk.end_line:
+            location += f" chars {chunk.start_char}-{chunk.end_char}"
+        print(f"  {kind}: {location}")
+    for item in packet.skipped:
+        print(f"  skipped: {item}")
+    print(f"Saved the selection report in {workdir}")
+
+
+def codex_usage_from_log(path: Path) -> dict[str, int] | None:
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    totals = {
+        "input_tokens": 0,
+        "cached_input_tokens": 0,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 0,
+        "reasoning_output_tokens": 0,
+    }
+    found = False
+    for line in lines:
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("type") != "turn.completed":
+            continue
+        usage = event.get("usage")
+        if not isinstance(usage, dict):
+            continue
+        found = True
+        for key in totals:
+            value = usage.get(key, 0)
+            if isinstance(value, int):
+                totals[key] += value
+    return totals if found else None
+
+
+def run_one_request(config: AppConfig, args: argparse.Namespace) -> int:
+    request = read_one_request(args.request, args.request_file)
+    workdir = one_request_workdir(config, args.workdir)
+    packet = build_context_packet(
+        request,
+        sources=args.source,
+        state_files=args.state,
+        max_packet_bytes=args.max_packet_bytes,
+        max_file_bytes=args.max_file_bytes,
+        max_files=args.max_files,
+    )
+    supplied_sources = bool(args.source or args.state)
+    if supplied_sources and not packet.selected:
+        skipped = "; ".join(packet.skipped) or "no passage matched the request"
+        raise ValueError(
+            "none of the supplied source text was selected, so no model call was made: "
+            f"{skipped}"
+        )
+    workdir.mkdir(parents=True, exist_ok=False)
+    if args.keep_packet:
+        (workdir / "packet.txt").write_text(packet.text, encoding="utf-8")
+    packet.write_report(workdir / "packet-report.json")
+    print_packet_report(packet, workdir)
+    if args.dry_run:
+        print("No model call was made.")
+        return 0
+
+    manifest = one_request_manifest(
+        packet=packet,
+        workdir=workdir,
+        engine=args.engine,
+        timeout_s=args.timeout_s,
+        reasoning_effort=args.reasoning_effort,
+        model=args.model,
+    )
+    validate_manifest_engines(manifest, config)
+    preflight_engine_bins(manifest, config)
+    identity = resolve_identity(args.identity, config, [workdir, *args.source, *args.state])
+    if config.artifact.enabled:
+        config = dataclass_replace(config, artifact=dataclass_replace(config.artifact, enabled=False))
+    result = asyncio.run(
+        run_manifest(
+            manifest,
+            config=config,
+            identity=identity,
+            dashboard_enabled=False,
+            force_browser=False,
+        )
+    )
+    answer_path = workdir / "answer" / "answer.md"
+    if result == 0 and answer_path.is_file():
+        print("\nAnswer\n")
+        print(answer_path.read_text(encoding="utf-8").rstrip())
+    usage = codex_usage_from_log(workdir / "answer" / "worker.log")
+    if usage is not None:
+        print(
+            "\nModel use: "
+            f"{usage['input_tokens']:,} input, "
+            f"{usage['cached_input_tokens']:,} reused input, "
+            f"{usage['output_tokens']:,} output."
+        )
+    return result
 
 
 def repo_root() -> Path:
@@ -8150,6 +8427,62 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument("--dry-run", action="store_true", help="print the plan without spawning codex")
 
+    ask_parser = subparsers.add_parser(
+        "ask",
+        help="answer one normal request with a small, clean worker",
+    )
+    ask_parser.add_argument("request", nargs="?", help="the normal-language request")
+    ask_parser.add_argument("--request-file", type=Path, help="read the request from a text file")
+    ask_parser.add_argument(
+        "--source",
+        type=Path,
+        action="append",
+        default=[],
+        help="file or directory to search for relevant passages; repeat as needed",
+    )
+    ask_parser.add_argument(
+        "--state",
+        type=Path,
+        action="append",
+        default=[],
+        help="small file with settled decisions that must take priority; repeat as needed",
+    )
+    ask_parser.add_argument("--config", type=Path, default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+    ask_parser.add_argument("--engine", default="codex-thin", help="worker engine (default: codex-thin)")
+    ask_parser.add_argument("--model", help="Codex model override")
+    ask_parser.add_argument(
+        "--reasoning-effort",
+        choices=("minimal", "low", "medium", "high"),
+        default="low",
+        help="Codex reasoning effort (default: low)",
+    )
+    ask_parser.add_argument("--timeout-s", type=int, default=300, help="worker timeout (default: 300)")
+    ask_parser.add_argument(
+        "--max-packet-bytes",
+        type=int,
+        default=16_000,
+        help="hard limit for request plus selected source text (default: 16000)",
+    )
+    ask_parser.add_argument(
+        "--max-file-bytes",
+        type=int,
+        default=4_000_000,
+        help="skip any one source larger than this (default: 4000000)",
+    )
+    ask_parser.add_argument("--max-files", type=int, default=200, help="source file limit (default: 200)")
+    ask_parser.add_argument("--workdir", type=Path, help="where to save the packet, answer, and log")
+    ask_parser.add_argument(
+        "--keep-packet",
+        action="store_true",
+        help="save the full request packet for debugging (off by default)",
+    )
+    ask_parser.add_argument("--identity", help="orchestrator identity for the local run record")
+    ask_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="select passages and show the packet size without making a model call",
+    )
+
     lint_parser = subparsers.add_parser("lint", help="lint a ringer manifest")
     lint_parser.add_argument("manifest", type=Path, help="path to ringer.json")
 
@@ -8248,6 +8581,10 @@ def main(argv: list[str] | None = None) -> int:
                 port=args.port,
                 open_viewer=not args.no_open,
             )
+        if args.command == "ask":
+            if args.timeout_s <= 0:
+                raise ValueError("--timeout-s must be positive")
+            return run_one_request(config, args)
 
         if args.command == "demo":
             manifest_path = create_demo_manifest()
