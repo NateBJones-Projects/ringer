@@ -2248,10 +2248,13 @@ class StateWriter:
 
     def flush(self) -> dict[str, Any]:
         state = self.snapshot()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
-        os.replace(tmp, self.path)
+        # atomic_write_json, not a fixed "<name>.json.tmp": the background
+        # writer thread and an explicit flush (a signal handler, set_port)
+        # can overlap. With one shared temp name, the first os.replace wins
+        # and the second raises FileNotFoundError on a temp file that no
+        # longer exists — which surfaced as a ~30% flake in the shutdown
+        # tests. mkstemp gives each writer its own file; last replace wins.
+        atomic_write_json(self.path, state)
         if self.artifact.enabled:
             self._write_status_artifact_safe(state)
             self._write_index_safe()
@@ -2403,11 +2406,9 @@ class StateWriter:
             self._append_library_version_safe(state)
             # Re-flush the plain state JSON so report_ready/report_path are accurate for
             # anything (Ringside) polling the state file right after the run ends.
-            tmp = self.path.with_suffix(".json.tmp")
             state = dict(state)
             state["report_ready"] = True
-            tmp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
-            os.replace(tmp, self.path)
+            atomic_write_json(self.path, state)
         except Exception as exc:
             print(f"artifact render error (final report, non-fatal): {exc}", file=sys.stderr)
 
