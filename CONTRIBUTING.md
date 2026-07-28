@@ -15,7 +15,7 @@ Honestly: we never asked for contributions, and the number of people showing up 
 1. **Small and scoped — one feature or fix per PR.** The single biggest predictor. Four PRs merged same-day the week this guide was written; the two large bundles (52 files; 16 files) were both sent back for splitting regardless of quality. If your change has an "and," consider splitting it. Resist scope creep in your own diff: drive-by refactors, stale copies of main, and bonus features all slow the part we want.
 2. **Rebased on current main.** Main moves fast here. A conflicting PR can't be audited.
 3. **Executed proof for every claim.** A test that runs beats a screenshot; a check that prints *why* it fails beats a silent `exit 1`. CI runs the full suite on macOS and Linux (required) and a non-blocking `windows-latest` harness — platform claims must be proven by the job for that platform, not asserted.
-4. **Match the house style.** Single-file `ringer.py`, stdlib only, Python 3.11+, frozen dataclasses, tests in `tests/` runnable by `python3 -m unittest discover -s tests`. Set `RINGER_NO_SELF_UPDATE=1` in tests that spawn the CLI.
+4. **Match the house style.** Single-file `ringer.py`, stdlib only, Python 3.12+, frozen dataclasses, tests in `tests/` runnable by `python3 -m unittest discover -s tests`. Set `RINGER_NO_SELF_UPDATE=1` in tests that spawn the CLI.
 5. **Real motivation.** PRs that fix an observed failure (say so in the description — "burned 100k tokens against a broken check" is a great opening line) review better than speculative hardening.
 
 ## Ringside UI contributions — actively encouraged
