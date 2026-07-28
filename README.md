@@ -103,7 +103,7 @@ Each task gets its own directory, its own worker, its own log, and its own verdi
 | `task_type` | Optional free-form string naming the kind of work this task is, so the model-performance log can slice pass rates by task shape rather than only by model. Suggested vocabulary: `code-feature`, `code-fix`, `code-review`, `test-hardening`, `docs`, `research`, `persona-review`, `copywriting`, `site-build`, `motion-design`, `image-gen`, `data-pipeline`, `format-conversion`, `probe`, `bakeoff`. Empty is allowed; the log just reports it under `(none)`. |
 | `timeout_s` | Per-task kill timer (default 900) |
 | `max_attempts` | How many times this task may run (default 2 — one try plus one retry with the check's failure output injected). Set `1` for a hard no-retry lane |
-| `redact_spec` | Replace this task's spec with `[redacted request packet]` in the run state, the logged command line, and the eval row, for specs carrying sensitive material. Never touches captured worker output |
+| `redact_spec` | Replace this task's spec with `[redacted request packet]` in the run state, the logged command line, and the eval row, for specs carrying sensitive material. Redacts Ringer's own records only — captured worker output is never rewritten (invariant), so a worker that echoes its request still puts that text in `worker.log` |
 | `engine_args` | Extra CLI flags for this task's worker, spliced in at the engine's `{engine_args}` placeholder — e.g. `["-c", "model_reasoning_effort=low"]` so the orchestrator picks reasoning depth per task |
 | `verified` | One plain-English sentence saying what the check proves — shown on the results page next to "finished & checked" |
 | `full_access` | Worker runs unsandboxed — required for workers that spawn their own sub-workers; must also be enabled in config |
@@ -131,9 +131,15 @@ prints the selection report and stops before any model call. `--redact` keeps
 the request out of the run state and eval row. The run appears on Ringside and
 in the artifact library like any other.
 
-If nothing in your sources matches, or everything that matches is too big for
-the packet, `ask` says which and stops **before** calling a model — it never
-spends a call on an empty packet.
+If everything that matches is too big for the packet, `ask` says so — naming the
+budget you'd need — and stops **before** calling a model. It never sends an
+empty packet. A source small enough to fit whole is included whole, whether or
+not it looks relevant, so pointing `ask` at unrelated material still costs one
+call: the packet is only as good as the sources you name.
+
+Directory scans stay inside the tree you named. A symlink pointing out of it, or
+one resolving to a sensitive filename, is skipped and reported. A file you name
+explicitly is always read — naming it is consent.
 
 > `ask` verifies only that an answer was produced and is non-empty. There is
 > nothing to execute against free-form prose, so this is the one lane in Ringer

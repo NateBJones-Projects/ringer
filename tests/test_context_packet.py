@@ -265,7 +265,7 @@ class OversizedPassageDiagnosticsTests(unittest.TestCase):
 
             self.assertEqual((), packet.selected, "nothing should fit a 600-byte packet")
             joined = " ".join(packet.skipped)
-            self.assertIn("matched the request", joined)
+            self.assertIn("candidate passage", joined)
             self.assertIn("raise --max-packet-bytes", joined)
             self.assertNotIn("no passage matched", joined)
 
@@ -295,3 +295,94 @@ class OversizedPassageDiagnosticsTests(unittest.TestCase):
             )
 
             self.assertNotIn("raise --max-packet-bytes", " ".join(packet.skipped))
+
+
+class DirectoryScanContainmentTests(unittest.TestCase):
+    """A directory scan must not leave the tree the caller named.
+
+    Regression: name checks ran on the directory entry, then the path was
+    resolved and read. A benignly-named symlink therefore pulled in a file
+    from outside the selected tree, bypassing the sensitive-filename filter.
+    """
+
+    def test_symlink_out_of_the_tree_is_skipped_and_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_root:
+            root = Path(temp_root)
+            inside, outside = root / "inside", root / "outside"
+            inside.mkdir()
+            outside.mkdir()
+            (outside / "secret-private.txt").write_text(
+                "LAUNCH CODE IS HUNTER2\n", encoding="utf-8"
+            )
+            (inside / "notes.md").write_text(
+                "Ordinary release notes.\n", encoding="utf-8"
+            )
+            (inside / "safe-notes.md").symlink_to(outside / "secret-private.txt")
+
+            packet = build_context_packet(
+                "what is the launch code",
+                sources=[inside],
+                max_packet_bytes=8_000,
+            )
+
+            self.assertNotIn("HUNTER2", packet.text)
+            self.assertTrue(
+                any("resolves outside" in item for item in packet.skipped),
+                f"expected a containment refusal, got {packet.skipped}",
+            )
+
+    def test_symlink_to_a_sensitive_name_inside_the_tree_is_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_root:
+            inside = Path(temp_root) / "inside"
+            inside.mkdir()
+            (inside / "credentials.md").write_text(
+                "API_TOKEN=sk-live-9999\n", encoding="utf-8"
+            )
+            (inside / "harmless.md").symlink_to(inside / "credentials.md")
+
+            packet = build_context_packet(
+                "what is the api token",
+                sources=[inside],
+                max_packet_bytes=8_000,
+            )
+
+            self.assertNotIn("sk-live-9999", packet.text)
+            self.assertTrue(
+                any("sensitive filename" in item for item in packet.skipped),
+                f"expected a sensitive-target refusal, got {packet.skipped}",
+            )
+
+    def test_an_explicitly_named_file_is_still_read(self) -> None:
+        """Naming a file IS consent — containment applies to scans only."""
+        with tempfile.TemporaryDirectory() as temp_root:
+            root = Path(temp_root)
+            outside = root / "outside"
+            outside.mkdir()
+            target = outside / "briefing.md"
+            target.write_text("The rollout window is Tuesday.\n", encoding="utf-8")
+            link = root / "pointer.md"
+            link.symlink_to(target)
+
+            packet = build_context_packet(
+                "when is the rollout window",
+                sources=[link],
+                max_packet_bytes=8_000,
+            )
+
+            self.assertIn("Tuesday", packet.text)
+
+    def test_ordinary_nested_files_are_still_scanned(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_root:
+            inside = Path(temp_root) / "inside"
+            (inside / "deep").mkdir(parents=True)
+            (inside / "deep" / "plan.md").write_text(
+                "The migration runs on Friday night.\n", encoding="utf-8"
+            )
+
+            packet = build_context_packet(
+                "when does the migration run",
+                sources=[inside],
+                max_packet_bytes=8_000,
+            )
+
+            self.assertIn("Friday night", packet.text)

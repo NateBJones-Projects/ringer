@@ -408,3 +408,44 @@ class AskCommandTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class NewFieldTypeStrictnessTests(unittest.TestCase):
+    """`max_attempts` and `redact_spec` reject truthy stand-ins.
+
+    `bool("false")` is True and `int(1.5)` is 1 — both would change what the
+    manifest author asked for without saying anything.
+    """
+
+    def _task(self, **extra: object) -> dict[str, object]:
+        base: dict[str, object] = {
+            "key": "t",
+            "spec": "a self-contained spec long enough to pass validation " * 2,
+            "check": "true",
+        }
+        base.update(extra)
+        return base
+
+    def test_fractional_max_attempts_is_rejected(self) -> None:
+        with self.assertRaises(ValueError) as caught:
+            TaskSpec.from_obj(self._task(max_attempts=1.5))
+        self.assertIn("max_attempts must be an integer", str(caught.exception))
+
+    def test_string_max_attempts_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            TaskSpec.from_obj(self._task(max_attempts="2"))
+
+    def test_string_redact_spec_is_rejected(self) -> None:
+        with self.assertRaises(ValueError) as caught:
+            TaskSpec.from_obj(self._task(redact_spec="false"))
+        self.assertIn("redact_spec must be true or false", str(caught.exception))
+
+    def test_real_values_still_work(self) -> None:
+        task = TaskSpec.from_obj(self._task(max_attempts=1, redact_spec=True))
+        self.assertEqual(1, task.max_attempts)
+        self.assertTrue(task.redact_spec)
+
+    def test_defaults_are_unchanged(self) -> None:
+        task = TaskSpec.from_obj(self._task())
+        self.assertEqual(2, task.max_attempts)
+        self.assertFalse(task.redact_spec)

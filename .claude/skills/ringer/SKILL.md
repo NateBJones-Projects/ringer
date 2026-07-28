@@ -84,10 +84,14 @@ means pulling whole files into a conversation that is already expensive.
 `ask` selects the passages that match the request, caps the packet, spawns one
 clean worker on it, and allows a single attempt. Repeat `--source` for several
 files or directories; `--state` takes a small file of settled decisions;
-`--dry-run` shows you the packet and spends nothing. If the sources yield no
-usable text it stops before the model call rather than letting a worker guess.
-Runs appear on Ringside like any other, and `--redact` keeps the request out
-of the log when the packet is sensitive.
+`--dry-run` shows you the packet and spends nothing. If everything that matched
+is too large for the packet it says so and stops before the model call rather
+than letting a worker guess — but a source small enough to fit whole is sent
+whole, relevant or not, so choosing the sources IS the work. Directory scans
+stay inside the tree you name; a symlink leading out of it is skipped and
+reported. Runs appear on Ringside like any other, and `--redact` hides the
+request from Ringer's own state and eval records — it cannot scrub raw worker
+output, which is captured verbatim by design.
 
 **Be honest about what it verifies.** The check is that `answer.md` exists and
 is non-empty. That is the weakest check in the tool, and it is also the best

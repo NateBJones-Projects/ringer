@@ -22,9 +22,9 @@ try:
 except Exception:  # pragma: no cover - exercised by monkeypatch in tests.
     sqlite3 = None  # type: ignore[assignment]
 
-if sys.version_info < (3, 11):
+if sys.version_info < (3, 12):
     raise SystemExit(
-        f"ringer requires Python 3.11+ (tomllib); found {sys.version.split()[0]} at {sys.executable}"
+        f"ringer requires Python 3.12+; found {sys.version.split()[0]} at {sys.executable}"
     )
 
 import tempfile
@@ -352,6 +352,35 @@ def source_files(
                 skipped.append(f"{candidate}: unsupported file type")
                 continue
             resolved = candidate.resolve()
+            if not supplied_file:
+                # Every name check above ran on the DIRECTORY ENTRY's name. A
+                # symlink with a benign name can resolve to a sensitive file
+                # outside the tree the caller named, so a scan must confirm
+                # containment and re-run the name checks on the real target.
+                # An explicitly supplied file is exempt: naming it IS consent.
+                try:
+                    resolved.relative_to(path)
+                except ValueError:
+                    skipped.append(
+                        f"{candidate}: resolves outside the selected source "
+                        f"tree ({resolved})"
+                    )
+                    continue
+                resolved_name = resolved.name
+                resolved_lower = resolved_name.lower()
+                if (
+                    resolved_name.startswith(".")
+                    or resolved_lower.startswith(".env")
+                    or any(
+                        part in resolved_lower
+                        for part in SENSITIVE_FILENAME_PARTS
+                    )
+                ):
+                    skipped.append(
+                        f"{candidate}: resolves to a hidden or sensitive "
+                        f"filename ({resolved_name})"
+                    )
+                    continue
             if resolved in seen:
                 continue
             seen.add(resolved)
@@ -682,7 +711,7 @@ def build_context_packet(
         block_bytes, chunk = min(oversized, key=lambda item: item[0])
         needed = block_bytes + base_bytes
         skipped.append(
-            f"{len(oversized)} passage(s) matched the request but none fit the "
+            f"{len(oversized)} candidate passage(s) were ranked but none fit the "
             f"{max_packet_bytes:,}-byte packet: the smallest is "
             f"{chunk.path}:{chunk.start_line}-{chunk.end_line} and needs about "
             f"{needed:,} bytes — raise --max-packet-bytes"
@@ -1586,6 +1615,16 @@ def load_engines(raw: Any) -> dict[str, EngineConfig]:
     return engines
 
 
+def require_bool(value: Any, key: str, field: str) -> bool:
+    """Reject truthy stand-ins. `"false"` is a string, and `bool("false")` is True."""
+    if not isinstance(value, bool):
+        raise ValueError(
+            f"task {key}: {field} must be true or false, "
+            f"got {type(value).__name__} {value!r}"
+        )
+    return value
+
+
 @dataclass(frozen=True)
 class TaskSpec:
     key: str
@@ -1631,7 +1670,16 @@ class TaskSpec:
         timeout_s = int(obj.get("timeout_s", DEFAULT_TIMEOUT_S))
         if timeout_s <= 0:
             raise ValueError(f"task {key}: timeout_s must be positive")
-        max_attempts = int(obj.get("max_attempts", 2))
+        # Strict on the fields this release introduces: `1.5` silently
+        # truncating to 1 would remove the retry without saying so, and a
+        # string is never what the author meant.
+        raw_max_attempts = obj.get("max_attempts", 2)
+        if isinstance(raw_max_attempts, bool) or not isinstance(raw_max_attempts, int):
+            raise ValueError(
+                f"task {key}: max_attempts must be an integer, "
+                f"got {type(raw_max_attempts).__name__}"
+            )
+        max_attempts = raw_max_attempts
         if max_attempts <= 0:
             raise ValueError(f"task {key}: max_attempts must be positive")
         engine_args = obj.get("engine_args", [])
@@ -1654,7 +1702,7 @@ class TaskSpec:
             expect_files=tuple(str(item) for item in expect_files),
             timeout_s=timeout_s,
             max_attempts=max_attempts,
-            redact_spec=bool(obj.get("redact_spec", False)),
+            redact_spec=require_bool(obj.get("redact_spec", False), key, "redact_spec"),
             full_access=bool(obj.get("full_access", False)),
             engine_args=tuple(engine_args),
             verified=verified.strip(),
@@ -10273,6 +10321,8 @@ def run_one_request(config: AppConfig, args: argparse.Namespace) -> int:
         config,
         [workdir, *args.source, *args.state],
     )
+    # Same as `run`: a worker never starts while the watch page is dark.
+    ensure_hud_running(config, open_browser=False)
     result = asyncio.run(
         run_manifest(
             manifest,
