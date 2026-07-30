@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -23,7 +25,9 @@ class AgentInstallTests(unittest.TestCase):
     def run_cli(self, *args: str, cwd: Path = ROOT) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
         env["HOME"] = str(self.home)
+        env["USERPROFILE"] = str(self.home)
         env["RINGER_HOME"] = str(self.ringer_home)
+        env["RINGER_NO_SELF_UPDATE"] = "1"
         return subprocess.run(
             [sys.executable, "ringer.py", *args],
             cwd=str(cwd),
@@ -37,6 +41,36 @@ class AgentInstallTests(unittest.TestCase):
     def read_settings(self, root: Path | None = None) -> dict[str, object]:
         base = self.home if root is None else root
         return json.loads((base / ".claude" / "settings.json").read_text(encoding="utf-8"))
+
+    def read_codex_hooks(self, root: Path | None = None) -> dict[str, object]:
+        base = self.home if root is None else root
+        return json.loads((base / ".codex" / "hooks.json").read_text(encoding="utf-8"))
+
+    def dispatch_installed_codex_hook(
+        self, payload: dict[str, object]
+    ) -> subprocess.CompletedProcess[str]:
+        groups = self.read_codex_hooks()["hooks"][payload["hook_event_name"]]
+        group = next(
+            item
+            for item in groups
+            if re.fullmatch(str(item["matcher"]), str(payload["tool_name"]))
+        )
+        handler = group["hooks"][0]
+        env = os.environ.copy()
+        env["HOME"] = str(self.home)
+        env["USERPROFILE"] = str(self.home)
+        env["RINGER_HOME"] = str(self.ringer_home)
+        command = handler.get("commandWindows") if os.name == "nt" else handler["command"]
+        return subprocess.run(
+            command if os.name == "nt" else shlex.split(command),
+            input=json.dumps(payload),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            shell=os.name == "nt",
+            env=env,
+            check=False,
+        )
 
     def ringer_handlers(self, settings: dict[str, object]) -> list[dict[str, object]]:
         handlers: list[dict[str, object]] = []
@@ -72,6 +106,80 @@ class AgentInstallTests(unittest.TestCase):
         self.assertEqual("Edit|Write", hooks["PostToolUse"][0]["matcher"])
         self.assertIn("ringer_nudge.py", hooks["PostToolUse"][0]["hooks"][0]["command"])
         self.assertTrue(hooks["PostToolUse"][0]["hooks"][0]["command"].endswith(" post-edit"))
+
+    def test_codex_install_dispatches_real_apply_patch_events(self) -> None:
+        result = self.run_cli("install-agent", "--agent", "codex")
+        self.assertEqual(0, result.returncode, result.stderr)
+
+        skill = self.home / ".agents" / "skills" / "ringer" / "SKILL.md"
+        self.assertTrue(skill.exists())
+        hooks = self.read_codex_hooks()["hooks"]
+        self.assertEqual("apply_patch", hooks["PostToolUse"][0]["matcher"])
+        handler = hooks["PostToolUse"][0]["hooks"][0]
+        self.assertIn("ringer_nudge.py", handler["command"])
+        self.assertIn("commandWindows", handler)
+
+        files = ["a.py", "a.py", "b.py", "b.py", "a.py", "b.py", "a.py", "c.py"]
+        for index, file_path in enumerate(files):
+            payload = {
+                "session_id": "installed-codex-session",
+                "hook_event_name": "PostToolUse",
+                "tool_name": "apply_patch",
+                "tool_input": {
+                    "command": (
+                        "*** Begin Patch\n"
+                        f"*** Update File: {file_path}\n"
+                        "@@\n-old\n+new\n"
+                        "*** End Patch"
+                    )
+                },
+                "tool_response": {"success": True},
+            }
+            dispatched = self.dispatch_installed_codex_hook(payload)
+            self.assertEqual(0, dispatched.returncode, dispatched.stderr)
+            if index < len(files) - 1:
+                self.assertEqual("", dispatched.stdout)
+            else:
+                output = json.loads(dispatched.stdout)
+                self.assertEqual(
+                    "PostToolUse",
+                    output["hookSpecificOutput"]["hookEventName"],
+                )
+
+    def test_codex_install_migrates_the_old_nonmatching_post_hook(self) -> None:
+        codex = self.home / ".codex"
+        codex.mkdir()
+        hooks_path = codex / "hooks.json"
+        hooks_path.write_text(
+            json.dumps(
+                {
+                    "hooks": {
+                        "PostToolUse": [
+                            {
+                                "matcher": "Edit|Write",
+                                "hooks": [
+                                    {
+                                        "type": "command",
+                                        "command": "python3 /old/ringer_nudge.py post-edit",
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = self.run_cli("install-agent", "--agent", "codex")
+        self.assertEqual(0, result.returncode, result.stderr)
+        post_groups = self.read_codex_hooks()["hooks"]["PostToolUse"]
+        self.assertEqual(1, len(post_groups))
+        self.assertEqual("apply_patch", post_groups[0]["matcher"])
+
+        uninstall = self.run_cli("uninstall-agent", "--agent", "codex")
+        self.assertEqual(0, uninstall.returncode, uninstall.stderr)
+        self.assertFalse((self.home / ".agents" / "skills" / "ringer").exists())
 
     def test_second_install_is_idempotent(self) -> None:
         first = self.run_cli("install-agent")
