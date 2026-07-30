@@ -31,7 +31,7 @@ manifest.json ──▶ ringer.py ──▶ N parallel workers (codex exec, each
 
 ## Quickstart
 
-Ringer runs on macOS and Linux (Windows via WSL) and needs Python 3.11+.
+Ringer runs on macOS and Linux (Windows via WSL) and needs Python 3.12+.
 
 1. Install a worker CLI and sign in (Codex is the built-in default engine):
 
@@ -102,6 +102,8 @@ Each task gets its own directory, its own worker, its own log, and its own verdi
 | `model` | Which model a harness engine runs for this task — fills the engine's `{model}` placeholder (e.g. `"openrouter/moonshotai/kimi-k2.7"`); empty uses the engine's `model_default` |
 | `task_type` | Optional free-form string naming the kind of work this task is, so the model-performance log can slice pass rates by task shape rather than only by model. Suggested vocabulary: `code-feature`, `code-fix`, `code-review`, `test-hardening`, `docs`, `research`, `persona-review`, `copywriting`, `site-build`, `motion-design`, `image-gen`, `data-pipeline`, `format-conversion`, `probe`, `bakeoff`. Empty is allowed; the log just reports it under `(none)`. |
 | `timeout_s` | Per-task kill timer (default 900) |
+| `max_attempts` | How many times this task may run (default 2 — one try plus one retry with the check's failure output injected). Set `1` for a hard no-retry lane |
+| `redact_spec` | Replace this task's spec with `[redacted request packet]` in the run state, the logged command line, and the eval row, for specs carrying sensitive material. Redacts Ringer's own records only — captured worker output is never rewritten (invariant), so a worker that echoes its request still puts that text in `worker.log` |
 | `engine_args` | Extra CLI flags for this task's worker, spliced in at the engine's `{engine_args}` placeholder — e.g. `["-c", "model_reasoning_effort=low"]` so the orchestrator picks reasoning depth per task |
 | `verified` | One plain-English sentence saying what the check proves — shown on the results page next to "finished & checked" |
 | `full_access` | Worker runs unsandboxed — required for workers that spawn their own sub-workers; must also be enabled in config |
@@ -110,6 +112,39 @@ Each task gets its own directory, its own worker, its own log, and its own verdi
 > **Worktree footgun:** on PASS the task's worktree is removed — including anything written inside it. In worktrees mode, worker logs live outside task worktrees in `workdir/logs/`; have workers write deliverables outside the worktree too, or have your `check` copy artifacts out before it exits 0.
 
 Not sure what your tasks even are yet? [`docs/interview-prompt.md`](docs/interview-prompt.md) is a prompt you paste into any chatbot; it interviews you about the job and hands back a brief your orchestrating agent can turn into a manifest. Ready-made skeletons for the patterns that work live in [`templates/`](templates/).
+
+## `ask` — one bounded question, one clean worker
+
+Not every question deserves a manifest. When you want a read-only answer over
+source you can already point at, `ask` selects the passages that match the
+request, caps the packet, and runs a single worker on it:
+
+```bash
+./ringer.py ask "Why did the Wednesday release slip?" --source notes/status.md
+./ringer.py ask "..." --source src/ --source docs/ --dry-run   # show the packet, spend nothing
+```
+
+Repeat `--source` for more files or directories. `--state` takes a small file
+of settled decisions and is preferred over ordinary sources when the packet is
+tight. `--max-packet-bytes` sets the budget (default 16,000). `--dry-run`
+prints the selection report and stops before any model call. `--redact` keeps
+the request out of the run state and eval row. The run appears on Ringside and
+in the artifact library like any other.
+
+If everything that matches is too big for the packet, `ask` says so — naming the
+budget you'd need — and stops **before** calling a model. It never sends an
+empty packet. A source small enough to fit whole is included whole, whether or
+not it looks relevant, so pointing `ask` at unrelated material still costs one
+call: the packet is only as good as the sources you name.
+
+Directory scans stay inside the tree you named. A symlink pointing out of it, or
+one resolving to a sensitive filename, is skipped and reported. A file you name
+explicitly is always read — naming it is consent.
+
+> `ask` verifies only that an answer was produced and is non-empty. There is
+> nothing to execute against free-form prose, so this is the one lane in Ringer
+> where the check does not prove the result is right. Read the answer. Anything
+> whose output a check could actually execute belongs in a manifest.
 
 ## Lint
 
@@ -366,7 +401,8 @@ Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the phi
 
 ## Requirements
 
-- Python 3.11+ (stdlib only; `psycopg` needed only for the optional Postgres eval backend)
+- Python 3.12+ (stdlib only; `psycopg` needed only for the optional Postgres eval backend)
+  - **Changed:** the supported floor moved from 3.11 to 3.12. CI has only ever run 3.12, so 3.11 was a promise nothing enforced — the honest fix is to state the version we actually test. Today's code still happens to run on 3.11; that is no longer guaranteed, and 3.11 breakage won't be treated as a bug.
 - At least one agent CLI (Codex works out of the box)
 - Rust toolchain, only if you're building Ringside from source
 

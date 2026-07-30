@@ -10,7 +10,8 @@ description: >-
   are about to do a "quick check" that spawns a model or a CLI agent; you are
   reviewing or diagnosing failed worker or model output; you catch yourself
   thinking a task is "small enough to just do myself" — that thought IS the
-  trigger (a single task is a one-task manifest); or you are writing or
+  trigger (a single task is a one-task manifest, and a bounded read-only
+  question is `ringer.py ask`); or you are writing or
   reviewing a manifest, choosing a swarm pattern (review swarm, fix swarm,
   focus group, bakeoff, research-with-proof), picking a worker engine, or
   debugging a failed run. SKIP only for: reading or searching files, git
@@ -67,6 +68,41 @@ Full reference: `README.md`. Ready-made manifest skeletons: `templates/`.
 Lint catches unverifiable checks, silent checks, worktree deliverable/commit
 loss, serial fan-out, write collisions, and underspecified specs; `run`
 prints the same findings as non-blocking warnings.
+
+## The one exception: `ask`
+
+Rule 2 holds for anything that changes a file, runs a build, or produces an
+artifact worth checking. One lane doesn't fit it: the human asks a bounded,
+read-only question over source you can already point at, and the answer is
+prose. A manifest for that is ceremony — but answering it in your own context
+means pulling whole files into a conversation that is already expensive.
+
+```bash
+./ringer.py ask "<the human's request>" --source /absolute/path/to/source
+```
+
+`ask` selects the passages that match the request, caps the packet, spawns one
+clean worker on it, and allows a single attempt. Repeat `--source` for several
+files or directories; `--state` takes a small file of settled decisions;
+`--dry-run` shows you the packet and spends nothing. If everything that matched
+is too large for the packet it says so and stops before the model call rather
+than letting a worker guess — but a source small enough to fit whole is sent
+whole, relevant or not, so choosing the sources IS the work. Directory scans
+stay inside the tree you name; a symlink leading out of it is skipped and
+reported. Runs appear on Ringside like any other, and `--redact` hides the
+request from Ringer's own state and eval records — it cannot scrub raw worker
+output, which is captured verbatim by design.
+
+**Be honest about what it verifies.** The check is that `answer.md` exists and
+is non-empty. That is the weakest check in the tool, and it is also the best
+available — there is nothing to execute against free-form prose. `ask` proves
+the worker answered, never that the answer is right. You still read it.
+
+**Everything else is a manifest.** Code changes, external actions, research
+you intend to act on, anything whose output a check could actually execute —
+those keep the full path. When a request sits near the line, the tiebreaker is
+whether you could write a check that would catch a wrong answer. If you can,
+write it, and make it a manifest.
 
 ## One job, one artifact
 
@@ -297,6 +333,32 @@ someone's untracked scratch files.
    differently. Only what the executed checks and raw logs support. The raw
    numbers took care of themselves — every attempt already landed in the
    local model log (`./ringer.py models` to see the updated scoreboard).
+
+## Spend your own context deliberately
+
+The scoreboard exists so that worker tokens buy evidence. Your own tokens are
+not free either, and nothing in the tool constrains them:
+
+- **Reach for code before a model.** Counting, sorting, exact-text search,
+  field extraction, format conversion, file comparison, validation — `rg`,
+  `jq`, a parser, a two-line script. A model imitating `grep` is an expensive
+  way to get a worse `grep`.
+- **Select passages; don't load files.** Search first, then read what matched.
+  Loading a whole transcript because the answer is somewhere inside it is how
+  a cheap question turns expensive. `ask` does this for you; when you are not
+  using `ask`, do it by hand.
+- **Load a tool when the job needs it** — not every connector and schema at
+  the top of a session on the chance that one gets used.
+- **Answer the question that was asked.** A sentence when a sentence was asked
+  for. No process diary, no restating the human's request back to them, no
+  unrequested options.
+- **Never retry into a limit.** A token- or usage-limit failure is not a
+  transient error; retrying it just burns the budget faster. Reduce the input
+  or take a cheaper path.
+
+When you claim a saving, count the whole job — every call, including your own
+planning and review. Moving tokens from your context into a worker's is only a
+saving if the total came down.
 
 ## Baked-in invariants (preserve in any change to ringer.py)
 
