@@ -311,3 +311,119 @@ checks and raw logs support — no vibes, no worker self-reports.
 
 ## opencode / z-ai glm-5.2 (via openrouter)
 - 2026-07-09 (aicred-invoice-downloads, 4 code-fix tasks + 1 follow-up, worktrees+npm ci checks): systematic attempt-1 NO-OP — all 4 parallel workers produced zero edits and no summary on first attempt, then completed cleanly on attempt 2 after retry-prompt injection (34k-69k tokens each). Follow-up single task passed attempt 1. Suspect first-invocation session warm-up in opencode-sandboxed under parallel spawn; budget for 2 attempts on parallel GLM batches. Output quality on Next.js/Stripe route+test work: solid, spec-faithful, one boss-caught design gap (used user-scoped supabase client where RLS demanded service role — spec didn't say explicitly; say it explicitly).
+
+### codex (codex-cli 0.137.0-alpha.4) — 2026-07-22, hospedo phase-5c pricing
+
+- `code-feature` x3, `code-fix` x1. 4/4 eventually passing; 3/4 first-try.
+- **The one FAIL was my check's bug, not the model's.** `w54-backfill` was marked
+  fail after 2 attempts because the gate grepped `\b85\b` for expected rates, and
+  C# writes them as decimal literals (`85m`) — no word boundary between a digit
+  and `m`, so a correct implementation could never satisfy it. The gate also
+  flagged the negative guard (`Assert.DoesNotContain(... 110m or 95m)`) that the
+  spec itself had *required*. Work was correct on attempt 1. Read the scoreboard
+  accordingly: do not treat this as evidence against codex on code-feature.
+- Lesson for future checks: never word-boundary-match numerics in C#; allow an
+  optional `[mMdDfF]` suffix. And exempt negative/guard assertions before
+  banning a literal.
+- Recurring environment note: codex's sandbox cannot bind VSTest's local TCP
+  listener (`SocketException (13): Permission denied`), so it can only ever
+  self-verify by `dotnet build`, never `dotnet test`. Every run reported
+  build-only verification. The executed check (running outside that sandbox) is
+  therefore doing all real verification here — do not relax it on the assumption
+  the worker ran the suite.
+
+### work#233 model bake-off — 2026-07-25, hospedo payments-05 tier refund (`dotnet-feature`)
+
+Controlled 3-seed comparison on one frozen commit, identical spec/check/timeouts;
+only engine+model differed. Full write-up:
+`mulhacenlabs-engineering/outputs/engineering-experiments/2026-07-23-model-bakeoff/02-results.md`.
+
+**⚠️ SCOREBOARD CORRECTION — read this before trusting `ringer.py models` for
+`dotnet-feature`.** Four rows in the local scoreboard are INFRASTRUCTURE failures
+recorded as model failures. Ringer has no `infra_error` concept, so they land as
+0.00 pass-rate against the model:
+
+- **GPT-5.5 (codex), 2 failed** — a live OpenAI incident ("Elevated error rates",
+  APIs/ChatGPT/Codex; `503 … biscuit_baker_service_me_circuit_open`, 30 and 42
+  occurrences). The worker never reached the code. NOT evidence against GPT-5.5.
+- **Kimi K2.7 Code, 2 failed** — the gate's asserter script was an UNTRACKED file in
+  the monorepo; a concurrent session switched branches and deleted it mid-run. One of
+  those runs produced a **correct** implementation (4 passed / 2 skipped / 6 total, all
+  three named tier examples green, 610 website tests) and was still marked FAIL.
+  Proven: re-running that run's exact check against its preserved worktree exits 0.
+  NOT evidence against Kimi.
+
+Real results, measured after the rig was isolated (dedicated worktree pinned at
+BASE_SHA + checks owned by the experiment package):
+
+- **`openrouter/z-ai/glm-5.2` — 3/3, all FIRST-TRY.** 434.6 / 662.3 / 837.7s.
+  Modified exactly the 4 owned files every time, *including* the Gherkin step
+  bindings, and added tests rather than deleting any (609/617/605 vs a 605 floor).
+  Implementation quality spot-checked and genuinely correct — cumulative idempotency
+  guard, correct tier boundary, no rail call on a 0% tier, honest out-of-scope notes.
+  Strong pick for `dotnet-feature`.
+- **`openrouter/moonshotai/kimi-k2.7-code` — 1/3, 0 first-try.** Fails the same way
+  twice: writes plausible domain logic, never wires it to the acceptance criteria.
+  Seed 2 touched 2/4 files (no step bindings); seed 3 touched 1/4 (10 lines).
+  Monotonic disengagement (63 → 38 → 25 steps) and missed the stated `notes.md`
+  output contract on 2/3 seeds. **Do not route `dotnet-feature` work to it.**
+
+**Token accounting — the configured `token_regex` is wrong by ~20×.**
+`token_regex = '"tokens":\{"total":([0-9]+)'` matches the FIRST `step-finish` event
+only; opencode emits one per step. Measured: regex 17,677 vs actual 391,051 fresh.
+But summing per-step `total` is ALSO wrong — `total = input+output+reasoning+cache.read`,
+so the sum is dominated by cache re-reads (2,957,831 vs 391,051 fresh on the same run).
+Use `input+output+reasoning`. Extractor: the experiment package's `tools/engine_tokens.py`.
+
+**Cost:** opencode's self-reported cost runs ~34% HIGH ($0.903 claimed vs $0.673
+billed) because it prices cache reads at fresh-input rates. Ground truth is
+`GET https://openrouter.ai/api/v1/key` → `data.usage`, snapshotted either side of a run.
+
+**Cost variance is a caching artefact, not a model property.** Identical model, task
+and prompt across three seeds gave a **1.8× cost spread** ($0.673 → $1.197), driven
+entirely by provider-side prompt-cache hit rate (seed 3 got half the cache reads and
+double the fresh input). Treat "cost per success" on a single seed as noise.
+
+**Plan-billed vs metered is not comparable.** codex on plan is $0 marginal; GLM at
+~$0.89/run is strictly more expensive. The argument for a second lane is availability
+and concurrency — proven today when OpenAI went down and the OpenRouter lanes kept
+working — not cost.
+
+**Evidence gap:** when a task passes on attempt 2, why attempt 1 failed is
+unrecoverable — only the final attempt's `check_output_tail` is stored.
+
+#### work#233 addendum — candidate A measured, 2026-07-25 (same `dotnet-feature` task)
+
+The OpenAI incident cleared, so the baseline arm was re-run in full. **codex / gpt-5.5
+(effort medium, plan-billed): 3/3 PASS, all first-try**, 781.1s / 2098.2s / 808.4s
+(median 808.4s). $0.00 marginal — proven by a byte-identical OpenRouter `usage` reading
+before the first seed and after the last. Supersedes the two outage rows: GPT-5.5 is
+**not** 0.00 on this task type.
+
+Final three-way, one frozen commit, identical spec/check/timeouts:
+
+| lane | pass | first-try | median | cost/success |
+|---|---|---|---|---|
+| codex gpt-5.5 (plan) | 3/3 | 3/3 | 808.4s | $0.00 |
+| `openrouter/z-ai/glm-5.2` | 3/3 | 3/3 | 662.3s | $0.894 |
+| `openrouter/moonshotai/kimi-k2.7-code` | 1/3 | 0/3 | 925.0s | $1.757 |
+
+**The cheap lane is not cheaper.** codex on plan is $0 marginal, so GLM is strictly more
+expensive per success. The defensible reasons for a second lane are availability (the
+outage removed codex for a day while OpenRouter kept working), concurrency beyond plan
+limits, and scope discipline — GLM touched exactly 4 files on every seed, codex touched
+5/6/4 for the same gate outcome.
+
+**⚠️ codex cannot self-verify .NET work, and it costs real wall-clock.** a-2 spent ~22 of
+its 35 minutes sitting through five-minute MSBuild timeouts inside its own sandbox
+("*the command is still alive and repeating the same sandbox MSBuild failure*"). Same
+hang recorded on the 2026-07-23 run, and consistent with the VSTest-listener note above.
+It still passed 3/3 — because Ringer's check runs UNSANDBOXED and did the real
+verification. Consequences: (1) do not relax an executed check assuming the worker ran
+the suite — for codex it demonstrably did not; (2) roughly half of GLM's *mean* speed
+advantage is this defect, not model speed (medians: 662s vs 808s, ~18%; means: 645s vs
+1229s, ~48%). Do not encode the mean into any routing rule.
+
+**codex token capture is unusable.** The engine's `token_regex` matched nothing at all in
+today's logs, yet Ringer still recorded `tokens: 99 / 144 / 143`. Those numbers are not
+traceable to any worker output. Treat codex token counts on the scoreboard as noise.
