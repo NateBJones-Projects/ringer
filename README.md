@@ -88,6 +88,10 @@ Each task gets its own directory, its own worker, its own log, and its own verdi
 
 > **Write checks that print why they fail.** A silent `exit 1` (the `git diff --quiet` style) costs you twice: the retry prompt gets no failure context to fix against, and the eval log records an undiagnosable row. `diff` beats `diff -q`; an assert with a message beats a bare test.
 
+> **A check cannot demand evidence the spec never supplied.** Before failing a worker for missing evidence or input, re-read the task inputs. If the spec didn't provide a value, the check must not invent one and fail on its absence — an honest UNVERIFIABLE answer is not a failure. Reserve hard failure for what the spec actually asserted.
+
+> **Executed checks catch laziness, not subtle wrongness.** A check that *runs* the artifact catches a plausible-but-wrong change far less often than it catches a missing one. Whenever a swarm touches a dogfood artifact (Ringer's own docs, config, or checks), add an "our own artifact passes our own validator" test so the checker exercises what it preaches. And keep orchestrator patch review mandatory regardless of PASS status — a green check is not proof of semantic correctness.
+
 **Identity**: runs are stamped with an orchestrator identity (shown in Ringside and eval rows). Resolution order: `--identity` > `FLEET_IDENTITY`/`RINGER_IDENTITY` env > a `.fleet-agent` file found walking up from the working directory (drop one in a repo root to give that repo's swarms their own name) > `identity_default` in config > short hostname.
 
 ### Manifest fields
