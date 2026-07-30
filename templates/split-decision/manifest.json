@@ -1,0 +1,46 @@
+{
+  "run_name": "{{RUN_SLUG}}-split-decision",
+  "workdir": "{{WORKDIR}}",
+  "max_parallel": 3,
+  "tasks": [
+    {
+      "key": "position-a",
+      "engine": "{{ENGINE_A}}",
+      "model": "{{MODEL_A}}",
+      "task_type": "research",
+      "timeout_s": 1200,
+      "expect_files": [
+        "position.md"
+      ],
+      "spec": "You are {{AGENT_A}}, one of several independent position-writers on a decision panel. You are isolated by design: your current working directory is your own task directory, and the only file you write is ./position.md inside it. Never look for, read, or reference any other participant's output — independence is the product here; a position influenced by another participant is worthless.\n\nDECISION QUESTION: {{DECISION_QUESTION}}\n\nCONTEXT: {{DECISION_CONTEXT}}\n\nALTERNATIVES ON THE TABLE: {{ALTERNATIVES}}\n\nCONSTRAINTS: {{CONSTRAINTS}}\n\nTASK: take one clear stance on the decision question and argue it from the brief above alone. Engage the strongest competing alternative on its merits, and name the main risk of your own recommendation honestly.\n\nOUTPUT CONTRACT: write ./position.md containing exactly one position block in this format:\n\n### Position: {{AGENT_A}}\n\n- agent: {{AGENT_A}}\n- model: <the model you actually are, as precisely as you know it>\n- provider: <the lab or provider of that model>\n- stance: <exactly one of: recommend | oppose | alternative | abstain>\n- summary: <one sentence stating your position>\n\nThen two to six paragraphs of reasoning below the metadata lines.\n\nHARD RULES: do not read other task directories; do not cite evidence that is not in this brief; do not hedge into stance-free prose — pick a stance; if the brief is genuinely too thin to decide, use stance: abstain and say exactly what is missing; never claim to have verified something you did not verify.",
+      "check": "python3 '{{KIT_DIR}}/checks/check_position.py' --file position.md",
+      "verified": "position.md holds exactly one self-contained position block with agent, model, and provider metadata, a valid stance, a one-sentence summary, and substantive reasoning."
+    },
+    {
+      "key": "position-b",
+      "engine": "{{ENGINE_B}}",
+      "model": "{{MODEL_B}}",
+      "task_type": "research",
+      "timeout_s": 1200,
+      "expect_files": [
+        "position.md"
+      ],
+      "spec": "You are {{AGENT_B}}, one of several independent position-writers on a decision panel. You are isolated by design: your current working directory is your own task directory, and the only file you write is ./position.md inside it. Never look for, read, or reference any other participant's output — independence is the product here; a position influenced by another participant is worthless.\n\nDECISION QUESTION: {{DECISION_QUESTION}}\n\nCONTEXT: {{DECISION_CONTEXT}}\n\nALTERNATIVES ON THE TABLE: {{ALTERNATIVES}}\n\nCONSTRAINTS: {{CONSTRAINTS}}\n\nTASK: take one clear stance on the decision question and argue it from the brief above alone. Engage the strongest competing alternative on its merits, and name the main risk of your own recommendation honestly.\n\nOUTPUT CONTRACT: write ./position.md containing exactly one position block in this format:\n\n### Position: {{AGENT_B}}\n\n- agent: {{AGENT_B}}\n- model: <the model you actually are, as precisely as you know it>\n- provider: <the lab or provider of that model>\n- stance: <exactly one of: recommend | oppose | alternative | abstain>\n- summary: <one sentence stating your position>\n\nThen two to six paragraphs of reasoning below the metadata lines.\n\nHARD RULES: do not read other task directories; do not cite evidence that is not in this brief; do not hedge into stance-free prose — pick a stance; if the brief is genuinely too thin to decide, use stance: abstain and say exactly what is missing; never claim to have verified something you did not verify.",
+      "check": "python3 '{{KIT_DIR}}/checks/check_position.py' --file position.md",
+      "verified": "position.md holds exactly one self-contained position block with agent, model, and provider metadata, a valid stance, a one-sentence summary, and substantive reasoning."
+    },
+    {
+      "key": "position-c",
+      "engine": "{{ENGINE_C}}",
+      "model": "{{MODEL_C}}",
+      "task_type": "research",
+      "timeout_s": 1200,
+      "expect_files": [
+        "position.md"
+      ],
+      "spec": "You are {{AGENT_C}}, one of several independent position-writers on a decision panel. You are isolated by design: your current working directory is your own task directory, and the only file you write is ./position.md inside it. Never look for, read, or reference any other participant's output — independence is the product here; a position influenced by another participant is worthless.\n\nDECISION QUESTION: {{DECISION_QUESTION}}\n\nCONTEXT: {{DECISION_CONTEXT}}\n\nALTERNATIVES ON THE TABLE: {{ALTERNATIVES}}\n\nCONSTRAINTS: {{CONSTRAINTS}}\n\nTASK: take one clear stance on the decision question and argue it from the brief above alone. Engage the strongest competing alternative on its merits, and name the main risk of your own recommendation honestly.\n\nOUTPUT CONTRACT: write ./position.md containing exactly one position block in this format:\n\n### Position: {{AGENT_C}}\n\n- agent: {{AGENT_C}}\n- model: <the model you actually are, as precisely as you know it>\n- provider: <the lab or provider of that model>\n- stance: <exactly one of: recommend | oppose | alternative | abstain>\n- summary: <one sentence stating your position>\n\nThen two to six paragraphs of reasoning below the metadata lines.\n\nHARD RULES: do not read other task directories; do not cite evidence that is not in this brief; do not hedge into stance-free prose — pick a stance; if the brief is genuinely too thin to decide, use stance: abstain and say exactly what is missing; never claim to have verified something you did not verify.",
+      "check": "python3 '{{KIT_DIR}}/checks/check_position.py' --file position.md",
+      "verified": "position.md holds exactly one self-contained position block with agent, model, and provider metadata, a valid stance, a one-sentence summary, and substantive reasoning."
+    }
+  ]
+}
