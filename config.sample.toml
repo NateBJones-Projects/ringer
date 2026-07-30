@@ -91,6 +91,15 @@ token_regex = "tokens\\s+used\\s*:?\\s*([0-9][0-9,]*)"
 # default reads the `model:` header; override it here only if that format changes.
 model_report_regex = "(?m)^model:[ \\t]*([^ \\t\\r\\n]+)[ \\t]*\\r?$"
 
+# Claude Code is built in. Install: curl -fsSL https://claude.ai/install.sh | bash
+# then run `claude auth login --claudeai` to use a Pro or Max subscription.
+# Ringer enables Claude's OS sandbox with failIfUnavailable=true and disables
+# the unsandboxed-command escape hatch. Always set an explicit task model.
+# Linux/WSL2 sandbox prerequisites: bubblewrap and socat.
+# Uncomment only to override a machine-specific field.
+# [engines.claude]
+# bin = "claude"
+
 # Grok Build CLI (xAI). Install: curl -fsSL https://x.ai/cli/install.sh | bash
 # (or: npm install -g @xai-official/grok), then `grok login` — OAuth on a
 # SuperGrok or X Premium Plus plan. Headless mode (-p) runs a full agentic
