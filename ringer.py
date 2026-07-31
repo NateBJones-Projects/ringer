@@ -40,7 +40,7 @@ from decimal import Decimal, InvalidOperation
 from html import escape as html_escape
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Iterable
 
 
@@ -1720,6 +1720,7 @@ class Manifest:
     repo: Path | None
     tasks: tuple[TaskSpec, ...]
     source_path: Path | None = None
+    worktree_provision: tuple[str, ...] = ()
 
     @classmethod
     def from_path(cls, path: Path) -> "Manifest":
@@ -1735,6 +1736,7 @@ class Manifest:
             repo=manifest.repo,
             tasks=manifest.tasks,
             source_path=path,
+            worktree_provision=manifest.worktree_provision,
         )
 
     @classmethod
@@ -1774,6 +1776,26 @@ class Manifest:
                     "task key(s) collide with reserved worktree logs directory "
                     f"'logs': {', '.join(collisions)}"
                 )
+        provision_raw = obj.get("worktree_provision", [])
+        if not isinstance(provision_raw, list) or not all(
+            isinstance(item, str) and item.strip() for item in provision_raw
+        ):
+            raise ValueError("worktree_provision must be a list of non-empty strings")
+        worktree_provision = tuple(item.strip() for item in provision_raw)
+        if worktree_provision:
+            if not worktrees:
+                raise ValueError("worktree_provision requires worktrees: true")
+            if repo is None:
+                raise ValueError("worktree_provision requires repo")
+            for rel in worktree_provision:
+                if (
+                    Path(rel).is_absolute()
+                    or PureWindowsPath(rel).is_absolute()
+                    or ".." in Path(rel).parts
+                ):
+                    raise ValueError(
+                        f"worktree_provision paths must be repo-relative without '..': {rel!r}"
+                    )
         return cls(
             run_name=run_name,
             workdir=workdir,
@@ -1781,6 +1803,7 @@ class Manifest:
             worktrees=worktrees,
             repo=repo,
             tasks=tasks,
+            worktree_provision=worktree_provision,
         )
 
     def with_max_parallel(self, value: int | None) -> "Manifest":
@@ -1796,6 +1819,7 @@ class Manifest:
             repo=self.repo,
             tasks=self.tasks,
             source_path=self.source_path,
+            worktree_provision=self.worktree_provision,
         )
 
 
@@ -8920,9 +8944,66 @@ class RingerRunner:
                 message = stdout.decode("utf-8", errors="replace")
                 append_text(runtime.log_path, f"[ringer.py] git worktree add failed:\n{message}\n")
                 return False, message.strip() or "git worktree add failed"
+            provision_error = await self._provision_worktree_deps(runtime, taskdir)
+            if provision_error is not None:
+                append_text(runtime.log_path, f"[ringer.py] {provision_error}\n")
+                return False, provision_error
             return True, None
         taskdir.mkdir(parents=True, exist_ok=True)
         return True, None
+
+    async def _provision_worktree_deps(
+        self, runtime: TaskRuntime, taskdir: Path
+    ) -> str | None:
+        """Clone declared gitignored dependency dirs into a fresh worktree.
+
+        `git worktree add` starts clean: anything gitignored -- node_modules,
+        a vendored toolchain, a build cache -- is absent, so a task whose
+        build or check needs it fails before the worker types a word.
+        Manifests name those paths in `worktree_provision` (repo-relative),
+        and each is cloned from the primary checkout into the new worktree.
+
+        Returns None on success, or an error string: a declared dependency
+        that cannot be provisioned fails taskdir preparation loudly rather
+        than handing the worker a half-provisioned tree whose downstream
+        test failures point everywhere except here. Parsing already rejected
+        absolute paths and `..`; realpath re-proves the source stays inside
+        the repo so a symlinked entry cannot pull from outside it.
+        """
+        for rel in self.manifest.worktree_provision:
+            repo_root = Path(os.path.realpath(self.manifest.repo))
+            src = Path(os.path.realpath(repo_root / rel))
+            if src != repo_root and repo_root not in src.parents:
+                return f"worktree_provision path escapes the repo: {rel!r}"
+            if not src.exists():
+                return f"worktree_provision path not found in repo: {rel}"
+            dst = taskdir / rel
+            if dst.exists():
+                continue
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            # cp -Rc asks APFS for a copy-on-write clone, which makes a
+            # 90k-file node_modules near-instant on macOS; plain -R is the
+            # portable fallback everywhere else.
+            for args in (
+                ("cp", "-Rc", str(src), str(dst)),
+                ("cp", "-R", str(src), str(dst)),
+            ):
+                proc = await asyncio.create_subprocess_exec(
+                    *args,
+                    stdin=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                )
+                await proc.communicate()
+                if proc.returncode == 0:
+                    append_text(
+                        runtime.log_path,
+                        f"[ringer.py] provisioned {rel} into the worktree via cp {args[1]}\n",
+                    )
+                    break
+            else:
+                return f"failed to provision {rel} into the worktree"
+        return None
 
     async def _cleanup_worktree_on_pass(self, runtime: TaskRuntime) -> None:
         if not (self.manifest.worktrees and self.manifest.repo is not None):
