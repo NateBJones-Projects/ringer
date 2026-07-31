@@ -386,3 +386,24 @@ class DirectoryScanContainmentTests(unittest.TestCase):
             )
 
             self.assertIn("Friday night", packet.text)
+
+
+class PacketOutputContractTests(unittest.TestCase):
+    def test_prefix_states_the_answer_md_output_contract(self) -> None:
+        # The run's check is `test -s answer.md`, so the spec the worker sees
+        # must request that file. A real engine that follows a spec which only
+        # says to return the answer prints it to stdout and fails the check;
+        # the fake engines in test_ask_command write answer.md unconditionally
+        # and cannot catch the contradiction, so this guards it at the packet.
+        with tempfile.TemporaryDirectory() as temp_root:
+            source = Path(temp_root) / "notes.md"
+            source.write_text("The decision is final.\n", encoding="utf-8")
+
+            packet = build_context_packet(
+                "What is the decision?",
+                sources=[source],
+                max_packet_bytes=4_000,
+            )
+
+            instructions = packet.text.split("CURRENT_REQUEST_JSON", 1)[0]
+            self.assertIn("answer.md", instructions)
