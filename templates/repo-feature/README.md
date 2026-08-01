@@ -16,6 +16,7 @@ Use this for narrowly scoped app pages, route additions, component changes, scri
 |---|---|
 | `{{ALLOWED_STATUS_PATHS_CSV}}` | Additional pre-existing or explicitly allowed git-status paths, comma-separated. |
 | `{{BUILD_OR_TEST_COMMAND}}` | Real repo verification command, such as `npm run build` or `pytest`. |
+| `check_timeout_s` (not a `{{}}` placeholder, edit the literal value in `manifest.json`) | Ships set to 300s. Raise it further if `{{BUILD_OR_TEST_COMMAND}}` invokes a real compiled-language build (Xcode/`xcodebuild`, Gradle, `cargo build`, `make`) rather than fast interpreted-language tests — see Gotchas. |
 | `{{CONVENTION_FILES}}` | Read-only files the worker should inspect before editing. |
 | `{{ENGINE_BUILD}}` | Engine name for the repo-edit worker. |
 | `{{FEATURE_BRIEF}}` | The concrete feature request and acceptance criteria. |
@@ -51,3 +52,5 @@ Never run `git add -A` in a checkout with untracked scratch files. Stage specifi
 The worker's `notes.md` belongs in the task directory, not the repo. The repo check should assert real source changes and git cleanliness; notes are just the build report.
 
 `expect_files` is asserted before checks run. Do not put build artifacts, screenshots, or other check-produced files there.
+
+`{{BUILD_OR_TEST_COMMAND}}` running under a fast interpreted-language test runner (pytest, jest, `npm test`) usually finishes well inside the manifest's `check_timeout_s`. A real compiled-language build — `xcodebuild`/`xcodegen` + simulator build, Gradle, `cargo build`, `make` — can legitimately take several minutes. Ringer kills the check process (not the worker) once `check_timeout_s` elapses and reports the task as failed, even when the worker's code was already correct. Set `check_timeout_s` in `manifest.json` well above the real build's wall-clock time whenever `{{BUILD_OR_TEST_COMMAND}}` is a build, not just a test run. `./ringer.py lint` warns when a check string mentions a known build tool and `check_timeout_s` was left unset.

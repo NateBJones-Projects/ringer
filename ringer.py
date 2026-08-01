@@ -395,6 +395,10 @@ class TaskSpec:
     # engine's {model} placeholder); empty means the engine's model_default.
     model: str = ""
     task_type: str = ""
+    # Overrides CHECK_TIMEOUT_S for this task's check command. Unset (None)
+    # falls back to the module default; use for checks that run a real
+    # compiled-language build (xcodebuild, gradle, cargo build, etc.).
+    check_timeout_s: int | None = None
 
     @classmethod
     def from_obj(cls, obj: dict[str, Any]) -> "TaskSpec":
@@ -435,6 +439,12 @@ class TaskSpec:
         task_type = obj.get("task_type", "")
         if not isinstance(task_type, str):
             raise ValueError(f"task {key}: task_type must be a string")
+        check_timeout_s_raw = obj.get("check_timeout_s")
+        check_timeout_s: int | None = None
+        if check_timeout_s_raw is not None:
+            check_timeout_s = int(check_timeout_s_raw)
+            if check_timeout_s <= 0:
+                raise ValueError(f"task {key}: check_timeout_s must be positive")
         return cls(
             key=key,
             spec=spec,
@@ -447,6 +457,7 @@ class TaskSpec:
             verified=verified.strip(),
             model=model.strip(),
             task_type=task_type.strip(),
+            check_timeout_s=check_timeout_s,
         )
 
 
@@ -580,6 +591,12 @@ def lint_manifest(manifest: Manifest, *, include_model_log_nudges: bool = False)
                 f"{task.key}: no 'verified' description; a reader of the results page sees "
                 "'checked' but not what the check proves — add one plain-English sentence."
             )
+        if task.check_timeout_s is None and check_invokes_build_tool(task.check):
+            findings.append(
+                f"{task.key}: check invokes a compiled-language build but has no check_timeout_s; "
+                f"the default {CHECK_TIMEOUT_S}s kills real builds before they finish — set check_timeout_s "
+                "well above the expected build time."
+            )
         if include_model_log_nudges and not task.task_type:
             findings.append(
                 f"{task.key}: no task_type; the model log buckets this as (untyped) — "
@@ -627,6 +644,22 @@ def spec_is_file_pointer(spec: str) -> bool:
     if len(text) >= 600:
         return False
     return bool(FILE_POINTER_SPEC_RE.search(text))
+
+
+BUILD_TOOL_RE = re.compile(
+    r"\b(xcodebuild|xcodegen|gradle(?:w)?|cargo\s+build|make|ninja|msbuild|xcrun\s+xcodebuild|"
+    r"swift\s+build|mvn|bazel|go\s+build)\b"
+)
+
+
+def check_invokes_build_tool(check: str) -> bool:
+    """True when a check shells out to a real compiled-language build tool.
+
+    These routinely take minutes (Xcode/xcodebuild simulator builds, Gradle,
+    cargo build --release) and will blow past the default CHECK_TIMEOUT_S,
+    failing otherwise-correct worker output on a timeout instead of a bug.
+    """
+    return bool(BUILD_TOOL_RE.search(strip_shell_comments(check)))
 
 
 def check_cannot_fail(check: str) -> bool:
@@ -6712,7 +6745,8 @@ def run_models_command(config: AppConfig, args: argparse.Namespace) -> int:
 
 class Verifier:
     async def verify(self, task: TaskSpec, taskdir: Path) -> VerifyResult:
-        check_returncode, check_timed_out, output = await self._run_check(task.check, taskdir)
+        timeout_s = task.check_timeout_s if task.check_timeout_s is not None else CHECK_TIMEOUT_S
+        check_returncode, check_timed_out, output = await self._run_check(task.check, taskdir, timeout_s)
         missing_files = tuple(
             rel for rel in task.expect_files if not self._is_nonempty_file(self._expect_file_path(taskdir, rel))
         )
@@ -6750,7 +6784,7 @@ class Verifier:
         return candidate if candidate.is_absolute() else taskdir / candidate
 
     @staticmethod
-    async def _run_check(command: str, cwd: Path) -> tuple[int | None, bool, str]:
+    async def _run_check(command: str, cwd: Path, timeout_s: int = CHECK_TIMEOUT_S) -> tuple[int | None, bool, str]:
         proc = await asyncio.create_subprocess_shell(
             command,
             cwd=str(cwd),
@@ -6761,7 +6795,7 @@ class Verifier:
         )
         timed_out = False
         try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=CHECK_TIMEOUT_S)
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
         except asyncio.TimeoutError:
             timed_out = True
             terminate_process_group(proc)
@@ -6772,7 +6806,7 @@ class Verifier:
                 stdout, _ = await proc.communicate()
         output = stdout.decode("utf-8", errors="replace") if stdout else ""
         if timed_out:
-            output += f"\n[ringer.py] check timed out after {CHECK_TIMEOUT_S}s\n"
+            output += f"\n[ringer.py] check timed out after {timeout_s}s\n"
         return proc.returncode, timed_out, output
 
 
