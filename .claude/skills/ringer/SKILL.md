@@ -336,17 +336,38 @@ someone's untracked scratch files.
 
 ## Post-run PR review handoff
 
-Use this procedural hook only after worker checks PASS, patches are reviewed
-and integrated, full repository gates pass, a fresh independent review reports
-no actionable findings, the branch is pushed, and GitHub confirms the OPEN PR
-is mergeable with required checks successful. The orchestrator must inspect
-that GitHub evidence; generic `ringer.py` does not infer PR state.
+Evaluate this procedural hook for every PR-facing handoff by explicitly loading
+`$amazon-pr-faq` in `review_handoff` mode. This hook has exactly two outcomes;
+missing evidence is never a reason to skip the evaluation, and retrospective
+mode is never an escape hatch for a current handoff:
 
-Then load `$amazon-pr-faq`, place the resulting Markdown in the Ringer
-artifact/review package, and add it to the PR body or a comment only when
-authorized. Present the PR URL and FAQ to the human. **Stop before merge or
-deploy.** If any gate is absent, report the exact blocker and do not call the
-PR ready.
+- **BLOCKED:** if any prerequisite below is absent or stale, create and report a
+  blocked review package that names every exact blocker, and stop. Do not call
+  the package ready.
+- **READY:** only when every prerequisite below passes, create a ready review
+  package bound to the verified commit and present it to the human.
+
+Readiness requires all of the following for the **same SHA**:
+
+- Executed worker checks and full-repository gates pass for the exact local
+  `HEAD` commit.
+- The local `HEAD`, pushed remote branch head, and the open GitHub PR's
+  `headRefOid` are equal.
+- A fresh independent review of that exact SHA reports no actionable findings.
+- GitHub reports that exact open, non-draft PR head as mergeable (never
+  `UNKNOWN`) and every required check succeeds for that exact SHA.
+
+Any later commit invalidates the entire gate; re-run every prerequisite against
+the new SHA. The orchestrator must inspect this evidence because generic
+`ringer.py` does not infer PR state.
+
+Push, PR creation or update, PR body or comment writes, merge, and deployment
+are external actions that require existing user authorization. This hook must
+not push or open/update a PR merely to satisfy its own gate; an absent
+authorized pushed branch or authorized open PR is a blocker. Place the PR/FAQ
+Markdown in the Ringer artifact/review package, and write it to a PR body or
+comment only when already authorized. Present the PR URL and FAQ to the human.
+**Stop before merge or deploy.**
 
 ## Spend your own context deliberately
 
