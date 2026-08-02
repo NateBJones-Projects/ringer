@@ -64,6 +64,16 @@ confidence = "verified"     # Cursor (Anysphere) model, served through xAI's Gro
 source = "https://cursor.com/blog/composer-2-5"
 last_verified = 2026-07-10
 
+[engines.grok.models."grok-4.5"]
+# Task-manifest "model" field for grok-engine tasks logs "grok-4.5" directly
+# (not the "grok-build" default_model_key above) — this is the actual slug
+# ringer observes on grok-engine attempts. Same artifact as grok-build.
+display = "Grok 4.5"
+lab = "xAI"
+confidence = "verified"
+source = "https://docs.x.ai/developers/release-notes"
+last_verified = 2026-08-01
+
 [engines.opencode]
 harness = "OpenCode"
 access = "OpenRouter API"
@@ -98,3 +108,119 @@ lab = "Meta"
 confidence = "verified"
 source = "manifest model field; OpenRouter slug meta-llama/llama-3.3-70b-instruct:free"
 last_verified = 2026-07-10
+
+[engines.opencode.models."openrouter/anthropic/claude-sonnet-5"]
+display = "Claude Sonnet 5"
+lab = "Anthropic"
+confidence = "verified"
+source = "manifest model field; OpenRouter slug anthropic/claude-sonnet-5"
+last_verified = 2026-08-01
+
+[engines.opencode.models."openrouter/cohere/north-mini-code:free"]
+display = "North Mini Code (free)"
+lab = "Cohere"
+confidence = "verified"
+source = "manifest model field; OpenRouter slug cohere/north-mini-code:free"
+last_verified = 2026-08-01
+
+[engines.opencode.models."openrouter/deepseek/deepseek-v4-flash"]
+display = "DeepSeek V4 Flash"
+lab = "DeepSeek"
+confidence = "verified"
+source = "manifest model field; OpenRouter slug deepseek/deepseek-v4-flash"
+last_verified = 2026-08-01
+
+[engines.opencode.models."openrouter/deepseek/deepseek-v4-pro"]
+display = "DeepSeek V4 Pro"
+lab = "DeepSeek"
+confidence = "verified"
+source = "manifest model field; OpenRouter slug deepseek/deepseek-v4-pro"
+last_verified = 2026-08-01
+
+[engines.opencode.models."openrouter/inclusionai/ling-2.6-flash"]
+# InclusionAI is Ant Group's AGI/open-source publishing org (home of the Ant
+# Ling team) — see https://huggingface.co/inclusionAI.
+display = "Ling 2.6 Flash"
+lab = "InclusionAI (Ant Group)"
+confidence = "verified"
+source = "https://huggingface.co/inclusionAI"
+last_verified = 2026-08-01
+
+[engines.opencode.models."openrouter/inclusionai/ling-3.0-flash:free"]
+display = "Ling 3.0 Flash (free)"
+lab = "InclusionAI (Ant Group)"
+confidence = "verified"
+source = "https://huggingface.co/inclusionAI"
+last_verified = 2026-08-01
+
+[engines.opencode.models."openrouter/moonshotai/kimi-k2.5"]
+display = "Kimi K2.5"
+lab = "Moonshot AI"
+confidence = "verified"
+source = "manifest model field; OpenRouter slug moonshotai/kimi-k2.5"
+last_verified = 2026-08-01
+
+[engines.opencode.models."openrouter/moonshotai/kimi-k2.6"]
+display = "Kimi K2.6"
+lab = "Moonshot AI"
+confidence = "verified"
+source = "https://openrouter.ai/moonshotai/kimi-k2.6"
+last_verified = 2026-08-01
+
+[engines.opencode.models."openrouter/nvidia/nemotron-3-nano-30b-a3b:free"]
+display = "Nemotron 3 Nano 30B A3B (free)"
+lab = "NVIDIA"
+confidence = "verified"
+source = "manifest model field; OpenRouter slug nvidia/nemotron-3-nano-30b-a3b:free"
+last_verified = 2026-08-01
+
+[engines.opencode.models."openrouter/nvidia/nemotron-3-super-120b-a12b"]
+display = "Nemotron 3 Super 120B A12B"
+lab = "NVIDIA"
+confidence = "verified"
+source = "manifest model field; OpenRouter slug nvidia/nemotron-3-super-120b-a12b"
+last_verified = 2026-08-01
+
+[engines.opencode.models."openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"]
+display = "Nemotron 3 Ultra 550B A55B (free)"
+lab = "NVIDIA"
+confidence = "verified"
+source = "manifest model field; OpenRouter slug nvidia/nemotron-3-ultra-550b-a55b:free"
+last_verified = 2026-08-01
+
+[engines.opencode.models."openrouter/qwen/qwen3-coder"]
+display = "Qwen3 Coder 480B A35B"
+lab = "Alibaba (Qwen)"
+confidence = "verified"
+source = "manifest model field; OpenRouter slug qwen/qwen3-coder"
+last_verified = 2026-08-01
+
+[engines.opencode.models."openrouter/thinkingmachines/inkling"]
+display = "Inkling"
+lab = "Thinking Machines Lab"
+confidence = "verified"
+source = "https://openrouter.ai/thinkingmachines/inkling"
+last_verified = 2026-08-01
+
+[engines.opencode.models."openrouter/poolside/laguna-m.1:free"]
+# Not a typo — OpenRouter carried this slug from 2026-07-09 until it was
+# delisted 2026-08-01T23:13:22Z (same day as this entry, hours before this
+# registry check ran). Confirmed via ~/.ringer/openrouter-catalog.changes.jsonl
+# added/removed events, catalog name "Poolside: Laguna M.1 (free)". Historical
+# attempts against this slug should still resolve to Poolside identity even
+# though the model is no longer orderable.
+display = "Laguna M.1 (free)"
+lab = "Poolside"
+confidence = "verified"
+source = "OpenRouter catalog history (~/.ringer/openrouter-catalog.changes.jsonl): added 2026-07-09, delisted 2026-08-01"
+last_verified = 2026-08-01
+
+[engines.opencode.models."openrouter/nousresearch/hermes-3-llama-3.1-405b:free"]
+# Not a typo — OpenRouter carried the free tier of this model from 2026-07-09
+# until it was delisted 2026-07-19; the paid nousresearch/hermes-3-llama-3.1-405b
+# slug remains live. Catalog name "Nous: Hermes 3 405B Instruct (free)".
+display = "Hermes 3 405B Instruct (free)"
+lab = "Nous Research"
+confidence = "verified"
+source = "OpenRouter catalog history (~/.ringer/openrouter-catalog.changes.jsonl): added 2026-07-09, delisted 2026-07-19"
+last_verified = 2026-08-01
