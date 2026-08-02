@@ -131,10 +131,14 @@ def successful_conclusion(value: Any) -> bool:
 
 def clean_review_conclusion(value: Any) -> bool:
     normalized = normalize(str(value))
-    if "no actionable findings" in normalized or "no findings" in normalized:
-        return True
+    clean_markers = ("no actionable findings", "no findings")
+    has_clean_marker = any(marker in normalized for marker in clean_markers)
+    remainder = normalized
+    for marker in clean_markers:
+        remainder = remainder.replace(marker, " ")
+    remainder = re.sub(r"\bno\s+changes\s+(?:were\s+)?requested\b", " ", remainder)
     if any(
-        marker in normalized
+        marker in remainder
         for marker in (
             "actionable",
             "not clean",
@@ -145,6 +149,8 @@ def clean_review_conclusion(value: Any) -> bool:
         )
     ):
         return False
+    if has_clean_marker:
+        return True
     return normalized in {"clean", "approved", "passed"}
 
 
@@ -398,7 +404,7 @@ LOCAL_NEGATION_PREFIX = re.compile(
     r"(?:"
     r"\b(?:not|never|isn['’]?t|aren['’]?t|wasn['’]?t|weren['’]?t|"
     r"cannot|can['’]?t)"
-    r"(?:\s+(?:currently|yet|now|actually|really|remotely|fully|been|being|"
+    r"(?:\s+(?:currently|yet|now|actually|really|remotely|fully|be|been|being|"
     r"considered|called|marked|labelled|labeled|described|at|all)){0,3}"
     r"|\b(?:do\s+not|don['’]?t)\s+"
     r"(?:call|consider|describe|label|mark)(?:\s+(?:this|it))?"
@@ -420,7 +426,8 @@ def unnegated_claims(
 ) -> list[str]:
     claims: list[str] = []
     for sentence in re.split(r"(?<=[.!?])\s+|\n+", text):
-        if not sentence.strip():
+        sentence = sentence.strip()
+        if not sentence or sentence.endswith("?"):
             continue
         matches = (
             match
@@ -446,6 +453,10 @@ def has_positive_ready_claim(text: str) -> bool:
         re.compile(r"\bapproved\s+(?:to\s+merge|for\s+merge)\b", re.IGNORECASE),
         re.compile(r"\bclean\s+and\s+mergeable(?:\s+today)?\b", re.IGNORECASE),
         re.compile(r"\bmerge\s+can\s+proceed\b", re.IGNORECASE),
+        re.compile(r"\bcan\s+be\s+merged\s+now\b", re.IGNORECASE),
+        re.compile(r"\bmergeable\b", re.IGNORECASE),
+        re.compile(r"\bcleared\s+to\s+merge\b", re.IGNORECASE),
+        re.compile(r"\bmerge\s+is\s+(?:now\s+)?approved\b", re.IGNORECASE),
     )
     return bool(unnegated_claims(text, ready_patterns))
 
@@ -474,8 +485,12 @@ def deployment_overclaims(text: str) -> list[str]:
     positive_patterns = (
         re.compile(r"\b(?:is|was|has\s+been|have\s+been|successfully|now)\s+deployed\b", re.I),
         re.compile(r"\bdeployed\s+(?:to|in|on)\s+(?:the\s+)?production\b", re.I),
+        re.compile(r"\bdeployment\s+(?:is\s+|was\s+)?completed\s+successfully\b", re.I),
+        re.compile(r"\bshipped\s+to\s+(?:the\s+)?production\b", re.I),
         re.compile(r"\b(?:is|was|now|currently)\s+live\s+(?:in|on|for|to)\b", re.I),
+        re.compile(r"\blive\s+now\b", re.I),
         re.compile(r"\bnow\s+available\b", re.I),
+        re.compile(r"\bavailable\s+now\b", re.I),
         re.compile(r"\b(?:is|was|currently)\s+available\s+(?:in|to|for)\b", re.I),
         re.compile(r"\brolled\s+out\s+(?:to|in|across)\b", re.I),
     )
@@ -485,8 +500,10 @@ def deployment_overclaims(text: str) -> list[str]:
 def availability_overclaims(text: str) -> list[str]:
     positive_patterns = (
         re.compile(r"\bnow\s+available\b", re.I),
+        re.compile(r"\bavailable\s+now\b", re.I),
         re.compile(r"\b(?:is|was|currently)\s+available\s+(?:in|to|for)\b", re.I),
         re.compile(r"\bavailability\s+(?:is|was)\s+confirmed\b", re.I),
+        re.compile(r"\blive\s+now\b", re.I),
     )
     return unnegated_claims(text, positive_patterns)
 
@@ -806,6 +823,17 @@ The next human decision is whether to merge. Stop before merge.
             print(f"  - {failure}", file=sys.stderr)
         return 1
 
+    if (
+        has_positive_ready_claim("Mergeable?")
+        or availability_overclaims("Is this available now?")
+        or deployment_overclaims("Deployment completed successfully?")
+    ):
+        print(
+            "SELF-TEST FAIL: questions must not be treated as affirmative claims",
+            file=sys.stderr,
+        )
+        return 1
+
     cases: list[tuple[str, str, dict[str, Any], str]] = []
     cases.append(
         (
@@ -837,6 +865,22 @@ The next human decision is whether to merge. Stop before merge.
             "actionable or missing findings",
         )
     )
+    for conclusion in (
+        "No actionable findings; changes requested",
+        "No findings, but review failed",
+    ):
+        contradictory_review_evidence = copy.deepcopy(evidence)
+        contradictory_review_evidence["verification"]["independent_review"][
+            "conclusion"
+        ] = conclusion
+        cases.append(
+            (
+                f"contradictory review conclusion {conclusion!r}",
+                grounded.replace("No actionable findings", conclusion),
+                contradictory_review_evidence,
+                "actionable or missing findings",
+            )
+        )
     overclaim = grounded.replace(
         "It is not deployed; rollout and availability are not established.",
         "It is deployed to production and now available to staff.",
@@ -900,6 +944,10 @@ The next human decision is whether to merge. Stop before merge.
         ("approved to merge", "This PR is approved to merge."),
         ("clean and mergeable", "This PR is clean and mergeable today."),
         ("merge can proceed", "The merge can proceed."),
+        ("can be merged now", "This PR can be merged now."),
+        ("standalone mergeable", "Mergeable."),
+        ("cleared to merge", "This PR is cleared to merge."),
+        ("merge is approved", "The merge is approved."),
     ):
         cases.append(
             (
@@ -912,7 +960,9 @@ The next human decision is whether to merge. Stop before merge.
 
     negated_blocked = blocked.replace(
         "The OPEN PR is blocked.",
-        "This PR is not ready to merge. Do not call this safe to merge.",
+        "This PR is not ready to merge. Do not call this safe to merge. "
+        "This PR should not be considered ready to merge. "
+        "This PR should never be called safe to merge.",
     )
     negated_blocked_failures = validate_document(negated_blocked, blocked_evidence)
     if negated_blocked_failures:
@@ -991,7 +1041,9 @@ The next human decision is whether to investigate deployment history, not whethe
 
     negated_retrospective = retrospective + (
         "\nThis PR is not ready to merge. "
-        "Do not call this safe to merge.\n"
+        "Do not call this safe to merge. "
+        "This PR should not be considered ready to merge. "
+        "This PR should never be called safe to merge.\n"
     )
     negated_retrospective_failures = validate_document(
         negated_retrospective,
@@ -1065,6 +1117,10 @@ The next human decision is whether to investigate deployment history, not whethe
         ("approved to merge", "This PR is approved to merge."),
         ("clean and mergeable", "This PR is clean and mergeable today."),
         ("merge can proceed", "The merge can proceed."),
+        ("can be merged now", "This PR can be merged now."),
+        ("standalone mergeable", "Mergeable."),
+        ("cleared to merge", "This PR is cleared to merge."),
+        ("merge is approved", "The merge is approved."),
     ):
         cases.append(
             (
@@ -1086,6 +1142,20 @@ The next human decision is whether to investigate deployment history, not whethe
             "deployment/availability overclaim",
         )
     )
+    for name, claim in (
+        ("available now", "Available now."),
+        ("deployment completed", "Deployment completed successfully."),
+        ("shipped to production", "Shipped to production."),
+        ("live now", "Live now."),
+    ):
+        cases.append(
+            (
+                f"retrospective {name}",
+                retrospective + f"\n{claim}\n",
+                retrospective_evidence,
+                "overclaim",
+            )
+        )
 
     for name, document, case_evidence, expected in cases:
         failures = validate_document(document, case_evidence)

@@ -160,6 +160,38 @@ class AmazonPrFaqValidatorTests(unittest.TestCase):
                     blockers,
                 )
 
+    def test_review_conclusion_rejects_contradictory_clean_language(self) -> None:
+        for conclusion in (
+            "No actionable findings; changes requested",
+            "No findings, but review failed",
+        ):
+            with self.subTest(contradictory_conclusion=conclusion):
+                evidence = review_evidence()
+                evidence["verification"]["independent_review"][
+                    "conclusion"
+                ] = conclusion
+                blockers, _ = VALIDATOR.readiness_blockers(evidence)
+                self.assertIn(
+                    "independent review has actionable or missing findings",
+                    blockers,
+                )
+
+        for conclusion in (
+            "No actionable findings",
+            "No findings",
+            "Clean",
+            "Approved",
+            "Passed",
+        ):
+            with self.subTest(clean_conclusion=conclusion):
+                evidence = review_evidence()
+                evidence["verification"]["independent_review"][
+                    "conclusion"
+                ] = conclusion
+                blockers, exact_sha = VALIDATOR.readiness_blockers(evidence)
+                self.assertEqual([], blockers)
+                self.assertEqual("a" * 40, exact_sha)
+
     def test_readiness_claim_negation_is_phrase_scoped(self) -> None:
         positive_claims = (
             "This PR is not deployed and is ready to merge.",
@@ -167,6 +199,10 @@ class AmazonPrFaqValidatorTests(unittest.TestCase):
             "This PR is approved to merge.",
             "This PR is clean and mergeable today.",
             "The merge can proceed.",
+            "This PR can be merged now.",
+            "Mergeable.",
+            "This PR is cleared to merge.",
+            "The merge is approved.",
         )
         for claim in positive_claims:
             with self.subTest(positive_claim=claim):
@@ -175,6 +211,8 @@ class AmazonPrFaqValidatorTests(unittest.TestCase):
         for claim in (
             "This PR is not ready to merge.",
             "Do not call this safe to merge.",
+            "This PR should not be considered ready to merge.",
+            "This PR should never be called safe to merge.",
         ):
             with self.subTest(negated_claim=claim):
                 self.assertFalse(VALIDATOR.has_positive_ready_claim(claim))
@@ -188,7 +226,9 @@ class AmazonPrFaqValidatorTests(unittest.TestCase):
                 failures,
             )
         negated_failures = VALIDATOR.validate_document(
-            "This PR is not ready to merge. Do not call this safe to merge.",
+            "This PR is not ready to merge. Do not call this safe to merge. "
+            "This PR should not be considered ready to merge. "
+            "This PR should never be called safe to merge.",
             blocked_evidence,
         )
         self.assertNotIn(
@@ -216,6 +256,10 @@ class AmazonPrFaqValidatorTests(unittest.TestCase):
             "This PR is approved to merge.",
             "This PR is clean and mergeable today.",
             "The merge can proceed.",
+            "This PR can be merged now.",
+            "Mergeable.",
+            "This PR is cleared to merge.",
+            "The merge is approved.",
         ):
             with self.subTest(claim=claim):
                 failures = VALIDATOR.validate_document(claim, evidence)
@@ -225,7 +269,9 @@ class AmazonPrFaqValidatorTests(unittest.TestCase):
                 )
 
         negated_failures = VALIDATOR.validate_document(
-            "This PR is not ready to merge. Do not call this safe to merge.",
+            "This PR is not ready to merge. Do not call this safe to merge. "
+            "This PR should not be considered ready to merge. "
+            "This PR should never be called safe to merge.",
             evidence,
         )
         self.assertNotIn(
@@ -245,6 +291,34 @@ class AmazonPrFaqValidatorTests(unittest.TestCase):
             [],
             VALIDATOR.availability_overclaims("It is not available to staff."),
         )
+
+    def test_common_deployment_and_availability_claims_are_rejected(self) -> None:
+        claims = (
+            "Available now.",
+            "Deployment completed successfully.",
+            "Shipped to production.",
+            "Live now.",
+        )
+        for claim in claims:
+            with self.subTest(claim=claim):
+                failures = VALIDATOR.validate_document(
+                    claim,
+                    retrospective_evidence(),
+                )
+                self.assertTrue(
+                    any("overclaim" in failure for failure in failures),
+                    failures,
+                )
+
+        self.assertEqual(
+            [],
+            VALIDATOR.availability_overclaims("Is this available now?"),
+        )
+        self.assertEqual(
+            [],
+            VALIDATOR.deployment_overclaims("Deployment completed successfully?"),
+        )
+        self.assertFalse(VALIDATOR.has_positive_ready_claim("Mergeable?"))
 
 
 if __name__ == "__main__":
