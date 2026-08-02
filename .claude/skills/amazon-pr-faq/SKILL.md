@@ -80,7 +80,9 @@ and `pr.mergeable`; `authorization.pushed_branch` and
 `verification.full_repository_gates`, `verification.independent_review`, and
 `verification.required_checks`. Every gate, review, and required-check record
 must contain `name`, `conclusion`, and `sha`; the independent review must also
-contain `fresh: true`.
+contain `fresh: true`. After ignoring punctuation and letter case, its
+`conclusion` must be exactly one of `No actionable findings`, `No findings`,
+`Clean`, `Approved`, or `Passed`; any additional words make it a blocker.
 
 ## `retrospective`: report lifecycle truth
 

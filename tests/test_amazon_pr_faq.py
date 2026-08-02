@@ -164,6 +164,11 @@ class AmazonPrFaqValidatorTests(unittest.TestCase):
         for conclusion in (
             "No actionable findings; changes requested",
             "No findings, but review failed",
+            "No actionable findings; one critical issue remains",
+            "No findings; merge should be blocked",
+            "Approved with conditions",
+            "Passed except for a blocker",
+            "Clean, but changes requested",
         ):
             with self.subTest(contradictory_conclusion=conclusion):
                 evidence = review_evidence()
@@ -178,10 +183,15 @@ class AmazonPrFaqValidatorTests(unittest.TestCase):
 
         for conclusion in (
             "No actionable findings",
+            "NO ACTIONABLE FINDINGS!",
             "No findings",
+            "no FINDINGS.",
             "Clean",
+            "cLeAn!",
             "Approved",
+            "APPROVED.",
             "Passed",
+            "passed!",
         ):
             with self.subTest(clean_conclusion=conclusion):
                 evidence = review_evidence()
@@ -195,6 +205,9 @@ class AmazonPrFaqValidatorTests(unittest.TestCase):
     def test_readiness_claim_negation_is_phrase_scoped(self) -> None:
         positive_claims = (
             "This PR is not deployed and is ready to merge.",
+            "This PR is ready.",
+            "Proceed with the merge.",
+            "Proceed to merge.",
             "This PR is safe to merge.",
             "This PR is approved to merge.",
             "This PR is clean and mergeable today.",
@@ -210,9 +223,18 @@ class AmazonPrFaqValidatorTests(unittest.TestCase):
 
         for claim in (
             "This PR is not ready to merge.",
+            "This PR is not ready.",
+            "This PR isn't ready.",
+            "Do not proceed with the merge.",
+            "Don't proceed to merge.",
             "Do not call this safe to merge.",
             "This PR should not be considered ready to merge.",
             "This PR should never be called safe to merge.",
+            "This PR is ready for review.",
+            "This PR is ready for human review.",
+            "Is this PR ready?",
+            "Should we proceed with the merge?",
+            "Proceed to merge?",
         ):
             with self.subTest(negated_claim=claim):
                 self.assertFalse(VALIDATOR.has_positive_ready_claim(claim))
@@ -226,6 +248,8 @@ class AmazonPrFaqValidatorTests(unittest.TestCase):
                 failures,
             )
         negated_failures = VALIDATOR.validate_document(
+            "This PR is not ready. Do not proceed with the merge. "
+            "Don't proceed to merge. This PR is ready for review. "
             "This PR is not ready to merge. Do not call this safe to merge. "
             "This PR should not be considered ready to merge. "
             "This PR should never be called safe to merge.",
@@ -252,6 +276,9 @@ class AmazonPrFaqValidatorTests(unittest.TestCase):
 
         for claim in (
             "This PR is not deployed and is ready to merge.",
+            "This PR is ready.",
+            "Proceed with the merge.",
+            "Proceed to merge.",
             "This PR is safe to merge.",
             "This PR is approved to merge.",
             "This PR is clean and mergeable today.",
@@ -269,6 +296,8 @@ class AmazonPrFaqValidatorTests(unittest.TestCase):
                 )
 
         negated_failures = VALIDATOR.validate_document(
+            "This PR is not ready. Do not proceed with the merge. "
+            "Don't proceed to merge. This PR is ready for review. "
             "This PR is not ready to merge. Do not call this safe to merge. "
             "This PR should not be considered ready to merge. "
             "This PR should never be called safe to merge.",
@@ -298,6 +327,9 @@ class AmazonPrFaqValidatorTests(unittest.TestCase):
             "Deployment completed successfully.",
             "Shipped to production.",
             "Live now.",
+            "The feature is available.",
+            "The feature is live.",
+            "The deployment is complete.",
         )
         for claim in claims:
             with self.subTest(claim=claim):
@@ -318,6 +350,20 @@ class AmazonPrFaqValidatorTests(unittest.TestCase):
             [],
             VALIDATOR.deployment_overclaims("Deployment completed successfully?"),
         )
+        for claim in (
+            "The feature is not available.",
+            "The feature isn't available.",
+            "The feature is not live.",
+            "The feature isn't live.",
+            "The deployment is not complete.",
+            "The deployment isn't complete.",
+            "Is the feature available?",
+            "Is the feature live?",
+            "Is the deployment complete?",
+        ):
+            with self.subTest(non_claim=claim):
+                self.assertEqual([], VALIDATOR.deployment_overclaims(claim))
+                self.assertEqual([], VALIDATOR.availability_overclaims(claim))
         self.assertFalse(VALIDATOR.has_positive_ready_claim("Mergeable?"))
 
 

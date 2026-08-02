@@ -130,28 +130,13 @@ def successful_conclusion(value: Any) -> bool:
 
 
 def clean_review_conclusion(value: Any) -> bool:
-    normalized = normalize(str(value))
-    clean_markers = ("no actionable findings", "no findings")
-    has_clean_marker = any(marker in normalized for marker in clean_markers)
-    remainder = normalized
-    for marker in clean_markers:
-        remainder = remainder.replace(marker, " ")
-    remainder = re.sub(r"\bno\s+changes\s+(?:were\s+)?requested\b", " ", remainder)
-    if any(
-        marker in remainder
-        for marker in (
-            "actionable",
-            "not clean",
-            "not approved",
-            "changes requested",
-            "failed",
-            "rejected",
-        )
-    ):
-        return False
-    if has_clean_marker:
-        return True
-    return normalized in {"clean", "approved", "passed"}
+    return normalize(str(value)) in {
+        "no actionable findings",
+        "no findings",
+        "clean",
+        "approved",
+        "passed",
+    }
 
 
 def authorization_is_recorded(
@@ -403,7 +388,7 @@ def document_states_pr_state(text: str, state: str) -> bool:
 LOCAL_NEGATION_PREFIX = re.compile(
     r"(?:"
     r"\b(?:not|never|isn['’]?t|aren['’]?t|wasn['’]?t|weren['’]?t|"
-    r"cannot|can['’]?t)"
+    r"cannot|can['’]?t|don['’]?t|shouldn['’]?t|mustn['’]?t|won['’]?t)"
     r"(?:\s+(?:currently|yet|now|actually|really|remotely|fully|be|been|being|"
     r"considered|called|marked|labelled|labeled|described|at|all)){0,3}"
     r"|\b(?:do\s+not|don['’]?t)\s+"
@@ -445,7 +430,16 @@ def unnegated_claims(
 def has_positive_ready_claim(text: str) -> bool:
     ready_patterns = (
         re.compile(
-            r"\bready\s+(?:for\s+(?:human\s+)?review|to\s+merge|for\s+merge)\b",
+            r"\bready\s+(?:to\s+merge|for\s+merge)\b",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"\b(?:this|the)\s+pr\s+is\s+ready\b"
+            r"(?!\s+for\s+(?:human\s+)?review\b)",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"\bproceed\s+(?:with\s+the\s+merge|to\s+merge)\b",
             re.IGNORECASE,
         ),
         re.compile(r"\bmerge\s+ready\b", re.IGNORECASE),
@@ -486,8 +480,10 @@ def deployment_overclaims(text: str) -> list[str]:
         re.compile(r"\b(?:is|was|has\s+been|have\s+been|successfully|now)\s+deployed\b", re.I),
         re.compile(r"\bdeployed\s+(?:to|in|on)\s+(?:the\s+)?production\b", re.I),
         re.compile(r"\bdeployment\s+(?:is\s+|was\s+)?completed\s+successfully\b", re.I),
+        re.compile(r"\bdeployment\s+(?:is|was)\s+complete\b", re.I),
         re.compile(r"\bshipped\s+to\s+(?:the\s+)?production\b", re.I),
         re.compile(r"\b(?:is|was|now|currently)\s+live\s+(?:in|on|for|to)\b", re.I),
+        re.compile(r"\b(?:is|was|currently)\s+live\b", re.I),
         re.compile(r"\blive\s+now\b", re.I),
         re.compile(r"\bnow\s+available\b", re.I),
         re.compile(r"\bavailable\s+now\b", re.I),
@@ -502,8 +498,10 @@ def availability_overclaims(text: str) -> list[str]:
         re.compile(r"\bnow\s+available\b", re.I),
         re.compile(r"\bavailable\s+now\b", re.I),
         re.compile(r"\b(?:is|was|currently)\s+available\s+(?:in|to|for)\b", re.I),
+        re.compile(r"\b(?:is|was|currently)\s+available\b", re.I),
         re.compile(r"\bavailability\s+(?:is|was)\s+confirmed\b", re.I),
         re.compile(r"\blive\s+now\b", re.I),
+        re.compile(r"\b(?:is|was|currently)\s+live\b", re.I),
     )
     return unnegated_claims(text, positive_patterns)
 
@@ -825,14 +823,40 @@ The next human decision is whether to merge. Stop before merge.
 
     if (
         has_positive_ready_claim("Mergeable?")
+        or has_positive_ready_claim("Is this PR ready?")
+        or has_positive_ready_claim("Proceed to merge?")
+        or has_positive_ready_claim("This PR is ready for review.")
         or availability_overclaims("Is this available now?")
+        or availability_overclaims("Is the feature available?")
+        or availability_overclaims("Is the feature live?")
         or deployment_overclaims("Deployment completed successfully?")
+        or deployment_overclaims("Is the deployment complete?")
     ):
         print(
             "SELF-TEST FAIL: questions must not be treated as affirmative claims",
             file=sys.stderr,
         )
         return 1
+
+    for conclusion in (
+        "No actionable findings",
+        "NO ACTIONABLE FINDINGS!",
+        "No findings",
+        "no FINDINGS.",
+        "Clean",
+        "cLeAn!",
+        "Approved",
+        "APPROVED.",
+        "Passed",
+        "passed!",
+    ):
+        if not clean_review_conclusion(conclusion):
+            print(
+                f"SELF-TEST FAIL: canonical review conclusion {conclusion!r} "
+                "should pass",
+                file=sys.stderr,
+            )
+            return 1
 
     cases: list[tuple[str, str, dict[str, Any], str]] = []
     cases.append(
@@ -848,7 +872,14 @@ The next human decision is whether to merge. Stop before merge.
     )
     draft_evidence = copy.deepcopy(evidence)
     draft_evidence["pr"]["isDraft"] = True
-    cases.append(("false ready claim", grounded, draft_evidence, "false ready claim"))
+    cases.append(
+        (
+            "false ready claim",
+            grounded + "\nThis PR is ready.\n",
+            draft_evidence,
+            "false ready claim",
+        )
+    )
     unknown_evidence = copy.deepcopy(evidence)
     unknown_evidence["pr"]["mergeable"] = "UNKNOWN"
     cases.append(("unknown mergeability", grounded, unknown_evidence, "requires BLOCKED"))
@@ -868,6 +899,11 @@ The next human decision is whether to merge. Stop before merge.
     for conclusion in (
         "No actionable findings; changes requested",
         "No findings, but review failed",
+        "No actionable findings; one critical issue remains",
+        "No findings; merge should be blocked",
+        "Approved with conditions",
+        "Passed except for a blocker",
+        "Clean, but changes requested",
     ):
         contradictory_review_evidence = copy.deepcopy(evidence)
         contradictory_review_evidence["verification"]["independent_review"][
@@ -940,6 +976,9 @@ The next human decision is whether to merge. Stop before merge.
             "mixed negation ready to merge",
             "This PR is not deployed and is ready to merge.",
         ),
+        ("direct PR ready", "This PR is ready."),
+        ("proceed with the merge", "Proceed with the merge."),
+        ("proceed to merge", "Proceed to merge."),
         ("safe to merge", "This PR is safe to merge."),
         ("approved to merge", "This PR is approved to merge."),
         ("clean and mergeable", "This PR is clean and mergeable today."),
@@ -960,6 +999,8 @@ The next human decision is whether to merge. Stop before merge.
 
     negated_blocked = blocked.replace(
         "The OPEN PR is blocked.",
+        "This PR is not ready. Do not proceed with the merge. "
+        "Don't proceed to merge. This PR is ready for review. "
         "This PR is not ready to merge. Do not call this safe to merge. "
         "This PR should not be considered ready to merge. "
         "This PR should never be called safe to merge.",
@@ -1040,7 +1081,9 @@ The next human decision is whether to investigate deployment history, not whethe
         return 1
 
     negated_retrospective = retrospective + (
-        "\nThis PR is not ready to merge. "
+        "\nThis PR is not ready. Do not proceed with the merge. "
+        "Don't proceed to merge. This PR is ready for review. "
+        "This PR is not ready to merge. "
         "Do not call this safe to merge. "
         "This PR should not be considered ready to merge. "
         "This PR should never be called safe to merge.\n"
@@ -1113,6 +1156,9 @@ The next human decision is whether to investigate deployment history, not whethe
             "mixed negation ready to merge",
             "This PR is not deployed and is ready to merge.",
         ),
+        ("direct PR ready", "This PR is ready."),
+        ("proceed with the merge", "Proceed with the merge."),
+        ("proceed to merge", "Proceed to merge."),
         ("safe to merge", "This PR is safe to merge."),
         ("approved to merge", "This PR is approved to merge."),
         ("clean and mergeable", "This PR is clean and mergeable today."),
@@ -1147,6 +1193,9 @@ The next human decision is whether to investigate deployment history, not whethe
         ("deployment completed", "Deployment completed successfully."),
         ("shipped to production", "Shipped to production."),
         ("live now", "Live now."),
+        ("feature available", "The feature is available."),
+        ("feature live", "The feature is live."),
+        ("deployment complete", "The deployment is complete."),
     ):
         cases.append(
             (
