@@ -201,3 +201,26 @@ lab = "Thinking Machines Lab"
 confidence = "verified"
 source = "https://openrouter.ai/thinkingmachines/inkling"
 last_verified = 2026-08-01
+
+[engines.opencode.models."openrouter/poolside/laguna-m.1:free"]
+# Not a typo — OpenRouter carried this slug from 2026-07-09 until it was
+# delisted 2026-08-01T23:13:22Z (same day as this entry, hours before this
+# registry check ran). Confirmed via ~/.ringer/openrouter-catalog.changes.jsonl
+# added/removed events, catalog name "Poolside: Laguna M.1 (free)". Historical
+# attempts against this slug should still resolve to Poolside identity even
+# though the model is no longer orderable.
+display = "Laguna M.1 (free)"
+lab = "Poolside"
+confidence = "verified"
+source = "OpenRouter catalog history (~/.ringer/openrouter-catalog.changes.jsonl): added 2026-07-09, delisted 2026-08-01"
+last_verified = 2026-08-01
+
+[engines.opencode.models."openrouter/nousresearch/hermes-3-llama-3.1-405b:free"]
+# Not a typo — OpenRouter carried the free tier of this model from 2026-07-09
+# until it was delisted 2026-07-19; the paid nousresearch/hermes-3-llama-3.1-405b
+# slug remains live. Catalog name "Nous: Hermes 3 405B Instruct (free)".
+display = "Hermes 3 405B Instruct (free)"
+lab = "Nous Research"
+confidence = "verified"
+source = "OpenRouter catalog history (~/.ringer/openrouter-catalog.changes.jsonl): added 2026-07-09, delisted 2026-07-19"
+last_verified = 2026-08-01
