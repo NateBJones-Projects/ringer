@@ -347,7 +347,9 @@ mode is never an escape hatch for a current handoff:
 - **READY:** only when every prerequisite below passes, create a ready review
   package bound to the verified commit and present it to the human.
 
-Readiness requires all of the following for the **same SHA**:
+Readiness requires all of the following for the **same full hexadecimal Git
+object ID** (40 characters for SHA-1 or 64 for SHA-256; never abbreviated,
+short, or non-hex):
 
 - Executed worker checks and full-repository gates pass for the exact local
   `HEAD` commit.

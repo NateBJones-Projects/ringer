@@ -16,6 +16,7 @@ SUCCESSFUL_CHECK = "SUCCESS"
 REVIEW_HANDOFF_MODE = "review_handoff"
 RETROSPECTIVE_MODE = "retrospective"
 LIFECYCLE_FACTS = ("built", "merged", "deployed", "available")
+FULL_GIT_OBJECT_ID = re.compile(r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})\Z")
 
 
 def normalize(value: str) -> str:
@@ -103,6 +104,19 @@ def evidence_sha(record: dict[str, Any]) -> str:
     return ""
 
 
+def is_full_git_object_id(value: str) -> bool:
+    """Return whether value is a full SHA-1 or SHA-256 hexadecimal object ID."""
+
+    return bool(FULL_GIT_OBJECT_ID.fullmatch(value.strip()))
+
+
+def invalid_sha_blocker(label: str, value: str) -> str:
+    return (
+        f"{label} {value!r} is not a full 40- or 64-character hexadecimal "
+        "Git object ID"
+    )
+
+
 def evidence_records(value: Any) -> list[dict[str, Any]]:
     if isinstance(value, dict):
         return [value]
@@ -166,6 +180,8 @@ def add_gate_record_blockers(
         sha = evidence_sha(record)
         if not sha:
             blockers.append(f"{label} {name!r} does not name a commit SHA")
+        elif not is_full_git_object_id(sha):
+            blockers.append(invalid_sha_blocker(f"{label} {name!r} SHA", sha))
         elif exact_sha and sha.lower() != exact_sha.lower():
             blockers.append(
                 f"{label} {name!r} covers SHA {sha}, not exact SHA {exact_sha}"
@@ -194,16 +210,28 @@ def readiness_blockers(evidence: dict[str, Any]) -> tuple[list[str], str]:
 
     if not local_head:
         blockers.append("local HEAD SHA is missing")
+    elif not is_full_git_object_id(local_head):
+        blockers.append(invalid_sha_blocker("local HEAD SHA", local_head))
     if not remote_head:
         blockers.append("pushed remote branch head SHA is missing")
+    elif not is_full_git_object_id(remote_head):
+        blockers.append(
+            invalid_sha_blocker("pushed remote branch head SHA", remote_head)
+        )
     if not pr_head:
         blockers.append("GitHub PR headRefOid is missing")
+    elif not is_full_git_object_id(pr_head):
+        blockers.append(invalid_sha_blocker("GitHub PR headRefOid", pr_head))
 
     exact_sha = ""
     supplied_heads = [value.lower() for value in (local_head, remote_head, pr_head) if value]
     if len(supplied_heads) == 3:
         if len(set(supplied_heads)) == 1:
-            exact_sha = local_head
+            if all(
+                is_full_git_object_id(value)
+                for value in (local_head, remote_head, pr_head)
+            ):
+                exact_sha = local_head
         else:
             blockers.append(
                 "local HEAD, pushed remote branch head, and GitHub PR headRefOid "
@@ -265,6 +293,10 @@ def readiness_blockers(evidence: dict[str, Any]) -> tuple[list[str], str]:
         review_sha = evidence_sha(review)
         if not review_sha:
             blockers.append("independent review does not name a commit SHA")
+        elif not is_full_git_object_id(review_sha):
+            blockers.append(
+                invalid_sha_blocker("independent review SHA", review_sha)
+            )
         elif exact_sha and review_sha.lower() != exact_sha.lower():
             blockers.append(
                 f"independent review covers SHA {review_sha}, not exact SHA {exact_sha}"
@@ -291,6 +323,13 @@ def readiness_blockers(evidence: dict[str, Any]) -> tuple[list[str], str]:
             if not check_sha:
                 blockers.append(
                     f"required GitHub check {name!r} does not name a commit SHA"
+                )
+            elif not is_full_git_object_id(check_sha):
+                blockers.append(
+                    invalid_sha_blocker(
+                        f"required GitHub check {name!r} SHA",
+                        check_sha,
+                    )
                 )
             elif exact_sha and check_sha.lower() != exact_sha.lower():
                 blockers.append(
@@ -333,6 +372,17 @@ def lifecycle_outcome(text: str) -> str:
     return ""
 
 
+def has_review_gate_outcome_label(text: str) -> bool:
+    """Find a review/readiness outcome label regardless of Markdown styling."""
+
+    return bool(
+        re.search(
+            r"\b(?:review|readiness)\s+gate\s+outcome\b",
+            normalize(text),
+        )
+    )
+
+
 def document_states_boolean_fact(text: str, label: str, value: bool) -> bool:
     expected = "true" if value else "false"
     pattern = re.compile(rf"\b{re.escape(label)}\s+(?:is\s+|was\s+)?{expected}\b")
@@ -344,20 +394,60 @@ def document_states_pr_state(text: str, state: str) -> bool:
     return bool(pattern.search(normalize(text)))
 
 
-def has_positive_ready_claim(text: str) -> bool:
-    ready_pattern = re.compile(
-        r"\b(?:ready\s+(?:for\s+(?:human\s+)?review|to\s+merge|for\s+merge)"
-        r"|merge\s+ready)\b",
-        re.IGNORECASE,
-    )
-    negative_pattern = re.compile(
-        r"\b(?:not|is\s+not|isn['’]?t|cannot|can['’]?t|do\s+not\s+call)\b",
-        re.IGNORECASE,
-    )
+LOCAL_NEGATION_PREFIX = re.compile(
+    r"(?:"
+    r"\b(?:not|never|isn['’]?t|aren['’]?t|wasn['’]?t|weren['’]?t|"
+    r"cannot|can['’]?t)"
+    r"(?:\s+(?:currently|yet|now|actually|really|remotely|fully|been|being|"
+    r"considered|called|marked|labelled|labeled|described|at|all)){0,3}"
+    r"|\b(?:do\s+not|don['’]?t)\s+"
+    r"(?:call|consider|describe|label|mark)(?:\s+(?:this|it))?"
+    r")\s*$",
+    re.IGNORECASE,
+)
+
+
+def phrase_is_locally_negated(sentence: str, claim_start: int) -> bool:
+    """Check only the words immediately governing a matched claim phrase."""
+
+    prefix = re.sub(r"[^a-z0-9'’]+", " ", sentence[:claim_start].lower()).strip()
+    return bool(LOCAL_NEGATION_PREFIX.search(prefix))
+
+
+def unnegated_claims(
+    text: str,
+    positive_patterns: tuple[re.Pattern[str], ...],
+) -> list[str]:
+    claims: list[str] = []
     for sentence in re.split(r"(?<=[.!?])\s+|\n+", text):
-        if ready_pattern.search(sentence) and not negative_pattern.search(sentence):
-            return True
-    return False
+        if not sentence.strip():
+            continue
+        matches = (
+            match
+            for pattern in positive_patterns
+            for match in pattern.finditer(sentence)
+        )
+        if any(
+            not phrase_is_locally_negated(sentence, match.start())
+            for match in matches
+        ):
+            claims.append(display_fact(sentence))
+    return claims
+
+
+def has_positive_ready_claim(text: str) -> bool:
+    ready_patterns = (
+        re.compile(
+            r"\bready\s+(?:for\s+(?:human\s+)?review|to\s+merge|for\s+merge)\b",
+            re.IGNORECASE,
+        ),
+        re.compile(r"\bmerge\s+ready\b", re.IGNORECASE),
+        re.compile(r"\bsafe\s+to\s+merge\b", re.IGNORECASE),
+        re.compile(r"\bapproved\s+(?:to\s+merge|for\s+merge)\b", re.IGNORECASE),
+        re.compile(r"\bclean\s+and\s+mergeable(?:\s+today)?\b", re.IGNORECASE),
+        re.compile(r"\bmerge\s+can\s+proceed\b", re.IGNORECASE),
+    )
+    return bool(unnegated_claims(text, ready_patterns))
 
 
 def deployment_is_false(evidence: dict[str, Any]) -> bool:
@@ -381,7 +471,6 @@ def availability_is_false(evidence: dict[str, Any]) -> bool:
 
 
 def deployment_overclaims(text: str) -> list[str]:
-    claims: list[str] = []
     positive_patterns = (
         re.compile(r"\b(?:is|was|has\s+been|have\s+been|successfully|now)\s+deployed\b", re.I),
         re.compile(r"\bdeployed\s+(?:to|in|on)\s+(?:the\s+)?production\b", re.I),
@@ -390,41 +479,16 @@ def deployment_overclaims(text: str) -> list[str]:
         re.compile(r"\b(?:is|was|currently)\s+available\s+(?:in|to|for)\b", re.I),
         re.compile(r"\brolled\s+out\s+(?:to|in|across)\b", re.I),
     )
-    negative_pattern = re.compile(
-        r"\b(?:not|never)\s+(?:been\s+)?(?:deployed|available|live|rolled\s+out)\b"
-        r"|\bno\s+(?:production\s+)?(?:deployment|rollout|availability)\b"
-        r"|\bdeployed\s*[=:]\s*false\b"
-        r"|\bavailability\s+(?:is|was|has)\s+not\b",
-        re.I,
-    )
-    for sentence in re.split(r"(?<=[.!?])\s+|\n+", text):
-        if not sentence.strip() or negative_pattern.search(sentence):
-            continue
-        if any(pattern.search(sentence) for pattern in positive_patterns):
-            claims.append(display_fact(sentence))
-    return claims
+    return unnegated_claims(text, positive_patterns)
 
 
 def availability_overclaims(text: str) -> list[str]:
-    claims: list[str] = []
     positive_patterns = (
         re.compile(r"\bnow\s+available\b", re.I),
         re.compile(r"\b(?:is|was|currently)\s+available\s+(?:in|to|for)\b", re.I),
         re.compile(r"\bavailability\s+(?:is|was)\s+confirmed\b", re.I),
     )
-    negative_pattern = re.compile(
-        r"\bnot\s+(?:currently\s+)?available\b"
-        r"|\bno\s+(?:confirmed\s+)?availability\b"
-        r"|\bavailable\s*[=:]\s*false\b"
-        r"|\bavailability\s+(?:is|was|has)\s+not\b",
-        re.I,
-    )
-    for sentence in re.split(r"(?<=[.!?])\s+|\n+", text):
-        if not sentence.strip() or negative_pattern.search(sentence):
-            continue
-        if any(pattern.search(sentence) for pattern in positive_patterns):
-            claims.append(display_fact(sentence))
-    return claims
+    return unnegated_claims(text, positive_patterns)
 
 
 def validate_document(text: str, evidence: dict[str, Any]) -> list[str]:
@@ -561,10 +625,7 @@ def validate_document(text: str, evidence: dict[str, Any]) -> list[str]:
                 "package must state that any later commit invalidates the gate"
             )
     else:
-        if has_labeled_section(
-            labels,
-            ("review gate outcome", "readiness gate outcome"),
-        ):
+        if has_review_gate_outcome_label(text):
             failures.append(
                 "retrospective package must not use a READY/BLOCKED review gate outcome"
             )
@@ -728,6 +789,23 @@ The next human decision is whether to merge. Stop before merge.
             print(f"  - {failure}", file=sys.stderr)
         return 1
 
+    sha256 = "a" * 64
+    sha256_evidence = copy.deepcopy(evidence)
+    sha256_evidence["commit"]["local_head"] = sha256
+    sha256_evidence["commit"]["pushed_remote_branch_head"] = sha256
+    sha256_evidence["pr"]["headRefOid"] = sha256
+    sha256_evidence["verification"]["worker_gates"][0]["sha"] = sha256
+    sha256_evidence["verification"]["full_repository_gates"][0]["sha"] = sha256
+    sha256_evidence["verification"]["independent_review"]["sha"] = sha256
+    sha256_evidence["verification"]["required_checks"][0]["sha"] = sha256
+    sha256_grounded = grounded.replace(sha, sha256)
+    sha256_failures = validate_document(sha256_grounded, sha256_evidence)
+    if sha256_failures:
+        print("SELF-TEST FAIL: full SHA-256 sample should pass", file=sys.stderr)
+        for failure in sha256_failures:
+            print(f"  - {failure}", file=sys.stderr)
+        return 1
+
     cases: list[tuple[str, str, dict[str, Any], str]] = []
     cases.append(
         (
@@ -771,6 +849,28 @@ The next human decision is whether to merge. Stop before merge.
             "deployment/availability overclaim",
         )
     )
+    abbreviated_evidence = copy.deepcopy(evidence)
+    abbreviated_evidence["commit"]["local_head"] = "abcdef1"
+    abbreviated_evidence["commit"]["pushed_remote_branch_head"] = "abcdef1"
+    abbreviated_evidence["pr"]["headRefOid"] = "abcdef1"
+    cases.append(
+        (
+            "matching abbreviated heads",
+            grounded,
+            abbreviated_evidence,
+            "not a full 40- or 64-character hexadecimal Git object ID",
+        )
+    )
+    invalid_gate_sha_evidence = copy.deepcopy(evidence)
+    invalid_gate_sha_evidence["verification"]["worker_gates"][0]["sha"] = "g" * 40
+    cases.append(
+        (
+            "non-hex worker gate SHA",
+            grounded,
+            invalid_gate_sha_evidence,
+            "not a full 40- or 64-character hexadecimal Git object ID",
+        )
+    )
 
     blocked_evidence = copy.deepcopy(evidence)
     blocked_evidence["mode"] = "unknown-future-mode"
@@ -788,6 +888,39 @@ The next human decision is whether to merge. Stop before merge.
     if blocked_failures:
         print("SELF-TEST FAIL: blocked sample should pass", file=sys.stderr)
         for failure in blocked_failures:
+            print(f"  - {failure}", file=sys.stderr)
+        return 1
+
+    for name, claim in (
+        (
+            "mixed negation ready to merge",
+            "This PR is not deployed and is ready to merge.",
+        ),
+        ("safe to merge", "This PR is safe to merge."),
+        ("approved to merge", "This PR is approved to merge."),
+        ("clean and mergeable", "This PR is clean and mergeable today."),
+        ("merge can proceed", "The merge can proceed."),
+    ):
+        cases.append(
+            (
+                f"blocked {name}",
+                blocked.replace("The OPEN PR is blocked.", claim),
+                blocked_evidence,
+                "false ready claim",
+            )
+        )
+
+    negated_blocked = blocked.replace(
+        "The OPEN PR is blocked.",
+        "This PR is not ready to merge. Do not call this safe to merge.",
+    )
+    negated_blocked_failures = validate_document(negated_blocked, blocked_evidence)
+    if negated_blocked_failures:
+        print(
+            "SELF-TEST FAIL: genuinely negated blocked claims should pass",
+            file=sys.stderr,
+        )
+        for failure in negated_blocked_failures:
             print(f"  - {failure}", file=sys.stderr)
         return 1
 
@@ -856,6 +989,23 @@ The next human decision is whether to investigate deployment history, not whethe
             print(f"  - {failure}", file=sys.stderr)
         return 1
 
+    negated_retrospective = retrospective + (
+        "\nThis PR is not ready to merge. "
+        "Do not call this safe to merge.\n"
+    )
+    negated_retrospective_failures = validate_document(
+        negated_retrospective,
+        retrospective_evidence,
+    )
+    if negated_retrospective_failures:
+        print(
+            "SELF-TEST FAIL: genuinely negated retrospective claims should pass",
+            file=sys.stderr,
+        )
+        for failure in negated_retrospective_failures:
+            print(f"  - {failure}", file=sys.stderr)
+        return 1
+
     closed_evidence = copy.deepcopy(retrospective_evidence)
     closed_evidence["pr"]["state"] = "CLOSED"
     closed_evidence["lifecycle"]["merged"] = False
@@ -898,6 +1048,32 @@ The next human decision is whether to investigate deployment history, not whethe
             "review_handoff package cannot use",
         )
     )
+    cases.append(
+        (
+            "plain retrospective review outcome label",
+            retrospective + "\nReview Gate Outcome: READY\n",
+            retrospective_evidence,
+            "must not use a READY/BLOCKED review gate outcome",
+        )
+    )
+    for name, claim in (
+        (
+            "mixed negation ready to merge",
+            "This PR is not deployed and is ready to merge.",
+        ),
+        ("safe to merge", "This PR is safe to merge."),
+        ("approved to merge", "This PR is approved to merge."),
+        ("clean and mergeable", "This PR is clean and mergeable today."),
+        ("merge can proceed", "The merge can proceed."),
+    ):
+        cases.append(
+            (
+                f"retrospective {name}",
+                retrospective + f"\n{claim}\n",
+                retrospective_evidence,
+                "must not claim current merge readiness",
+            )
+        )
     retrospective_overclaim = retrospective.replace(
         "- Deployed: false — no production deployment evidence was supplied.",
         "- Deployed: false. It is deployed to production for staff.",
@@ -923,9 +1099,10 @@ The next human decision is whether to investigate deployment history, not whethe
             return 1
 
     print(
-        "PASS: self-test accepted 5 valid samples (explicit READY, default "
-        "READY, unknown-mode BLOCKED, MERGED RETROSPECTIVE, and CLOSED "
-        f"RETROSPECTIVE) and rejected {len(cases)} bad cases."
+        "PASS: self-test accepted 8 valid samples (SHA-1 READY, default READY, "
+        "SHA-256 READY, unknown-mode BLOCKED, negated BLOCKED, MERGED "
+        "RETROSPECTIVE, negated RETROSPECTIVE, and CLOSED RETROSPECTIVE) "
+        f"and rejected {len(cases)} bad cases."
     )
     return 0
 

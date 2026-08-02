@@ -36,6 +36,8 @@ evidence, review, mergeability, or required check.
 2. In `review_handoff`, record the local `HEAD`, pushed remote branch head, and
    GitHub PR `headRefOid`. Worker gates, full-repository gates, independent
    review, and required checks must each name the exact commit SHA they cover.
+   An exact SHA must be a full hexadecimal Git object ID: 40 characters for
+   SHA-1 or 64 for SHA-256. Abbreviated, short, or non-hex values are blockers.
 3. Record what was built, merged, deployed, and confirmed available as four
    separate facts. Do not infer one state from another.
 4. Record scope, non-goals, data or migration effects, rollout evidence,
@@ -55,7 +57,7 @@ Call the package ready only when all of these are true:
   non-draft PR are available for inspection. Do not push or open/update a PR to
   manufacture these prerequisites.
 - Local `HEAD`, the pushed remote branch head, and GitHub `headRefOid` are the
-  same SHA.
+  same full 40- or 64-character hexadecimal Git object ID.
 - Executed worker and full-repository gates pass for that exact SHA.
 - A fresh independent review of that exact SHA has no actionable findings.
 - GitHub reports the PR as mergeable, never `UNKNOWN`, and every required check
@@ -84,8 +86,10 @@ contain `fresh: true`.
 
 Use this mode only when `pr.state` is `MERGED` or `CLOSED`. State exactly one
 outcome, `Lifecycle Outcome: RETROSPECTIVE`, and do not label the package READY
-or BLOCKED, claim that the historical PR is currently merge-ready, or imply
-that it passed today's review gate.
+or BLOCKED, use a review/readiness outcome label anywhere (including plain
+text), claim that the historical PR is ready, safe, approved, clean and
+mergeable, or able to proceed to merge, or imply that it passed today's review
+gate.
 
 The evidence JSON must include explicit booleans for `lifecycle.built`,
 `lifecycle.merged`, `lifecycle.deployed`, and `lifecycle.available`. The

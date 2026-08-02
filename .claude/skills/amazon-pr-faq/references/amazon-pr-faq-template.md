@@ -27,19 +27,22 @@ available. Do not infer launch status.]
 
 ### Review Gate Outcome: [READY or BLOCKED — review_handoff only]
 
-[Use exactly one outcome. READY must name the one exact commit SHA covered by
-all readiness evidence. BLOCKED must list every exact missing, stale, failed,
-unauthorized, or mismatched prerequisite. Any later commit invalidates this
-gate and requires fresh evidence.]
+[Use exactly one outcome. READY must name the one exact full hexadecimal Git
+object ID covered by all readiness evidence: 40 characters for SHA-1 or 64 for
+SHA-256. Abbreviated, short, or non-hex SHAs are blockers. BLOCKED must list
+every exact missing, stale, failed, unauthorized, invalid, or mismatched
+prerequisite. Any later commit invalidates this gate and requires fresh
+evidence.]
 
 ### Lifecycle Outcome: [RETROSPECTIVE — retrospective only]
 
 [Use only for an explicitly selected retrospective of a MERGED or CLOSED PR.
-Do not call it READY or BLOCKED and do not claim current merge readiness. Name
-the actual PR state and report four separate evidence-backed facts: Built:
-true/false; Merged: true/false; Deployed: true/false; Available: true/false.
-Retrospective mode does not require an open-PR authorization or later-commit
-invalidation statement.]
+Do not use a READY/BLOCKED review or readiness outcome label anywhere, even as
+plain text, and do not claim the PR is currently ready, safe, approved, clean
+and mergeable, or able to proceed to merge. Name the actual PR state and report
+four separate evidence-backed facts: Built: true/false; Merged: true/false;
+Deployed: true/false; Available: true/false. Retrospective mode does not require
+an open-PR authorization or later-commit invalidation statement.]
 
 ### Customer Problem
 
@@ -89,9 +92,10 @@ availability when those states are not established.]
 experience checks, and required-check results exactly. In `review_handoff`, for
 each item name the commit SHA it covers; state the local HEAD, pushed remote
 branch head, and GitHub PR headRefOid and whether all three are the same SHA;
-never accept UNKNOWN mergeability. In `retrospective`, identify evidence as
-historical and name its actual SHA and age when known without implying current
-readiness.]
+require every SHA to be a full 40-character SHA-1 or 64-character SHA-256
+hexadecimal object ID; never accept UNKNOWN mergeability. In `retrospective`,
+identify evidence as historical and name its actual SHA and age when known
+without implying current readiness.]
 
 ### What authorization boundary applies?
 

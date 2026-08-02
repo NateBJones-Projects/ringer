@@ -10357,6 +10357,7 @@ def claude_root(project: bool) -> Path:
 
 
 AGENT_SKILL_NAMES = ("ringer", "amazon-pr-faq")
+RINGER_HOOK_ACTIONS = ("pre-bash", "post-edit")
 
 
 def agent_skill_sources() -> dict[str, Path]:
@@ -10375,6 +10376,8 @@ def replace_agent_skill_tree(skill_source: Path, skill_target: Path) -> None:
 
 
 def ringer_hook_command(action: str) -> str:
+    if action not in RINGER_HOOK_ACTIONS:
+        raise ValueError(f"unsupported Ringer hook action: {action}")
     hook_path = repo_root() / "hooks" / "ringer_nudge.py"
     return f"python3 {shlex.quote(str(hook_path))} {action}"
 
@@ -10408,18 +10411,30 @@ def write_settings(path: Path, settings: dict[str, Any]) -> None:
     os.replace(tmp, path)
 
 
-def hook_command_contains(value: Any, needle: str = "ringer_nudge.py") -> bool:
-    return isinstance(value, dict) and needle in str(value.get("command", ""))
+def hook_command_is_owned(value: Any, expected_command: str | None = None) -> bool:
+    if not isinstance(value, dict) or value.get("type") != "command":
+        return False
+    command = value.get("command")
+    if not isinstance(command, str):
+        return False
+    owned_commands = (
+        {expected_command}
+        if expected_command is not None
+        else {ringer_hook_command(action) for action in RINGER_HOOK_ACTIONS}
+    )
+    return command in owned_commands
 
 
-def event_has_ringer_hook(groups: Any) -> bool:
+def event_has_ringer_hook(groups: Any, command: str) -> bool:
     if not isinstance(groups, list):
         return False
     for group in groups:
         if not isinstance(group, dict):
             continue
         handlers = group.get("hooks")
-        if isinstance(handlers, list) and any(hook_command_contains(handler) for handler in handlers):
+        if isinstance(handlers, list) and any(
+            hook_command_is_owned(handler, command) for handler in handlers
+        ):
             return True
     return False
 
@@ -10431,7 +10446,7 @@ def merge_ringer_hook(settings: dict[str, Any], event: str, matcher: str, comman
     groups = hooks.setdefault(event, [])
     if not isinstance(groups, list):
         raise ValueError(f"settings hooks.{event} field must be a JSON array")
-    if event_has_ringer_hook(groups):
+    if event_has_ringer_hook(groups, command):
         return False
     groups.append(
         {
@@ -10467,7 +10482,7 @@ def remove_ringer_hooks(settings: dict[str, Any]) -> int:
                 continue
             kept_handlers = []
             for handler in handlers:
-                if hook_command_contains(handler):
+                if hook_command_is_owned(handler):
                     removed += 1
                 else:
                     kept_handlers.append(handler)

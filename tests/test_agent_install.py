@@ -176,6 +176,52 @@ class AgentInstallTests(unittest.TestCase):
         self.assertEqual("keep this skill\n", unrelated_skill.read_text(encoding="utf-8"))
         self.assert_skill_trees_match(claude)
 
+    def test_install_and_uninstall_preserve_ringer_nudge_lookalike(self) -> None:
+        claude = self.home / ".claude"
+        claude.mkdir()
+        lookalike = "python3 /unrelated/ringer_nudge.py audit"
+        settings_path = claude / "settings.json"
+        settings_path.write_text(
+            json.dumps(
+                {
+                    "hooks": {
+                        "PreToolUse": [
+                            {
+                                "matcher": "Bash",
+                                "hooks": [
+                                    {"type": "command", "command": lookalike}
+                                ],
+                            }
+                        ]
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        install = self.run_cli("install-agent")
+        self.assertEqual(0, install.returncode, install.stderr)
+        installed = self.read_settings()
+        commands = [
+            handler["command"]
+            for groups in installed["hooks"].values()
+            for group in groups
+            for handler in group["hooks"]
+        ]
+        self.assertIn(lookalike, commands)
+        self.assertEqual(3, len(commands))
+
+        uninstall = self.run_cli("uninstall-agent")
+        self.assertEqual(0, uninstall.returncode, uninstall.stderr)
+        after = self.read_settings()
+        remaining = [
+            handler["command"]
+            for groups in after["hooks"].values()
+            for group in groups
+            for handler in group["hooks"]
+        ]
+        self.assertEqual([lookalike], remaining)
+
     def test_uninstall_removes_only_owned_hooks_and_both_skill_dirs(self) -> None:
         install = self.run_cli("install-agent")
         self.assertEqual(0, install.returncode, install.stderr)
