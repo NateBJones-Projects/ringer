@@ -334,6 +334,20 @@ someone's untracked scratch files.
    numbers took care of themselves — every attempt already landed in the
    local model log (`./ringer.py models` to see the updated scoreboard).
 
+## Post-run PR review handoff
+
+Use this procedural hook only after worker checks PASS, patches are reviewed
+and integrated, full repository gates pass, a fresh independent review reports
+no actionable findings, the branch is pushed, and GitHub confirms the OPEN PR
+is mergeable with required checks successful. The orchestrator must inspect
+that GitHub evidence; generic `ringer.py` does not infer PR state.
+
+Then load `$amazon-pr-faq`, place the resulting Markdown in the Ringer
+artifact/review package, and add it to the PR body or a comment only when
+authorized. Present the PR URL and FAQ to the human. **Stop before merge or
+deploy.** If any gate is absent, report the exact blocker and do not call the
+PR ready.
+
 ## Spend your own context deliberately
 
 The scoreboard exists so that worker tokens buy evidence. Your own tokens are
