@@ -577,19 +577,92 @@ class RingerCliTests(unittest.TestCase):
 
 
     def test_check_timeout_is_reported_separately_from_worker_timeout(self) -> None:
-        original_timeout = ringer.CHECK_TIMEOUT_S
-        ringer.CHECK_TIMEOUT_S = 1
         with tempfile.TemporaryDirectory(prefix="ringer-check-timeout-") as tmp:
-            try:
-                returncode, timed_out, output = asyncio.run(
-                    ringer.Verifier._run_check("sleep 5", Path(tmp))
-                )
-            finally:
-                ringer.CHECK_TIMEOUT_S = original_timeout
+            returncode, timed_out, output = asyncio.run(
+                ringer.Verifier._run_check("sleep 5", Path(tmp), timeout_s=1)
+            )
 
         self.assertTrue(timed_out)
         self.assertNotEqual(returncode, 0)
         self.assertIn("[ringer.py] check timed out after 1s", output)
+
+    def test_verifier_uses_the_tasks_check_timeout(self) -> None:
+        task = ringer.TaskSpec(
+            key="slow-check",
+            spec="Irrelevant; only the check runs here.",
+            check="sleep 5",
+            check_timeout_s=1,
+        )
+        with tempfile.TemporaryDirectory(prefix="ringer-check-timeout-") as tmp:
+            verify = asyncio.run(ringer.Verifier().verify(task, Path(tmp)))
+
+        self.assertFalse(verify.ok)
+        self.assertTrue(verify.check_timed_out)
+        self.assertIn("[ringer.py] check timed out after 1s", verify.raw_output_excerpt)
+
+    def test_raised_check_timeout_lets_a_slow_check_finish(self) -> None:
+        # Regression for run ipad-hover-sweep (2026-08-02): the manifest set
+        # check_timeout_s but parsing dropped the field, so every slow check
+        # was killed at the module default. Shrink the default below the
+        # check's runtime — the task's raised limit must govern, not the
+        # default, and the check must be allowed to finish and pass.
+        task = ringer.TaskSpec.from_obj(
+            {
+                "key": "slow-but-raised",
+                "spec": "Irrelevant; only the check runs here.",
+                "check": "sleep 2",
+                "check_timeout_s": 30,
+            }
+        )
+        original = ringer.CHECK_TIMEOUT_S
+        ringer.CHECK_TIMEOUT_S = 1
+        try:
+            with tempfile.TemporaryDirectory(prefix="ringer-check-timeout-") as tmp:
+                verify = asyncio.run(ringer.Verifier().verify(task, Path(tmp)))
+        finally:
+            ringer.CHECK_TIMEOUT_S = original
+
+        self.assertTrue(verify.ok, verify.raw_output_excerpt)
+        self.assertFalse(verify.check_timed_out)
+        self.assertNotIn("check timed out", verify.raw_output_excerpt)
+
+    def test_check_timeout_s_parses_validates_and_defaults(self) -> None:
+        base: dict[str, object] = {
+            "key": "t",
+            "spec": "Write the artifact and keep the change scoped to this task directory.",
+            "check": "test -s out.txt || { echo 'FAIL: out.txt missing'; exit 1; }",
+        }
+        self.assertEqual(ringer.TaskSpec.from_obj(dict(base)).check_timeout_s, ringer.CHECK_TIMEOUT_S)
+        self.assertEqual(ringer.TaskSpec.from_obj(dict(base, check_timeout_s=1800)).check_timeout_s, 1800)
+        with self.assertRaisesRegex(ValueError, r"task t: check_timeout_s must be positive"):
+            ringer.TaskSpec.from_obj(dict(base, check_timeout_s=0))
+        with self.assertRaisesRegex(ValueError, r"task t: check_timeout_s must be <= 3600"):
+            ringer.TaskSpec.from_obj(dict(base, check_timeout_s=3601))
+
+    def test_check_timeout_s_from_manifest_governs_the_check_kill_timer(self) -> None:
+        manifest = self.write_manifest(
+            "check-timeout",
+            self.manifest(
+                "check-timeout",
+                {
+                    "key": "slow-check",
+                    "engine": "write_done",
+                    "spec": "Write the file; the check itself is the slow part.",
+                    "expect_files": ["out.txt"],
+                    "check_timeout_s": 1,
+                    "check": "sleep 5",
+                },
+            ),
+        )
+
+        result = self.run_ringer(manifest, timeout=20)
+
+        self.assertEqual(result.returncode, 1, result.stdout)
+        rows = self.read_rows()
+        self.assertEqual([row["verdict"] for row in rows], ["TIMEOUT", "TIMEOUT"])
+        state = self.read_final_state()
+        self.assertTrue(state["tasks"][0]["check_timed_out"])
+        self.assertIn("[ringer.py] check timed out after 1s", state["tasks"][0]["check_output_tail"])
 
     def test_token_count_parser_accepts_colon_and_newline_formats(self) -> None:
         self.assertEqual(ringer.parse_token_count("tokens used: 1,234", r"tokens\s+used\s*:?\s*([0-9][0-9,]*)"), 1234)

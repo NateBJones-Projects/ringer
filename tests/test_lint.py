@@ -288,6 +288,50 @@ class LintManifestTests(unittest.TestCase):
             f"worktrees manifest should not be flagged for expect_files: {findings}",
         )
 
+    def test_w10_build_shaped_check_without_raised_check_timeout(self) -> None:
+        expected = (
+            "one: check runs 'xcodebuild' but check_timeout_s is not raised; "
+            "builds and test suites rarely finish inside the 60s default — "
+            "set check_timeout_s (up to 3600)."
+        )
+        slow_check = "xcodebuild test -scheme App || { echo 'FAIL: xcodebuild test failed'; exit 1; }"
+
+        findings = lint_manifest(self.manifest([self.task(check=slow_check)]))
+        self.assertHasFinding(findings, expected)
+
+        raised_task = self.task(check=slow_check)
+        raised_task["check_timeout_s"] = 1200
+        self.assertNotIn(expected, lint_manifest(self.manifest([raised_task])))
+
+        subcommand_findings = lint_manifest(
+            self.manifest(
+                [self.task(check="swift test --parallel || { echo 'FAIL: swift test failed'; exit 1; }")]
+            )
+        )
+        self.assertTrue(
+            any("check runs 'swift test'" in item for item in subcommand_findings),
+            f"expected swift test finding, got: {subcommand_findings}",
+        )
+
+        # A tool name that only appears as an argument or inside an echo
+        # string is not the check's own command — no nudge.
+        wrapped = lint_manifest(
+            self.manifest(
+                [
+                    self.task(
+                        check=(
+                            "python3 run_check.py --build-command 'xcodebuild test' || "
+                            "{ echo 'FAIL: xcodebuild wrapper failed'; exit 1; }"
+                        )
+                    )
+                ]
+            )
+        )
+        self.assertFalse(
+            any("check_timeout_s is not raised" in item for item in wrapped),
+            f"wrapped build command should not be flagged: {wrapped}",
+        )
+
     def test_compliant_manifest_is_clean(self) -> None:
         manifest = self.manifest(
             [
