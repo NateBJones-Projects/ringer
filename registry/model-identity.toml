@@ -43,24 +43,36 @@ last_verified = 2026-07-10
 [engines.grok]
 harness = "Grok Build CLI"
 access = "OAuth plan"
-default_model_key = "grok-build"
+default_model_key = "grok-4.5"
 
-[engines.grok.models."grok-build"]
-# "Grok Build" is the HARNESS (the CLI product), never a model name. The CLI
-# serves exactly two models: Grok 4.5 (xAI) and Composer 2.5 (Cursor). The
-# 'grok-build' engine default resolves to Grok 4.5. An earlier entry here
-# wrongly recorded "Grok Build 0.1" as a model — do not reintroduce it.
+[engines.grok.models."grok-4.5"]
+# The live model id the Grok Build CLI serves. As of CLI v0.2.111 `grok models`
+# lists grok-4.5 as the only (and default) model; route with per-task
+# "model": "grok-4.5". "Grok Build" is the HARNESS (the CLI product), never a
+# model name — an earlier entry wrongly recorded "Grok Build 0.1" as a model; do
+# not reintroduce it.
 display = "Grok 4.5"
 lab = "xAI"
-confidence = "verified"     # operator-confirmed (Jon, 2026-07-10): Grok Build CLI serves Grok 4.5 + Composer 2.5
+confidence = "verified"     # `grok models` on CLI v0.2.111 (2026-08-03) lists grok-4.5; operator-confirmed the CLI serves Grok 4.5
+source = "https://docs.x.ai/developers/release-notes"
+last_verified = 2026-08-03
+noncanonical_slugs = ["opencode:openrouter/x-ai/grok-4.5"]
+
+# Retired CLI slugs, kept only so historical run rows still resolve to a display.
+# Older Grok Build v0.2.x accepted these as `-m` values; current CLIs reject
+# them with "unknown model id" (grok-composer-2.5-fast was Cursor's Composer 2.5,
+# no longer offered by the CLI on our plan). Do not route new work here — use grok-4.5.
+[engines.grok.models."grok-build"]
+display = "Grok 4.5"
+lab = "xAI"
+confidence = "verified"     # operator-confirmed (Jon, 2026-07-10): Grok Build CLI served Grok 4.5 + Composer 2.5
 source = "https://docs.x.ai/developers/release-notes"
 last_verified = 2026-07-10
-noncanonical_slugs = ["opencode:openrouter/x-ai/grok-4.5"]
 
 [engines.grok.models."grok-composer-2.5-fast"]
 display = "Composer 2.5 Fast"
 lab = "Cursor (Anysphere)"
-confidence = "verified"     # Cursor (Anysphere) model, served through xAI's Grok Build CLI in our setup
+confidence = "verified"     # Cursor (Anysphere) model, served through xAI's Grok Build CLI in our earlier (v0.2.81) setup
 source = "https://cursor.com/blog/composer-2-5"
 last_verified = 2026-07-10
 
