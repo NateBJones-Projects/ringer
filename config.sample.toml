@@ -96,15 +96,18 @@ model_report_regex = "(?m)^model:[ \\t]*([^ \\t\\r\\n]+)[ \\t]*\\r?$"
 # SuperGrok or X Premium Plus plan. Headless mode (-p) runs a full agentic
 # loop with tools and exits. Grok brings its own OS sandbox (Seatbelt on
 # macOS): profile "workspace" = read everywhere, write CWD + temp + ~/.grok,
-# network allowed. Models: grok-build, grok-composer-2.5-fast (route with the
-# per-task "model" field). Verified against Grok Build v0.2.81 (2026-07-06).
-# Note: --no-auto-update is accepted but absent from --help in v0.2.81 (grok
+# network allowed. Model: grok-4.5 (route with the per-task "model" field).
+# Verified against Grok Build v0.2.111 (2026-08-03). NOTE ON MODEL NAMES:
+# older v0.2.x exposed grok-build and grok-composer-2.5-fast; current CLIs
+# reject those with "unknown model id" — run `grok models` to see what your
+# installed CLI actually serves (v0.2.111 lists only grok-4.5).
+# Note: --no-auto-update is accepted but absent from --help (grok
 # rejects unknown flags, so this is a hidden flag, not a typo) — it stops the
 # CLI self-updating mid-swarm.
 # Uncomment to enable.
 # [engines.grok]
 # bin = "grok"
-# model_default = "grok-composer-2.5-fast"
+# model_default = "grok-4.5"
 # args_template = [
 #   "--cwd",
 #   "{taskdir}",
@@ -121,7 +124,7 @@ model_report_regex = "(?m)^model:[ \\t]*([^ \\t\\r\\n]+)[ \\t]*\\r?$"
 # ]
 # sandbox_args = ["--sandbox", "workspace"]
 # full_access_args = ["--sandbox", "off", "--permission-mode", "bypassPermissions"]
-# Grok's JSON output carries no usage/token fields (verified v0.2.81) — plan
+# Grok's JSON output carries no usage/token fields (verified v0.2.111) — plan
 # CLIs report cost as "included in plan"; regex is a harmless no-match. Its JSON
 # also does not self-report a model, so no model_report_regex is configured.
 # token_regex = "\"total_tokens\"\\s*:\\s*([0-9]+)"
