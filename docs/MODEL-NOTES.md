@@ -312,3 +312,68 @@ checks and raw logs support — no vibes, no worker self-reports.
 
 ## opencode / z-ai glm-5.2 (via openrouter)
 - 2026-07-09 (aicred-invoice-downloads, 4 code-fix tasks + 1 follow-up, worktrees+npm ci checks): systematic attempt-1 NO-OP — all 4 parallel workers produced zero edits and no summary on first attempt, then completed cleanly on attempt 2 after retry-prompt injection (34k-69k tokens each). Follow-up single task passed attempt 1. Suspect first-invocation session warm-up in opencode-sandboxed under parallel spawn; budget for 2 attempts on parallel GLM batches. Output quality on Next.js/Stripe route+test work: solid, spec-faithful, one boss-caught design gap (used user-scoped supabase client where RLS demanded service role — spec didn't say explicitly; say it explicitly).
+
+## GPT-5.6 Sol (codex) — dealroom pass 1
+- 2026-07-27 code-feature (gh-dealroom Pass 1, 8 build tasks across 2 rounds, worktrees + executed acceptance/scratch-DB checks): 6/8 first-try; the 2 retries were the two integration-heavy tasks (a 1,540-line 5-file SQL migration set written blind — no docker in sandbox — and a psycopg facade with live-DB integration tests) and both passed on attempt 2 off the check's failure output. Contract-style specs (binding signatures + orchestrator-authored acceptance files the worker must pass unmodified) produced zero API drift across 4 parallel engine lanes. Median ~40-55k tokens on pure-Python lanes.
+
+## claude sonnet (claude CLI engine) — first audition
+- 2026-07-27 code-review (dealroom migrations vs SPEC §8, read-only, structured-report check): 1/1 first-try. Verdict-structured report with per-finding severity, file:line and spec anchors; caught a real integrity gap (debt-shaped instruments allowed NULL notional) plus a bounds-check inconsistency, both missed by the 20-block SQL assertion suite and the codex author. Zero false positives; explicitly enumerated clean areas. Engine block added to config 2026-07-27 (bin claude, -p + allowedTools). Good default for adversarial spec-vs-artifact review lanes.
+
+## GPT-5.6 Sol (Codex CLI) — 2026-07-28 dealroom-pass2
+- code-feature/code-fix, 11 tasks over 3 rounds: 10/11 real first-try (the one "fail" was a broken check — no host psql; use docker exec into the supabase_db container). Contract-style specs with orchestrator-authored executable acceptance files again produced zero API drift across 7 parallel engine lanes. Worker sandbox cannot reach localhost — DB-backed verification must live in the host-side check, and worker notes saying "test skipped in sandbox" are expected, not a defect.
+
+## Claude Sonnet (claude engine) — 2026-07-28 dealroom-pass2
+- code-review lane: one attempt died on the CLI session limit (retry also blocked; reset 2:30am ET — schedule review lanes away from limit windows). On rerun, produced an executed (not read-only) review that found 2 real defects the 28 passing gate tests missed: a state machine re-arming under sustained adverse input, and an instrument type silently vanishing from a balanced ledger. Worth keeping as the standing validation lane; 29-min runtime.
+
+## qwen3.6:35b (opencode engine, local ollama, homer-studio) — 2026-07-28 local-model-audition
+- probe (small code task, executed acceptance check with reference implementation): first-try PASS, 12,173 tokens, 78s on M-series/64GB. Spec-faithful Decimal money math, correct largest-remainder tiebreak. Zero marginal cost. Promoted to probation for mechanical/low-stakes lanes (docs sweeps, scaffolds, small pure-function work) — NOT contract-bound engine lanes or review lanes. First run failed in 1s on harness wiring, not the model: the brew-era Seatbelt profile in opencode-sandboxed.sh lacked ~/.opencode (new installer's state dir); fixed by adding OC_HOME to the allowed write subpaths. llama3.3:70b (42GB) untested — too tight on 64GB to load mid-swarm; gpt-oss:20b untested fast fallback.
+
+## GPT-5.5 (Codex CLI) — 2026-07-31 dealroom debt-scheduling round 1
+- code-feature, 2 parallel lanes, both first-try PASS (~2 min each): a nontrivial Decimal amortization engine against a pinned 12-test acceptance file (unmodified), and a 104-line system-versioned migration mirrored from siblings, validated by BEGIN/ROLLBACK against the live local stack. First run since pinning model_default=gpt-5.5 (was inheriting gpt-5.6-sol via unpinned engine block). Supports Mark's call: 5.5 is holding the contract-bound lanes Sol was doing, at plan-friendly burn. Direct-repo-edit pattern (writable_roots) with disjoint ownership + host-side checks worked clean; no worktrees needed for a 2-lane round.
+
+## Scoreboard corrections — 2026-07-31 dealroom debt-scheduling rounds 2-4
+- Three logged FAILs this run are ORCHESTRATOR check bugs, not model failures; read these rows accordingly:
+  - gpt-5.5 round-2 integration (2 attempts, 185k tok): the code was correct and the DB smoke passed; the check demanded full-suite green while freezing two stale tests whose assertion the feature deliberately changed. Unsatisfiable by construction.
+  - sonnet review lane (2 attempts): produced an excellent executed review (independent 48-row recompute, 2 real HIGH findings); check cd'd to the repo before testing for a report that lives in the taskdir.
+  - gpt-5.5 fix lane (2 attempts, 88k tok): fixes were correct; the orchestrator's acceptance test was uncommitted (worker deleted the "unowned" untracked file to satisfy the ownership guard) and contained a wrong column name.
+- Lessons now standing: COMMIT orchestrator-authored acceptance files before launching the lane; checks must capture taskdir cwd before any cd; when a feature changes a pinned behavior, update the stale contract tests BEFORE the lane runs, not after.
+- Model quality note: gpt-5.5 4/4 real-work success across all four lanes of this feature (engine, migration, integration, fixes) — every "failure" was mine. Sonnet review lane remains the highest-value lane in the pipeline: 2 HIGH defects invisible to 156 green tests.
+
+## Standing lesson extension — 2026-08-01 deal-year round
+- The §18.10 lane's worker deleted an UNTRACKED orchestrator draft (the parity write-up) to satisfy its ownership guard — second occurrence of the uncommitted-artifact failure mode (first: the deleted acceptance test on 07-31). Lesson EXTENDED: ALL orchestrator-authored working artifacts living inside the repo get committed (or live outside the repo) BEFORE any lane launches; ownership-guard regexes treat every untracked path as removable dirt.
+- gpt-5.5: deal-year expansion lane passed attempt 2 (retry steered by executed-check output), 117k tok. Now 5/5 features on this project since the pin.
+
+## GPT-5.5 (Codex CLI) — 2026-08-02 gh-dealroom OA clause-by-clause extraction (docs)
+
+- **Nine of the twelve logged failures on this job were my check, not the model.**
+  Rounds 1 and 2 (6 tasks then 3) show `fail` for every task; both were caused by
+  an orchestrator error, not worker output. Ringer runs the **check with cwd set
+  to the task directory** (`<workdir>/<key>/`), not the run directory. My check
+  invoked `python3 validate.py …`, and `validate.py` lives at the workdir root, so
+  the check died with `can't open file … /<key>/validate.py` before ever looking
+  at the deliverable. Correct form is `python3 ../validate.py out/<file> …`.
+  Round 3 with that one change passed **6/6 first attempt** on the *same, unedited*
+  deliverables. Discount those nine rows when routing docs work.
+- This is the same trap recorded in the dealroom Pass 1–3 notes as "checks must
+  capture taskdir cwd before any cd" — it bit again in a different disguise. Worth
+  putting the relative path to any helper script in the check, always.
+- **Where the model genuinely failed, the check was right.** Round 1's three real
+  failures were substantive: two verbatim-copy violations (a worker tracking source
+  wording closely through an enumerated list and through a valuation clause) and one
+  over-bolding violation (bolding concepts that were not defined terms in the assigned
+  range). All three self-corrected on one retry when the failure text named the exact
+  offending string and told them to sweep the whole file rather than fix the one hit.
+- **Quality on long legal-text extraction was high.** Six disjoint ranges of a ~1,600-line
+  operating agreement, ~165KB of output, clause-anchored with correct clause numbers
+  throughout — the provenance check (every cited §N.N must exist in that worker's own
+  line range) caught zero invented clause numbers across all six after round 1. The
+  unprompted "what this section does not do" analysis in the transfers section was the
+  most commercially valuable output of the run.
+- **Confidentiality-rule adherence was perfect from attempt 1.** Zero figure violations
+  across all six workers on every round, against an explicit no-dollar-amounts /
+  no-percentages / no-bare-numbers instruction. When one worker hit restrictive-covenant
+  clauses with monetary terms, it flagged their existence and declined to reproduce them
+  — exactly the desired behaviour, unprompted.
+- Cost shape: ~725k tokens across the two real rounds (~120k/task on first-pass
+  extraction of a dense 300-line range), ~48k for the round-3 verification pass.
+  Verification-only rounds are cheap — 8-17k/task and under 15s each.
