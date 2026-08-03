@@ -10356,11 +10356,28 @@ def claude_root(project: bool) -> Path:
     return (Path.cwd() if project else Path.home()) / ".claude"
 
 
-def ringer_skill_source() -> Path:
-    return repo_root() / ".claude" / "skills" / "ringer" / "SKILL.md"
+AGENT_SKILL_NAMES = ("ringer", "amazon-pr-faq")
+RINGER_HOOK_ACTIONS = ("pre-bash", "post-edit")
+
+
+def agent_skill_sources() -> dict[str, Path]:
+    skill_root = repo_root() / ".claude" / "skills"
+    return {name: skill_root / name for name in AGENT_SKILL_NAMES}
+
+
+def replace_agent_skill_tree(skill_source: Path, skill_target: Path) -> None:
+    """Replace one Ringer-owned skill tree with its bundled source."""
+
+    if skill_target.is_symlink() or skill_target.is_file():
+        skill_target.unlink()
+    elif skill_target.exists():
+        shutil.rmtree(skill_target)
+    shutil.copytree(skill_source, skill_target)
 
 
 def ringer_hook_command(action: str) -> str:
+    if action not in RINGER_HOOK_ACTIONS:
+        raise ValueError(f"unsupported Ringer hook action: {action}")
     hook_path = repo_root() / "hooks" / "ringer_nudge.py"
     return f"python3 {shlex.quote(str(hook_path))} {action}"
 
@@ -10394,18 +10411,30 @@ def write_settings(path: Path, settings: dict[str, Any]) -> None:
     os.replace(tmp, path)
 
 
-def hook_command_contains(value: Any, needle: str = "ringer_nudge.py") -> bool:
-    return isinstance(value, dict) and needle in str(value.get("command", ""))
+def hook_command_is_owned(value: Any, expected_command: str | None = None) -> bool:
+    if not isinstance(value, dict) or value.get("type") != "command":
+        return False
+    command = value.get("command")
+    if not isinstance(command, str):
+        return False
+    owned_commands = (
+        {expected_command}
+        if expected_command is not None
+        else {ringer_hook_command(action) for action in RINGER_HOOK_ACTIONS}
+    )
+    return command in owned_commands
 
 
-def event_has_ringer_hook(groups: Any) -> bool:
+def event_has_ringer_hook(groups: Any, command: str) -> bool:
     if not isinstance(groups, list):
         return False
     for group in groups:
         if not isinstance(group, dict):
             continue
         handlers = group.get("hooks")
-        if isinstance(handlers, list) and any(hook_command_contains(handler) for handler in handlers):
+        if isinstance(handlers, list) and any(
+            hook_command_is_owned(handler, command) for handler in handlers
+        ):
             return True
     return False
 
@@ -10417,7 +10446,7 @@ def merge_ringer_hook(settings: dict[str, Any], event: str, matcher: str, comman
     groups = hooks.setdefault(event, [])
     if not isinstance(groups, list):
         raise ValueError(f"settings hooks.{event} field must be a JSON array")
-    if event_has_ringer_hook(groups):
+    if event_has_ringer_hook(groups, command):
         return False
     groups.append(
         {
@@ -10453,7 +10482,7 @@ def remove_ringer_hooks(settings: dict[str, Any]) -> int:
                 continue
             kept_handlers = []
             for handler in handlers:
-                if hook_command_contains(handler):
+                if hook_command_is_owned(handler):
                     removed += 1
                 else:
                     kept_handlers.append(handler)
@@ -10472,12 +10501,17 @@ def remove_ringer_hooks(settings: dict[str, Any]) -> int:
 
 def install_agent(project: bool = False) -> int:
     root = claude_root(project)
-    skill_source = ringer_skill_source()
-    skill_target = root / "skills" / "ringer" / "SKILL.md"
-    if not skill_source.exists():
-        raise ValueError(f"ringer skill source not found: {skill_source}")
-    skill_target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(skill_source, skill_target)
+    skill_sources = agent_skill_sources()
+    for name, skill_source in skill_sources.items():
+        if not skill_source.is_dir():
+            raise ValueError(f"{name} skill source not found: {skill_source}")
+
+    skill_targets: dict[str, Path] = {}
+    for name, skill_source in skill_sources.items():
+        skill_target = root / "skills" / name
+        skill_target.parent.mkdir(parents=True, exist_ok=True)
+        replace_agent_skill_tree(skill_source, skill_target)
+        skill_targets[name] = skill_target
 
     settings_path = root / "settings.json"
     settings = load_settings(settings_path)
@@ -10498,8 +10532,9 @@ def install_agent(project: bool = False) -> int:
         write_settings(settings_path, settings)
 
     scope = "project" if project else "user"
-    print(f"Installed ringer agent for {scope} scope.")
-    print(f"Skill: {skill_target}")
+    print(f"Installed Ringer agent integration for {scope} scope.")
+    for name, skill_target in skill_targets.items():
+        print(f"Skill {name}: {skill_target}")
     if changed:
         print(f"Hooks: added PreToolUse Bash and PostToolUse Edit|Write in {settings_path}")
     else:
@@ -10517,16 +10552,19 @@ def uninstall_agent(project: bool = False) -> int:
         if removed_hooks:
             write_settings(settings_path, settings)
 
-    skill_dir = root / "skills" / "ringer"
-    removed_skill = False
-    if skill_dir.exists():
-        shutil.rmtree(skill_dir)
-        removed_skill = True
+    removed_skills: dict[str, bool] = {}
+    for name in AGENT_SKILL_NAMES:
+        skill_dir = root / "skills" / name
+        removed_skill = skill_dir.exists()
+        if removed_skill:
+            shutil.rmtree(skill_dir)
+        removed_skills[name] = removed_skill
 
     scope = "project" if project else "user"
-    print(f"Uninstalled ringer agent for {scope} scope.")
+    print(f"Uninstalled Ringer agent integration for {scope} scope.")
     print(f"Hooks removed: {removed_hooks}")
-    print(f"Skill removed: {'yes' if removed_skill else 'no'}")
+    for name, removed_skill in removed_skills.items():
+        print(f"Skill {name} removed: {'yes' if removed_skill else 'no'}")
     return 0
 
 
@@ -10983,10 +11021,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     demo_parser.add_argument("--dry-run", action="store_true", help="print the demo plan without spawning codex")
 
-    install_parser = subparsers.add_parser("install-agent", help="install the ringer Claude Code skill and hooks")
+    install_parser = subparsers.add_parser(
+        "install-agent",
+        help="install the bundled Ringer and Amazon PR/FAQ Claude Code skills and hooks",
+    )
     install_parser.add_argument("--project", action="store_true", help="install into ./.claude instead of ~/.claude")
 
-    uninstall_parser = subparsers.add_parser("uninstall-agent", help="remove the ringer Claude Code skill and hooks")
+    uninstall_parser = subparsers.add_parser(
+        "uninstall-agent",
+        help="remove the bundled Ringer and Amazon PR/FAQ Claude Code skills and hooks",
+    )
     uninstall_parser.add_argument("--project", action="store_true", help="remove from ./.claude instead of ~/.claude")
     return parser
 

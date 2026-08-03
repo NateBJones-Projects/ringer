@@ -334,6 +334,43 @@ someone's untracked scratch files.
    numbers took care of themselves — every attempt already landed in the
    local model log (`./ringer.py models` to see the updated scoreboard).
 
+## Post-run PR review handoff
+
+Evaluate this procedural hook for every PR-facing handoff by explicitly loading
+`$amazon-pr-faq` in `review_handoff` mode. This hook has exactly two outcomes;
+missing evidence is never a reason to skip the evaluation, and retrospective
+mode is never an escape hatch for a current handoff:
+
+- **BLOCKED:** if any prerequisite below is absent or stale, create and report a
+  blocked review package that names every exact blocker, and stop. Do not call
+  the package ready.
+- **READY:** only when every prerequisite below passes, create a ready review
+  package bound to the verified commit and present it to the human.
+
+Readiness requires all of the following for the **same full hexadecimal Git
+object ID** (40 characters for SHA-1 or 64 for SHA-256; never abbreviated,
+short, or non-hex):
+
+- Executed worker checks and full-repository gates pass for the exact local
+  `HEAD` commit.
+- The local `HEAD`, pushed remote branch head, and the open GitHub PR's
+  `headRefOid` are equal.
+- A fresh independent review of that exact SHA reports no actionable findings.
+- GitHub reports that exact open, non-draft PR head as mergeable (never
+  `UNKNOWN`) and every required check succeeds for that exact SHA.
+
+Any later commit invalidates the entire gate; re-run every prerequisite against
+the new SHA. The orchestrator must inspect this evidence because generic
+`ringer.py` does not infer PR state.
+
+Push, PR creation or update, PR body or comment writes, merge, and deployment
+are external actions that require existing user authorization. This hook must
+not push or open/update a PR merely to satisfy its own gate; an absent
+authorized pushed branch or authorized open PR is a blocker. Place the PR/FAQ
+Markdown in the Ringer artifact/review package, and write it to a PR body or
+comment only when already authorized. Present the PR URL and FAQ to the human.
+**Stop before merge or deploy.**
+
 ## Spend your own context deliberately
 
 The scoreboard exists so that worker tokens buy evidence. Your own tokens are

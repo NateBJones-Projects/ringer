@@ -50,9 +50,13 @@ mkdir -p ~/.config/ringer && cp config.sample.toml ~/.config/ringer/config.toml 
 3. Teach your agent to route work through Ringer:
 
 ```bash
-# optional but recommended: teach your agent to route work through ringer
+# optional but recommended: install Ringer's bundled agent skills and hooks
 ./ringer.py install-agent
 ```
+
+This installs both bundled Claude Code skills: `ringer`, the orchestrator
+playbook, and `amazon-pr-faq`, the evidence-backed review-handoff and
+retrospective package workflow.
 
 4. Run the demo:
 
@@ -179,9 +183,17 @@ Run one command:
 ./ringer.py install-agent
 ```
 
-It installs the ringer skill — the orchestrator playbook — user-level for Claude Code, and registers two gentle hooks: a Bash hook that notices model-calling or harness commands running outside a live Ringer run, and an edit-loop hook that notices batch editing without a run. Each hook nudges ONCE per session, pointing the agent at the skill.
+It installs two complete bundled skill trees user-level for Claude Code:
+`ringer`, the orchestrator playbook, and `amazon-pr-faq`, the evidence-backed
+review-handoff and retrospective package workflow. It also registers two gentle
+hooks: a Bash hook that notices model-calling or harness commands running
+outside a live Ringer run, and an edit-loop hook that notices batch editing
+without a run. Each hook nudges ONCE per session, pointing the agent at the
+skill.
 
-The hooks never block anything. A user who says "just do it inline" is obeyed; uninstall with `./ringer.py uninstall-agent`.
+The hooks never block anything. A user who says "just do it inline" is obeyed.
+`./ringer.py uninstall-agent` removes both bundled skill directories and only
+Ringer's hook entries; unrelated skills, hooks, and settings keys are preserved.
 
 For CI and evals, `config.sample.toml` includes `[engines.mock]` so the enforcement stack can be tested without an API bill.
 
@@ -392,6 +404,7 @@ Every community PR that lands in main is credited here — that's a project rule
 - [@davekopecek](https://github.com/davekopecek) (Dave Kopecek) — committed the design-reference fixture so the design-token guard runs on every machine (#30)
 - [@snapsynapse](https://github.com/snapsynapse) (Sam Rogers) — graceful shutdown on SIGINT/SIGTERM with worker-tree cleanup and finished state, plus the 14-test end-to-end CLI regression suite (#4)
 - [@mlava](https://github.com/mlava) (Mark Lavercombe) — named setup failures across every diagnostic surface (#37) and `run --baseline`, the no-workers check preflight (#38)
+- [@followdon](https://github.com/followdon) — Amazon PR/FAQ post-run review handoff
 
 Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the philosophy and what gets a PR merged fast. The short version: small and scoped, rebased on current main, every claim backed by an executed test. Authorship is always preserved — where a maintainer pushes a mechanical fix to your branch, you remain the commit author.
 
