@@ -338,3 +338,20 @@ checks and raw logs support — no vibes, no worker self-reports.
   autofix, one 'override' modifier). Lesson: JS tasks needing NEW deps
   must either get network or a pre-warmed store; checks that need the
   registry should run orchestrator-side.
+
+## GLM 5.2 / codex — pet-foundation continued (2026-08-03, later runs)
+
+- GLM 5.2, code-feature (FND-006 observability: Celery signal correlation +
+  capture adapter, ~500 LOC + 12 tests): PASS attempt 1, 64k tok, 257s.
+  First fair audition pass after the credit-limit incident; output quality
+  high (excluded tracebacks/task-args from capture as un-redactable —
+  unprompted). Promote toward moderate backend lanes.
+- codex, code-feature (IDN-001 backend, ~2500-line auth slice): PASS
+  attempt 2, 266k tok. (IDN-001 frontend, ~2400 lines): PASS attempt 1,
+  224k tok. Orchestrator integration found two real cross-cutting defects
+  neither check could see: SessionProvider blanked the whole app when the
+  session check failed (fixed to degrade-to-anonymous), and an FND-003-era
+  EMAIL_URL mapping forced STARTTLS on plain smtp:// (surfaced only by a
+  live Mailpit send). Lesson: checks validate lanes; only a live-stack
+  journey validates seams — always run one before merging a user-facing
+  slice.
