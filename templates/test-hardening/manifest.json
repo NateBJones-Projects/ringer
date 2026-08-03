@@ -12,6 +12,7 @@
       "check": "{{PYTHON}} '{{KIT_DIR}}/checks/test_hardening_check.py' --task-key '{{TEST_KEY}}' --test-command '{{TEST_COMMAND}}' --baseline-test-count '{{BASELINE_TEST_COUNT}}' --test-count-regex '{{TEST_COUNT_REGEX}}' --new-test-files '{{NEW_TEST_FILES}}' --owned-test-files '{{OWNED_TEST_FILES — semicolon-separated repo-relative test files or test directory prefixes this worker may modify}}' --forbidden-paths '{{FORBIDDEN_PATHS}}' --assertion-pattern '{{ASSERTION_PATTERN}}' --min-assertions-per-file '{{MIN_ASSERTIONS_PER_FILE}}' --min-assertion-density '{{MIN_ASSERTION_DENSITY}}' --export-patch '{{EXPORT_DIR}}/{{TEST_KEY}}.patch' || { echo 'FAIL: test hardening validation failed for {{TEST_KEY}}'; exit 1; }",
       "expect_files": [],
       "timeout_s": 2400,
+      "check_timeout_s": 2400,
       "verified": "the configured test command passed, the runner summary reported more tests than baseline, new owned test files exist with assertions, production paths were untouched, and a scoped patch was exported"
     }
   ]

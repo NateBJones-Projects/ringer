@@ -53,6 +53,9 @@ CONFIG_FILE_NAME = "config.toml"
 DEFAULT_ENGINE_NAME = "codex"
 DEFAULT_TIMEOUT_S = 900
 CHECK_TIMEOUT_S = 60
+# Checks that run real builds or test suites need more than the default, but
+# a check is verification, not the work itself — an hour is the ceiling.
+CHECK_TIMEOUT_CEILING_S = 3600
 DEFAULT_DASHBOARD_PORT_BASE = 8787
 DEFAULT_HUD_PORT = 8700
 DEFAULT_CATALOG_SOURCE = "https://openrouter.ai/api/v1/models"
@@ -1635,6 +1638,7 @@ class TaskSpec:
     timeout_s: int = DEFAULT_TIMEOUT_S
     max_attempts: int = 2
     redact_spec: bool = False
+    check_timeout_s: int = CHECK_TIMEOUT_S
     full_access: bool = False
     engine_args: tuple[str, ...] = ()
     verified: str = ""
@@ -1682,6 +1686,14 @@ class TaskSpec:
         max_attempts = raw_max_attempts
         if max_attempts <= 0:
             raise ValueError(f"task {key}: max_attempts must be positive")
+        check_timeout_s = int(obj.get("check_timeout_s", CHECK_TIMEOUT_S))
+        if check_timeout_s <= 0:
+            raise ValueError(f"task {key}: check_timeout_s must be positive")
+        if check_timeout_s > CHECK_TIMEOUT_CEILING_S:
+            raise ValueError(
+                f"task {key}: check_timeout_s must be <= {CHECK_TIMEOUT_CEILING_S}; "
+                "a check is verification, not the work — move longer jobs into the task itself"
+            )
         engine_args = obj.get("engine_args", [])
         if not isinstance(engine_args, list) or not all(isinstance(item, str) for item in engine_args):
             raise ValueError(f"task {key}: engine_args must be a list of strings")
@@ -1703,6 +1715,7 @@ class TaskSpec:
             timeout_s=timeout_s,
             max_attempts=max_attempts,
             redact_spec=require_bool(obj.get("redact_spec", False), key, "redact_spec"),
+            check_timeout_s=check_timeout_s,
             full_access=bool(obj.get("full_access", False)),
             engine_args=tuple(engine_args),
             verified=verified.strip(),
@@ -1820,6 +1833,13 @@ def lint_manifest(
         if check_may_fail_silently(task.check):
             findings.append(
                 f"{task.key}: check may fail without printing why; retry prompt and eval log depend on failure output."
+            )
+        slow_command = slow_check_command(task.check)
+        if slow_command and task.check_timeout_s <= CHECK_TIMEOUT_S:
+            findings.append(
+                f"{task.key}: check runs '{slow_command}' but check_timeout_s is not raised; "
+                f"builds and test suites rarely finish inside the {CHECK_TIMEOUT_S}s default — "
+                f"set check_timeout_s (up to {CHECK_TIMEOUT_CEILING_S})."
             )
         if manifest.worktrees and any(is_relative_expect_file(path) for path in task.expect_files):
             findings.append(
@@ -1969,6 +1989,59 @@ def consists_only_of_echo_commands(command: str) -> bool:
         if not tokens or tokens[0] != "echo":
             return False
     return True
+
+
+# Tools whose runs routinely outlast the default check timeout. A value of
+# None means the tool alone is the signal (xcodebuild is never fast); a set
+# means only those subcommands are slow (swift repl is fine, swift test isn't).
+SLOW_CHECK_TOOLS: dict[str, frozenset[str] | None] = {
+    "xcodebuild": None,
+    "swift": frozenset({"build", "test"}),
+    "cargo": frozenset({"build", "test", "nextest"}),
+    "go": frozenset({"build", "test"}),
+    "npm": frozenset({"test", "ci", "build"}),
+    "yarn": frozenset({"test", "build"}),
+    "pnpm": frozenset({"test", "build"}),
+    "pytest": None,
+    "tox": None,
+    "gradle": None,
+    "gradlew": None,
+    "mvn": None,
+    "bazel": frozenset({"build", "test"}),
+    "dotnet": frozenset({"build", "test"}),
+    "make": None,
+}
+
+SHELL_COMMAND_WRAPPERS = {"time", "env", "nice", "exec", "command"}
+
+
+def slow_check_command(check: str) -> str | None:
+    """Return the build/test-shaped command a check runs directly, if any.
+
+    Matches only at command position (start of a pipeline segment) so tool
+    names inside echo strings or script arguments don't fire. A check that
+    hides the build inside another script is invisible here — this is a
+    nudge for the common case, not a proof.
+    """
+    for part in command_parts(strip_shell_comments(check)):
+        for segment in part.split("|"):
+            tokens = segment.split()
+            while tokens and (
+                "=" in tokens[0].split("/", 1)[0] or tokens[0] in SHELL_COMMAND_WRAPPERS or tokens[0] == "!"
+            ):
+                tokens.pop(0)
+            if not tokens:
+                continue
+            tool = tokens[0].rsplit("/", 1)[-1]
+            subcommands = SLOW_CHECK_TOOLS.get(tool)
+            if tool not in SLOW_CHECK_TOOLS:
+                continue
+            if subcommands is None:
+                return tool
+            for token in tokens[1:]:
+                if token in subcommands:
+                    return f"{tool} {token}"
+    return None
 
 
 def check_may_fail_silently(check: str) -> bool:
@@ -8607,7 +8680,9 @@ def run_models_command(config: AppConfig, args: argparse.Namespace) -> int:
 
 class Verifier:
     async def verify(self, task: TaskSpec, taskdir: Path) -> VerifyResult:
-        check_returncode, check_timed_out, output = await self._run_check(task.check, taskdir)
+        check_returncode, check_timed_out, output = await self._run_check(
+            task.check, taskdir, timeout_s=task.check_timeout_s
+        )
         missing_files = tuple(
             rel for rel in task.expect_files if not self._is_nonempty_file(self._expect_file_path(taskdir, rel))
         )
@@ -8645,7 +8720,9 @@ class Verifier:
         return candidate if candidate.is_absolute() else taskdir / candidate
 
     @staticmethod
-    async def _run_check(command: str, cwd: Path) -> tuple[int | None, bool, str]:
+    async def _run_check(
+        command: str, cwd: Path, timeout_s: int = CHECK_TIMEOUT_S
+    ) -> tuple[int | None, bool, str]:
         proc = await asyncio.create_subprocess_shell(
             command,
             cwd=str(cwd),
@@ -8656,7 +8733,7 @@ class Verifier:
         )
         timed_out = False
         try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=CHECK_TIMEOUT_S)
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
         except asyncio.TimeoutError:
             timed_out = True
             terminate_process_group(proc)
@@ -8667,7 +8744,7 @@ class Verifier:
                 stdout, _ = await proc.communicate()
         output = stdout.decode("utf-8", errors="replace") if stdout else ""
         if timed_out:
-            output += f"\n[ringer.py] check timed out after {CHECK_TIMEOUT_S}s\n"
+            output += f"\n[ringer.py] check timed out after {timeout_s}s\n"
         return proc.returncode, timed_out, output
 
 
@@ -10056,6 +10133,7 @@ def dry_run(
         print(f"    dir: {taskdir}")
         print(f"    timeout_s: {task.timeout_s}")
         print(f"    max_attempts: {task.max_attempts}")
+        print(f"    check_timeout_s: {task.check_timeout_s}")
         if task.full_access:
             print(f"    full_access: true allowed={full_access_allowed}")
         else:
