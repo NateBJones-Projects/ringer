@@ -355,3 +355,24 @@ checks and raw logs support — no vibes, no worker self-reports.
   live Mailpit send). Lesson: checks validate lanes; only a live-stack
   journey validates seams — always run one before merging a user-facing
   slice.
+
+## codex — pet identity epic (2026-08-04): the check-design experiment
+
+- IDN-003 (households, 2 lanes): both FAIL x2 on finish-line issues (one mypy
+  line; an unrun prettier pass), orchestrator completed in the worktrees. The
+  serious finding was orchestrator-side: the backend worker shipped ZERO
+  integration tests, and the fail-fast check meant every retry prompt only
+  named the FIRST failing gate (mypy) — the missing-test gap was never
+  surfaced to the worker. A scoped test-hardening follow-up (codex, PASS
+  attempt 2, 183k tok) wrote a 40-case cross-tenant matrix that executed 100%
+  green against PostgreSQL on first run.
+- IDN-004 (invitations, 2 lanes, same models, same shape of work): specs
+  declared tests a primary deliverable, checks reported ALL failures at once
+  with test-presence gates FIRST, and prior workers' environment lessons
+  (uv-cache workaround, run-prettier-yourself) were quoted in the specs.
+  Result: both lanes PASS attempt 1, zero orchestrator fixes, 25 new
+  integration tests green on first PostgreSQL execution (91 total).
+- Judgment: the IDN-003→IDN-004 delta is check/spec design, not model
+  variance. Fail-fast checks actively hide scope gaps from retries; report
+  everything, gate the primary deliverable first, and feed environment
+  lessons forward in the spec.
