@@ -18,6 +18,49 @@ def fail(name: str, detail: str) -> str:
     return f"FAIL [{name}]: {detail}"
 
 
+def find_untagged_hunks(diff_text: str, item_ids: list[str]) -> list[str]:
+    """Return the diff hunks citing none of the declared item IDs.
+
+    A fix task is commissioned to close specific, named items. Any hunk that
+    mentions none of them is a change nobody asked for. The ID may appear
+    anywhere in the hunk, including a context line, so a worker's inline
+    comment naming the item it is closing satisfies the check.
+
+    Opt-in: an empty list disables it, so kits used by projects without an
+    item-ID convention are unaffected.
+    """
+    if not item_ids:
+        return []
+    untagged: list[str] = []
+    current_file = "(unknown file)"
+    current_hunk_header: str | None = None
+    current_hunk_lines: list[str] = []
+
+    def flush() -> None:
+        if current_hunk_header is None:
+            return
+        hunk_text = "\n".join(current_hunk_lines)
+        if not any(item_id in hunk_text for item_id in item_ids):
+            untagged.append(f"{current_file} {current_hunk_header}")
+
+    for line in diff_text.splitlines():
+        if line.startswith("+++ "):
+            flush()
+            current_hunk_header = None
+            current_hunk_lines = []
+            current_file = line[6:] if line.startswith("+++ b/") else line[4:]
+            continue
+        if line.startswith("@@"):
+            flush()
+            current_hunk_header = line.strip()
+            current_hunk_lines = [line]
+            continue
+        if current_hunk_header is not None:
+            current_hunk_lines.append(line)
+    flush()
+    return untagged
+
+
 def has_placeholder(value: str) -> bool:
     return OPEN_PLACEHOLDER in value or CLOSE_PLACEHOLDER in value
 
@@ -103,6 +146,15 @@ def main() -> int:
     parser.add_argument("--summary", required=True, type=Path)
     parser.add_argument("--exported-summary", required=True, type=Path)
     parser.add_argument("--owned-files", required=True)
+    parser.add_argument(
+        "--item-ids",
+        default="",
+        help=(
+            "Comma-separated item IDs this task was commissioned to close "
+            "(e.g. R17-P0.1,R17-P1.1). Every diff hunk must cite at least one of "
+            "them somewhere in its text. Empty disables the check."
+        ),
+    )
     args = parser.parse_args()
 
     failures: list[str] = []
@@ -152,7 +204,20 @@ def main() -> int:
     patch_result = run_git(["diff", "--cached", "--binary"])
     if patch_result.returncode != 0:
         failures.append(fail("git_diff_failed", output_tail(patch_result.stdout)))
-    elif patch_result.stdout.strip() and not has_placeholder(str(args.patch)):
+    else:
+        item_ids = [i.strip() for i in args.item_ids.split(",") if i.strip()]
+        untagged = find_untagged_hunks(patch_result.stdout, item_ids)
+        if untagged:
+            failures.append(
+                fail(
+                    "dark_code",
+                    "these diff hunks cite none of the declared item IDs "
+                    f"({', '.join(item_ids)}) -- every change must be traceable to a "
+                    "requested item. Tag the hunk with a comment naming its item, or "
+                    "remove the change:\n  " + "\n  ".join(untagged),
+                )
+            )
+    if patch_result.returncode == 0 and patch_result.stdout.strip() and not has_placeholder(str(args.patch)):
         args.patch.parent.mkdir(parents=True, exist_ok=True)
         args.patch.write_text(patch_result.stdout, encoding="utf-8")
 
