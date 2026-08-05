@@ -1815,6 +1815,12 @@ def lint_manifest(
         findings.append("manifest: run_name model-scoreboard is reserved for the scoreboard page.")
 
     for task in manifest.tasks:
+        shell_parse_error = check_shell_parse_error(task.check)
+        if shell_parse_error:
+            findings.append(
+                f"{task.key}: check is not valid shell, so it can never exit 0 and the task "
+                f"can never pass — {shell_parse_error}"
+            )
         if check_cannot_fail(task.check):
             findings.append(f"{task.key}: check cannot fail, so the task cannot be verified.")
         if check_may_fail_silently(task.check):
@@ -1904,6 +1910,48 @@ def spec_is_file_pointer(spec: str) -> bool:
     if len(text) >= 600:
         return False
     return bool(FILE_POINTER_SPEC_RE.search(text))
+
+
+# `sh -n` parses without executing, so this is safe to run on an arbitrary check.
+SHELL_PARSE_TIMEOUT_S = 10
+
+
+def check_shell_parse_error(check: str) -> str | None:
+    """Return the shell's own complaint when `check` is not valid shell, else None.
+
+    A task's check is run through the shell, so a check the shell cannot parse can
+    never exit 0: the task can never pass, every retry attempt is spent, and the
+    only evidence is an opaque `/bin/sh: syntax error ...` in the run log after the
+    workers have already been paid for.
+
+    `shlex.split()` is deliberately not used here -- it accepts strings a real shell
+    rejects, notably single quotes nested inside a single-quoted argument, which is
+    the most common way to write an unparseable check by hand:
+
+        --verify-command 'a && grep -qE '^## Heading (x|y)' out.md'
+
+    Returns None when no POSIX shell is available (Windows), so lint degrades to
+    silence there rather than reporting a platform gap as a manifest defect.
+    """
+    shell = shutil.which("sh")
+    if not shell:
+        return None
+    try:
+        proc = subprocess.run(
+            [shell, "-n"],
+            input=check,
+            capture_output=True,
+            text=True,
+            timeout=SHELL_PARSE_TIMEOUT_S,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode == 0:
+        return None
+    for line in (proc.stderr or proc.stdout or "").splitlines():
+        if line.strip():
+            return line.strip()
+    return "the shell rejected it"
 
 
 def check_cannot_fail(check: str) -> bool:
