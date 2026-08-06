@@ -91,6 +91,44 @@ token_regex = "tokens\\s+used\\s*:?\\s*([0-9][0-9,]*)"
 # default reads the `model:` header; override it here only if that format changes.
 model_report_regex = "(?m)^model:[ \\t]*([^ \\t\\r\\n]+)[ \\t]*\\r?$"
 
+# Claude Code CLI (Anthropic) — a Claude Pro/Max subscription as a worker lane.
+# Install: npm install -g @anthropic-ai/claude-code (or the native installer),
+# then `claude` once to sign in. Headless mode (-p) runs a full agentic loop with
+# tools and exits, so it drives a swarm the same way codex exec does. Models are
+# the CLI's own aliases: sonnet, opus, haiku (route with the per-task "model"
+# field); plan CLIs report cost as "included in plan". Verified against Claude
+# Code v2.1.221 (2026-08-05) across ~50 verified tasks in one session.
+#
+# CONFINEMENT: unlike codex (--sandbox) and the opencode wrapper (Seatbelt),
+# Claude Code has no OS-level sandbox of its own, and -p requires
+# --dangerously-skip-permissions to run unattended. The ONLY isolation is the
+# per-task directory ringer assigns. Keep swarm workdirs OUTSIDE any repo you
+# care about and review artifacts before integrating; an operator who needs real
+# confinement should run the lane in a container or VM.
+#
+# The wrapper exists because Claude Code has no -C/--dir flag: it cds into the
+# task dir so the agent's cwd is the write target. Set bin to the ABSOLUTE path
+# of engines/claude-worker.sh in your clone (ringer does not resolve engine bins
+# relative to the repo). Uncomment to enable.
+# [engines.claude]
+# bin = "/absolute/path/to/ringer/engines/claude-worker.sh"
+# model_default = "sonnet"
+# args_template = [
+#   "{taskdir}",
+#   "-p",
+#   "{access_args}",
+#   "--model",
+#   "{model}",
+#   "{engine_args}",
+#   "{spec}",
+# ]
+# sandbox_args = ["--dangerously-skip-permissions"]
+# full_access_args = ["--dangerously-skip-permissions"]
+# Claude Code's default text output carries no usage/token line, so no
+# token_regex is configured (a plan lane bills as "included in plan"); the
+# scoreboard records the run with an empty token count rather than a wrong one.
+# It also does not self-report a model in text mode, so no model_report_regex.
+
 # Grok Build CLI (xAI). Install: curl -fsSL https://x.ai/cli/install.sh | bash
 # (or: npm install -g @xai-official/grok), then `grok login` — OAuth on a
 # SuperGrok or X Premium Plus plan. Headless mode (-p) runs a full agentic
