@@ -9430,6 +9430,10 @@ def parse_env_file(path: Path) -> dict[str, str]:
 
 
 def parse_token_count(text: str, token_regex: str | None = DEFAULT_TOKEN_REGEX) -> int | None:
+    # Engines colorize stdout when FORCE_COLOR is set (Claude Code, most CI),
+    # leaving escape bytes between the label and the number that no practical
+    # regex bridges — strip them once here so every regex sees plain text.
+    text = ANSI_RE.sub("", text)
     if token_regex:
         matches = list(re.finditer(token_regex, text, flags=re.IGNORECASE))
         for match in reversed(matches):
@@ -9454,6 +9458,9 @@ def parse_token_count(text: str, token_regex: str | None = DEFAULT_TOKEN_REGEX) 
 def parse_reported_model(text: str, model_report_regex: str | None) -> str | None:
     if not model_report_regex:
         return None
+    # Same reason as parse_token_count: a colorized "model:" header breaks
+    # the ^model: anchor unless the ANSI escapes are stripped first.
+    text = ANSI_RE.sub("", text)
     match = re.search(model_report_regex, text, flags=re.IGNORECASE)
     if match is None or match.lastindex is None:
         return None

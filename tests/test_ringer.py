@@ -595,6 +595,19 @@ class RingerCliTests(unittest.TestCase):
         self.assertEqual(ringer.parse_token_count("tokens used: 1,234", r"tokens\s+used\s*:?\s*([0-9][0-9,]*)"), 1234)
         self.assertEqual(ringer.parse_token_count("tokens used\n5,678", r"tokens\s+used\s*:?\s*([0-9][0-9,]*)"), 5678)
 
+    def test_token_count_parser_sees_through_ansi_colorized_output(self) -> None:
+        # Real bytes from codex exec run with FORCE_COLOR set (as Claude Code
+        # and most CI systems do): the label is dim-wrapped and the number is
+        # on the following line, so the escape sequences sit between "used"
+        # and the digits and an ANSI-blind \s* cannot bridge them.
+        colorized = "\x1b[2mtokens used\x1b[0m\n17,270\n"
+        self.assertEqual(ringer.parse_token_count(colorized, ringer.DEFAULT_TOKEN_REGEX), 17270)
+        # User-supplied custom regexes get the same stripping — the fix is in
+        # the parser, not the shipped pattern.
+        self.assertEqual(ringer.parse_token_count(colorized, r"tokens\s+used\s*:?\s*([0-9][0-9,]*)"), 17270)
+        # Uncolorized output keeps parsing exactly as before.
+        self.assertEqual(ringer.parse_token_count("tokens used: 1,234", ringer.DEFAULT_TOKEN_REGEX), 1234)
+
 
 if __name__ == "__main__":
     unittest.main()
