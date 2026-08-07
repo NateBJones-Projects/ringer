@@ -1642,6 +1642,10 @@ class TaskSpec:
     # engine's {model} placeholder); empty means the engine's model_default.
     model: str = ""
     task_type: str = ""
+    # Task keys that must all PASS before this task starts (a control
+    # dependency only — no artifacts flow between tasks). Empty means the
+    # task is eligible immediately, exactly as before.
+    depends_on: tuple[str, ...] = ()
 
     @classmethod
     def from_obj(cls, obj: dict[str, Any]) -> "TaskSpec":
@@ -1694,6 +1698,27 @@ class TaskSpec:
         task_type = obj.get("task_type", "")
         if not isinstance(task_type, str):
             raise ValueError(f"task {key}: task_type must be a string")
+        depends_on_raw = obj.get("depends_on", [])
+        if not isinstance(depends_on_raw, list):
+            raise ValueError(
+                f"task {key}: depends_on must be a JSON list of task keys, "
+                f"got {type(depends_on_raw).__name__}"
+            )
+        depends_on: list[str] = []
+        for dep in depends_on_raw:
+            if not isinstance(dep, str):
+                raise ValueError(
+                    f"task {key}: depends_on entries must be strings, "
+                    f"got {type(dep).__name__}"
+                )
+            dep_key = dep.strip()
+            if not dep_key:
+                raise ValueError(f"task {key}: depends_on entries must not be empty")
+            if dep_key in depends_on:
+                raise ValueError(
+                    f"task {key}: depends_on lists {dep_key!r} more than once"
+                )
+            depends_on.append(dep_key)
         return cls(
             key=key,
             spec=spec,
@@ -1708,7 +1733,37 @@ class TaskSpec:
             verified=verified.strip(),
             model=model.strip(),
             task_type=task_type.strip(),
+            depends_on=tuple(depends_on),
         )
+
+
+def dependency_cycle(tasks: tuple[TaskSpec, ...]) -> list[str] | None:
+    """Return the keys of one cycle (first == last), or None if the graph is acyclic."""
+    edges: dict[str, tuple[str, ...]] = {task.key: task.depends_on for task in tasks}
+    visited: dict[str, bool] = {}
+    stack: list[str] = []
+
+    def visit(node: str) -> list[str] | None:
+        visited[node] = True
+        stack.append(node)
+        for dep in edges.get(node, ()):
+            if visited.get(dep, False):
+                start = stack.index(dep)
+                return stack[start:] + [dep]
+            if dep not in visited:
+                cycle = visit(dep)
+                if cycle is not None:
+                    return cycle
+        stack.pop()
+        visited[node] = False
+        return None
+
+    for node in edges:
+        if node not in visited:
+            cycle = visit(node)
+            if cycle is not None:
+                return cycle
+    return None
 
 
 @dataclass(frozen=True)
@@ -1761,6 +1816,18 @@ class Manifest:
         duplicates = sorted({key for key in keys if keys.count(key) > 1})
         if duplicates:
             raise ValueError(f"duplicate task keys: {', '.join(duplicates)}")
+        task_keys = set(keys)
+        for task in tasks:
+            for dep in task.depends_on:
+                if dep == task.key:
+                    raise ValueError(f"task {task.key}: cannot depend on itself")
+                if dep not in task_keys:
+                    raise ValueError(
+                        f"task {task.key}: depends_on references unknown task {dep!r}"
+                    )
+        cycle = dependency_cycle(tasks)
+        if cycle is not None:
+            raise ValueError(f"dependency cycle: {' -> '.join(cycle)}")
         worktrees = bool(obj.get("worktrees", False))
         if worktrees:
             reserved_logs_dir = (workdir / "logs").resolve()
@@ -2094,6 +2161,9 @@ class TaskRuntime:
     setup_error: str | None = None
     last_worker_command: list[str] = field(default_factory=list)
     steering: dict[str, Any] | None = None
+    # Prerequisite keys this task is still waiting on, or the prerequisites
+    # that did not pass when the task ended skipped. Empty once unblocked.
+    blocked_by: tuple[str, ...] = ()
 
     def elapsed_s(self, now: float) -> float:
         if self.started_at_monotonic is None:
@@ -2275,6 +2345,8 @@ class StateWriter:
                     "key": runtime.task.key,
                     "status": runtime.status,
                     "verdict": runtime.final_verdict,
+                    "depends_on": list(runtime.task.depends_on),
+                    "blocked_by": list(runtime.blocked_by),
                     "engine": runtime.task.engine,
                     "model": (
                         runtime.task.model
@@ -2321,14 +2393,16 @@ class StateWriter:
                 tasks.append(task_state)
             pass_count = sum(1 for item in tasks if item["status"] == "pass")
             fail_count = sum(1 for item in tasks if item["status"] == "fail")
+            skipped_count = sum(1 for item in tasks if item["status"] == "skipped")
             running_count = sum(
                 1 for item in tasks if item["status"] in {"running", "verifying", "retrying"}
             )
             totals = {
                 "running": running_count,
-                "done": pass_count + fail_count,
+                "done": pass_count + fail_count + skipped_count,
                 "pass": pass_count,
                 "fail": fail_count,
+                "skipped": skipped_count,
                 "tokens": sum(int(item["tokens"] or 0) for item in tasks),
             }
             return {
@@ -2360,6 +2434,7 @@ class StateWriter:
             return {
                 "pass": sum(1 for runtime in self.runtimes if runtime.status == "pass"),
                 "fail": sum(1 for runtime in self.runtimes if runtime.status == "fail"),
+                "skipped": sum(1 for runtime in self.runtimes if runtime.status == "skipped"),
                 "tokens": sum(int(runtime.tokens or 0) for runtime in self.runtimes),
             }
 
@@ -4285,6 +4360,7 @@ def task_status_counts(state: dict[str, Any]) -> dict[str, int]:
     running_n = sum(1 for bucket in buckets if bucket == "working")
     retry_n = sum(1 for bucket in buckets if bucket == "retry")
     waiting_n = sum(1 for bucket in buckets if bucket == "waiting")
+    skip_n = sum(1 for bucket in buckets if bucket == "skip")
     return {
         "total": len(tasks),
         "pass": pass_n,
@@ -4292,6 +4368,7 @@ def task_status_counts(state: dict[str, Any]) -> dict[str, int]:
         "running": running_n,
         "retry": retry_n,
         "waiting": waiting_n,
+        "skip": skip_n,
     }
 
 
@@ -4329,6 +4406,12 @@ def waiting_phrase(count: int) -> str:
     return f"{count} are waiting"
 
 
+def skipped_phrase(count: int) -> str:
+    if count == 1:
+        return "1 skipped"
+    return f"{count} skipped"
+
+
 def live_briefing_sentence(state: dict[str, Any]) -> str:
     return html_to_text(live_briefing_html(state))
 
@@ -4348,6 +4431,8 @@ def live_briefing_html(state: dict[str, Any]) -> str:
         parts.append(f'<span class="n-fail">{html_escape(retry_phrase(counts["retry"]))}</span>')
     if counts["waiting"]:
         parts.append(html_escape(waiting_phrase(counts["waiting"])))
+    if counts["skip"]:
+        parts.append(html_escape(skipped_phrase(counts["skip"])))
     if counts["fail"]:
         parts.append(f'<span class="n-fail">{html_escape(failed_phrase(counts["fail"]))}</span>')
     status_sentence = join_plain_html_parts(parts)
@@ -4366,13 +4451,25 @@ def final_briefing_html(state: dict[str, Any]) -> str:
     total = counts["total"]
     pass_n = counts["pass"]
     fail_n = counts["fail"]
+    skip_n = counts["skip"]
     elapsed = fmt_compact_duration(state.get("elapsed_s"))
     first = f"Ringer finished {total} {task_word(total)} in {elapsed}."
-    if fail_n == 0:
+    if fail_n == 0 and skip_n == 0:
         return f"{html_escape(first)} <span class=\"n-pass\">All {total} finished and checked.</span>"
+    if fail_n == 0:
+        return (
+            f"{html_escape(first)} <span class=\"n-pass\">{pass_n} finished and checked</span>, "
+            f"{skip_n} skipped."
+        )
+    if skip_n == 0:
+        return (
+            f"{html_escape(first)} <span class=\"n-pass\">{pass_n} finished and checked</span>, "
+            f"<span class=\"n-fail\">{fail_n} failed after retry.</span>"
+        )
     return (
         f"{html_escape(first)} <span class=\"n-pass\">{pass_n} finished and checked</span>, "
-        f"<span class=\"n-fail\">{fail_n} failed after retry.</span>"
+        f"<span class=\"n-fail\">{fail_n} failed after retry</span>, "
+        f"{skip_n} skipped."
     )
 
 
@@ -4436,6 +4533,8 @@ def plain_transition_event(
         return {"line": f"{task_key} failed"}
     if status == "timeout":
         return {"line": f"{task_key} timed out"}
+    if status == "skipped":
+        return {"line": f"{task_key} skipped — a prerequisite did not pass"}
     return None
 
 
@@ -4454,6 +4553,8 @@ def task_state_bucket(status: str) -> str:
         return "pass"
     if status in {"fail", "error", "timeout", "died"}:
         return "fail"
+    if status == "skipped":
+        return "skip"
     if status == "retrying":
         return "retry"
     if status in {"running", "verifying"}:
@@ -4465,6 +4566,8 @@ def task_state_word(status: str) -> str:
     bucket = task_state_bucket(status)
     if bucket == "pass":
         return "finished & checked"
+    if bucket == "skip":
+        return "skipped"
     if bucket == "working":
         return "working"
     if bucket == "retry":
@@ -4496,6 +4599,8 @@ def render_progress_bar(tasks: list[dict[str, Any]], counts: dict[str, int]) -> 
         legend_parts.append(f'{counts["running"]} working')
     if counts["retry"]:
         legend_parts.append(f'{counts["retry"]} sent back')
+    if counts["skip"]:
+        legend_parts.append(f'{counts["skip"]} skipped')
     if counts["fail"]:
         legend_parts.append(f'{counts["fail"]} failed')
     if counts["waiting"]:
@@ -4503,7 +4608,8 @@ def render_progress_bar(tasks: list[dict[str, Any]], counts: dict[str, int]) -> 
     legend = " · ".join(legend_parts) if legend_parts else "No tasks"
     aria = (
         f'{counts["total"]} tasks: {counts["pass"]} passed, {counts["running"]} working, '
-        f'{counts["retry"]} retrying, {counts["waiting"]} waiting, {counts["fail"]} failed'
+        f'{counts["retry"]} retrying, {counts["waiting"]} waiting, '
+        f'{counts["skip"]} skipped, {counts["fail"]} failed'
     )
     return f"""<div class="rounds" role="img" aria-label="{html_escape(aria)}">{bar}</div>
     <p class="legend">{html_escape(legend)}</p>"""
@@ -4528,7 +4634,7 @@ def render_work_section(
         tasks = [
             task
             for task in tasks
-            if task_state_bucket(str(task.get("status", "queued"))) in {"pass", "fail"}
+            if task_state_bucket(str(task.get("status", "queued"))) in {"pass", "fail", "skip"}
         ]
     section_class = "work is-primary" if primary else "work"
     if not tasks:
@@ -4593,6 +4699,8 @@ def render_work_group(
         items_html = '<p class="empty-note">Finished and checked — this worker filed nothing to the shelf.</p>'
     elif bucket == "fail":
         items_html = '<p class="empty-note">Failed its check — nothing was delivered.</p>'
+    elif bucket == "skip":
+        items_html = '<p class="empty-note">Skipped — a prerequisite did not pass, so no worker ran.</p>'
     elif bucket in {"working", "retry"}:
         items_html = '<p class="empty-note">Nothing delivered yet — still on it.</p>'
     else:
@@ -8714,10 +8822,18 @@ class RingerRunner:
         self.verifier = Verifier()
         self.semaphore = asyncio.Semaphore(manifest.max_parallel)
         self.active_processes: dict[int, asyncio.subprocess.Process] = {}
+        # Terminal outcome per task key ("pass", "fail", or "skipped"), so a
+        # dependent can wait on its prerequisites before taking a concurrency
+        # slot. Filled lazily so _run_task also works when called directly.
+        self._task_results: dict[str, asyncio.Future[str]] = {}
 
     async def run(self) -> int:
         self.manifest.workdir.mkdir(parents=True, exist_ok=True)
         final_state = False
+        loop = asyncio.get_running_loop()
+        self._task_results = {
+            runtime.task.key: loop.create_future() for runtime in self.runtimes
+        }
         try:
             self.state_writer.start()
             if self.dashboard is not None:
@@ -8730,10 +8846,11 @@ class RingerRunner:
             with self.lock:
                 now = time.monotonic()
                 for runtime in self.runtimes:
-                    if runtime.status not in {"pass", "fail"}:
+                    if runtime.status not in {"pass", "fail", "skipped"}:
                         runtime.status = "fail"
                         runtime.final_verdict = "ERROR"
                         runtime.ended_at_monotonic = runtime.ended_at_monotonic or now
+            self._resolve_pending_results()
             self.state_writer.flush()
             final_state = True
             raise
@@ -8765,6 +8882,60 @@ class RingerRunner:
                 kill_process_group(proc)
 
     async def _run_task(self, runtime: TaskRuntime) -> None:
+        try:
+            if runtime.task.depends_on:
+                blockers = await self._wait_for_prerequisites(runtime)
+                if blockers:
+                    await self._mark_skipped(runtime, blockers)
+                    return
+            await self._execute_task(runtime)
+        finally:
+            self._publish_task_result(runtime)
+
+    async def _wait_for_prerequisites(self, runtime: TaskRuntime) -> tuple[str, ...] | None:
+        """Wait (before any concurrency slot is taken) for every prerequisite
+        to reach a terminal state. Returns the prerequisites that did not
+        PASS, or None when every prerequisite passed."""
+        blockers: list[str] = []
+        still_waiting = list(runtime.task.depends_on)
+        for dep in runtime.task.depends_on:
+            result_future = self._task_results.get(dep)
+            if result_future is None:
+                result_future = asyncio.get_running_loop().create_future()
+                self._task_results[dep] = result_future
+            result = await result_future
+            still_waiting.remove(dep)
+            with self.lock:
+                runtime.blocked_by = tuple(still_waiting)
+            if result != "pass":
+                blockers.append(dep)
+        return tuple(blockers) if blockers else None
+
+    async def _mark_skipped(self, runtime: TaskRuntime, blockers: tuple[str, ...]) -> None:
+        # No worker process is launched, no attempt is consumed, and no eval
+        # row is written — skipped is a terminal status that the run state,
+        # the summary, and the result future all record without side effects.
+        with self.lock:
+            runtime.status = "skipped"
+            runtime.blocked_by = blockers
+            runtime.ended_at_monotonic = time.monotonic()
+
+    def _publish_task_result(self, runtime: TaskRuntime) -> None:
+        status = runtime.status
+        if status not in {"pass", "fail", "skipped"}:
+            status = "fail"
+        result_future = self._task_results.get(runtime.task.key)
+        if result_future is None:
+            result_future = asyncio.get_running_loop().create_future()
+            self._task_results[runtime.task.key] = result_future
+        if not result_future.done():
+            result_future.set_result(status)
+
+    def _resolve_pending_results(self) -> None:
+        for runtime in self.runtimes:
+            self._publish_task_result(runtime)
+
+    async def _execute_task(self, runtime: TaskRuntime) -> None:
         async with self.semaphore:
             with self.lock:
                 runtime.started_at_monotonic = time.monotonic()
@@ -9307,6 +9478,7 @@ class RingerRunner:
             taskdir=taskdir,
             log_path=log_path,
             spec_short=shorten(task.spec, 120),
+            blocked_by=task.depends_on,
         )
 
     def _taskdir(self, task: TaskSpec) -> Path:
@@ -10094,6 +10266,9 @@ def print_summary(run_id: str, runtimes: list[TaskRuntime]) -> None:
         print("\nsetup failures (no worker was spawned):")
         for runtime in setup_failures:
             print(f"  {runtime.task.key}: {runtime.setup_error}")
+    skipped = [r for r in runtimes if r.status == "skipped"]
+    if skipped:
+        print(f"skipped: {len(skipped)} task(s) did not run because a prerequisite did not pass")
 
 
 def create_demo_manifest() -> Path:
