@@ -101,6 +101,7 @@ Each task gets its own directory, its own worker, its own log, and its own verdi
 | `engine` | Which configured engine runs this task (default `codex`) |
 | `model` | Which model a harness engine runs for this task — fills the engine's `{model}` placeholder (e.g. `"openrouter/moonshotai/kimi-k2.7"`); empty uses the engine's `model_default` |
 | `task_type` | Optional free-form string naming the kind of work this task is, so the model-performance log can slice pass rates by task shape rather than only by model. Suggested vocabulary: `code-feature`, `code-fix`, `code-review`, `test-hardening`, `docs`, `research`, `persona-review`, `copywriting`, `site-build`, `motion-design`, `image-gen`, `data-pipeline`, `format-conversion`, `probe`, `bakeoff`. Empty is allowed; the log just reports it under `(none)`. |
+| `depends_on` | Optional list of task keys that must **all pass** before this task starts (default: none — the task is eligible immediately). A dependent waits for every prerequisite to finish its final attempt before it takes a `max_parallel` slot, so it never holds a slot while blocked. If any prerequisite ends in a non-pass state, the dependent is marked `skipped`: no worker is launched, no attempt is consumed, no eval row is written, and anything depending on it is skipped in turn. This is a *control* dependency only — no files flow between tasks. Because a passing task's worktree (if any) is deleted, anything a dependent needs must be exported by the producer's `check` to a durable path outside the worktree. |
 | `timeout_s` | Per-task kill timer (default 900) |
 | `max_attempts` | How many times this task may run (default 2 — one try plus one retry with the check's failure output injected). Set `1` for a hard no-retry lane |
 | `redact_spec` | Replace this task's spec with `[redacted request packet]` in the run state, the logged command line, and the eval row, for specs carrying sensitive material. Redacts Ringer's own records only — captured worker output is never rewritten (invariant), so a worker that echoes its request still puts that text in `worker.log` |
@@ -110,6 +111,17 @@ Each task gets its own directory, its own worker, its own log, and its own verdi
 | `worktrees` (run-level) | Give each task an isolated git worktree of `repo` so parallel workers can't collide |
 
 > **Worktree footgun:** on PASS the task's worktree is removed — including anything written inside it. In worktrees mode, worker logs live outside task worktrees in `workdir/logs/`; have workers write deliverables outside the worktree too, or have your `check` copy artifacts out before it exits 0.
+
+Example: run quality control only after the producer has been verified. If `schema-producer` fails or is skipped, `schema-qc` is marked `skipped` — no worker runs for it.
+
+```json
+{
+  "key": "schema-qc",
+  "depends_on": ["schema-producer"],
+  "spec": "Review the exported schema at /tmp/shared/schema.json against the DDL...",
+  "check": "test -s /tmp/shared/schema.json && ... "
+}
+```
 
 Not sure what your tasks even are yet? [`docs/interview-prompt.md`](docs/interview-prompt.md) is a prompt you paste into any chatbot; it interviews you about the job and hands back a brief your orchestrating agent can turn into a manifest. Ready-made skeletons for the patterns that work live in [`templates/`](templates/).
 
@@ -392,6 +404,7 @@ Every community PR that lands in main is credited here — that's a project rule
 - [@davekopecek](https://github.com/davekopecek) (Dave Kopecek) — committed the design-reference fixture so the design-token guard runs on every machine (#30)
 - [@snapsynapse](https://github.com/snapsynapse) (Sam Rogers) — graceful shutdown on SIGINT/SIGTERM with worker-tree cleanup and finished state, plus the 14-test end-to-end CLI regression suite (#4)
 - [@mlava](https://github.com/mlava) (Mark Lavercombe) — named setup failures across every diagnostic surface (#37) and `run --baseline`, the no-workers check preflight (#38)
+- [@Guidance78](https://github.com/Guidance78) (John W) — optional staged task dependencies: `depends_on` gates a task on its prerequisites and skips it, without invoking a worker, when one fails
 
 Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the philosophy and what gets a PR merged fast. The short version: small and scoped, rebased on current main, every claim backed by an executed test. Authorship is always preserved — where a maintainer pushes a mechanical fix to your branch, you remain the commit author.
 
