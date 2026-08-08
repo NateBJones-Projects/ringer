@@ -76,8 +76,8 @@ Run your own batch:
   "tasks": [
     {
       "key": "alpha",
-      "spec": "Create alpha.txt containing exactly: alpha ready",
-      "check": "test \"$(cat alpha.txt)\" = \"alpha ready\"",
+      "spec": "Create alpha.txt containing exactly one line: alpha ready. End the file with exactly one newline.",
+      "check": "printf 'alpha ready\\n' | diff -u - alpha.txt || { echo 'FAIL: alpha.txt must contain exactly alpha ready followed by one newline'; exit 1; }",
       "expect_files": ["alpha.txt"]
     }
   ]
