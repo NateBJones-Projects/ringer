@@ -57,6 +57,19 @@ source = "https://docs.x.ai/developers/release-notes"
 last_verified = 2026-07-10
 noncanonical_slugs = ["opencode:openrouter/x-ai/grok-4.5"]
 
+[engines.grok.models."grok-4.5"]
+# Same trained artifact as the "grok-build" key above. Grok Build CLI v0.2.93
+# serves the model under the literal id `grok-4.5` (see ~/.grok/models_cache.json,
+# fetched from https://cli-chat-proxy.grok.com/v1/models), so a manifest that
+# names the CLI's own slug must resolve to Grok 4.5 rather than showing up
+# unregistered. Config `[engines.grok] model_default` is this slug.
+display = "Grok 4.5"
+lab = "xAI"
+confidence = "verified"     # CLI model listing self-reports id "grok-4.5", name "Grok 4.5"
+source = "Grok Build CLI v0.2.93 model listing (cli-chat-proxy.grok.com/v1/models); https://docs.x.ai/developers/release-notes"
+last_verified = 2026-08-18
+noncanonical_slugs = ["opencode:openrouter/x-ai/grok-4.5"]
+
 [engines.grok.models."grok-composer-2.5-fast"]
 display = "Composer 2.5 Fast"
 lab = "Cursor (Anysphere)"
@@ -98,3 +111,12 @@ lab = "Meta"
 confidence = "verified"
 source = "manifest model field; OpenRouter slug meta-llama/llama-3.3-70b-instruct:free"
 last_verified = 2026-07-10
+
+[engines.opencode.models."openrouter/x-ai/grok-4.6"]
+# Not served by the Grok Build CLI, so OpenRouter IS this model's canonical
+# route — no noncanonical_slugs entry. The flat-rate CLI lane tops out at 4.5.
+display = "Grok 4.6"
+lab = "xAI"
+confidence = "verified"
+source = "manifest model field; OpenRouter slug x-ai/grok-4.6"
+last_verified = 2026-08-18
