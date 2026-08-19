@@ -43,8 +43,8 @@ TASKDIR_REAL="$(cd "$TASKDIR" && pwd -P)"
 # we never have to open all of /private/tmp or ~/.cache to the sandboxed agent.
 # Resolve to the real path (/var/folders symlinks to /private/var/folders);
 # Seatbelt subpath matching needs the canonical path or writes EPERM-crash.
-SCRATCH="$(cd "$(mktemp -d -t ringer-opencode-scratch)" && pwd -P)"
-PROFILE="$(mktemp -t ringer-opencode-prof)"
+SCRATCH="$(cd "$(mktemp -d -t ringer-opencode-scratch.XXXXXX)" && pwd -P)"
+PROFILE="$(mktemp -t ringer-opencode-prof.XXXXXX)"
 cleanup() { rm -rf "$SCRATCH" "$PROFILE"; }
 trap cleanup EXIT
 
