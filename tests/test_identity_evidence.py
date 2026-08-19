@@ -9,6 +9,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from ringer import (
     AppConfig,
@@ -21,6 +22,7 @@ from ringer import (
     WorkerResult,
     build_models_api_payload,
     create_read_model_schema,
+    effective_reasoning_effort_from_command,
     load_engines,
     parse_reported_model,
     print_model_log_table,
@@ -66,6 +68,13 @@ lab = "OpenAI"
 confidence = "verified"
 source = "https://example.test/model"
 last_verified = 2026-07-10
+
+[engines.codex.models."gpt-5.6-sol"]
+display = "GPT-5.6 Sol"
+lab = "OpenAI"
+confidence = "verified"
+source = "fixture"
+report_aliases = ["backend-sol"]
 
 [engines.opencode]
 harness = "OpenCode"
@@ -115,7 +124,40 @@ access = "OpenRouter API"
         self.assertEqual("gpt-5.6-sol", rows[0]["expected_model"])
         self.assertEqual("gpt-5.6-sol", rows[1]["model"])
         self.assertIsNone(rows[1]["reported_model"])
-        self.assertIsNone(rows[1]["expected_model"])
+        self.assertEqual("gpt-5.6-sol", rows[1]["expected_model"])
+
+    def test_report_alias_preserves_raw_report_and_stamps_selectable_key(self) -> None:
+        with mock.patch("ringer.default_model_registry_path", return_value=self.registry):
+            rows = self.log_attempts(
+                WorkerResult(0, False, 12, reported_model="backend-sol")
+            )
+        self.assertEqual("gpt-5.6-sol", rows[0]["model"])
+        self.assertEqual("backend-sol", rows[0]["reported_model"])
+        self.assertEqual("gpt-5.6-sol", rows[0]["expected_model"])
+        log_path = self.root / "work" / "task" / "worker.log"
+        if log_path.exists():
+            self.assertNotIn(
+                "identity: harness reported",
+                log_path.read_text(encoding="utf-8"),
+            )
+
+    def test_effort_parser_reads_codex_grok_and_opencode_and_last_wins(self) -> None:
+        self.assertEqual(
+            "xhigh",
+            effective_reasoning_effort_from_command(
+                ["grok", "--effort", "high", "--reasoning-effort=xhigh"]
+            ),
+        )
+        self.assertEqual(
+            "max",
+            effective_reasoning_effort_from_command(["opencode", "--variant", "max"]),
+        )
+        self.assertEqual(
+            "high",
+            effective_reasoning_effort_from_command(
+                ["codex", "-c", "model_reasoning_effort=high"]
+            ),
+        )
 
     def test_mismatch_appends_identity_warning_to_worker_log(self) -> None:
         self.log_attempts(WorkerResult(0, False, 12, reported_model="gpt-5.7"))

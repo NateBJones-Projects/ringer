@@ -101,6 +101,18 @@ display = "GLM 5.2"
 lab = "Z.ai (Zhipu AI)"
 confidence = "verified"
 source = "fixture"
+
+[engines.grok]
+harness = "Grok Build CLI"
+access = "OAuth plan"
+default_model_key = "grok-4.6"
+
+[engines.grok.models."grok-4.6"]
+display = "Grok 4.6"
+lab = "xAI"
+confidence = "verified"
+source = "fixture"
+report_aliases = ["grok-4.6-build"]
 """,
             encoding="utf-8",
         )
@@ -256,6 +268,47 @@ source = "fixture"
         self.assertIn("GPT-5.5 · (effort unrecorded)", displays)
         self.assertIn("GLM 5.2", displays)
         self.assertNotIn("GLM 5.2 · (effort unrecorded)", displays)
+
+    def test_invocation_evidence_separates_reported_identity_from_performance(self) -> None:
+        rows = []
+        for index in range(3):
+            item = row(
+                f"grok-{index}",
+                model="grok-4.6",
+                engine="grok",
+                effort="high",
+            )
+            item["expected_model"] = "grok-4.6"
+            item["reported_model"] = "grok-4.6-build"
+            rows.append(item)
+        registry = load_model_identity_registry(self.registry_path)
+        groups = enrich_model_groups_with_identity(
+            aggregate_model_scoreboard_rows(rows),
+            rows,
+            registry,
+            include_task_type=False,
+        )
+        self.assertEqual(1, len(groups))
+        grok = groups[0]
+        self.assertEqual("Grok 4.6 · high", grok["model_display"])
+        self.assertEqual("reported match · high", grok["invocation_label"])
+        self.assertEqual(["grok-4.6"], grok["requested_models"])
+        self.assertEqual(["grok-4.6-build"], grok["reported_models"])
+        self.assertEqual("proven", grok["tier"])
+
+    def test_reported_mismatch_is_visible_and_unranked(self) -> None:
+        item = row("drift", model="gpt-5.5")
+        item["expected_model"] = "gpt-5.5"
+        item["reported_model"] = "different-model"
+        registry = load_model_identity_registry(self.registry_path)
+        group = enrich_model_groups_with_identity(
+            aggregate_model_scoreboard_rows([item]),
+            [item],
+            registry,
+            include_task_type=False,
+        )[0]
+        self.assertEqual("reported mismatch", group["invocation_label"])
+        self.assertEqual("unranked", group["tier"])
 
     def test_alias_marker_and_lab_render_in_html(self) -> None:
         log_path = self.root / "alias.jsonl"

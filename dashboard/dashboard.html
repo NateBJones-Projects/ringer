@@ -1901,6 +1901,7 @@
           '</td>',
           `<td>${escapeHtml(row.harness || "unknown")}</td>`,
           `<td>${escapeHtml(row.access || "unknown")}</td>`,
+          `<td title="${escapeHtml(row.invocation_detail || "")}">${escapeHtml(row.invocation_label || "legacy label")}</td>`,
           `<td><span class="tier-badge ${escapeHtml(tier)}">${escapeHtml(row.tier || "unknown")}</span></td>`,
           `<td class="numeric">${numberOrZero(row.tasks).toLocaleString()}</td>`,
           `<td class="numeric">${escapeHtml(formatModelPercent(row.first_try_pass_rate))}</td>`,
@@ -1911,7 +1912,7 @@
         if (expanded) {
           body.push(
             '<tr class="model-breakdown">',
-            `<td colspan="9">${renderModelBreakdown(row)}</td>`,
+            `<td colspan="10">${renderModelBreakdown(row)}</td>`,
             '</tr>',
           );
         }
@@ -1923,7 +1924,8 @@
         '<th>Model</th>',
         '<th>Harness</th>',
         '<th>API/Plan</th>',
-        '<th>Tier</th>',
+        '<th>Invocation</th>',
+        '<th>Performance</th>',
         '<th class="numeric">Tasks</th>',
         '<th class="numeric">First-try %</th>',
         '<th class="numeric">Pass %</th>',

@@ -251,7 +251,8 @@ class ScoreboardPageTests(unittest.TestCase):
             "Lab",
             "Harness",
             "API/Plan",
-            "Tier",
+            "Invocation",
+            "Performance",
             "Tasks",
             "First try",
             "Pass",
@@ -326,8 +327,9 @@ class ScoreboardPageTests(unittest.TestCase):
         footer_start = html.index('<footer class="scoreboard-footer">')
         footer_html = html[footer_start:]
         self.assertIn("25 rows read, 1 skipped lines.", footer_html)
-        self.assertIn("Ordering sorts by evidence tier first", footer_html)
-        self.assertIn("Misrouted and unattributed legacy rows are not ranked or tiered", footer_html)
+        self.assertIn('Performance "proven" means', footer_html)
+        self.assertIn("it does not prove model routing", footer_html)
+        self.assertIn("Misrouted, mismatched, and unattributed rows are not ranked", footer_html)
 
     def test_evidence_floor_orders_probation_after_proven_model(self) -> None:
         html = self.render_to(self.root / "scoreboard.html")
