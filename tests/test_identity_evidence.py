@@ -29,6 +29,13 @@ from ringer import (
 )
 
 
+BUNDLED_REGISTRY = Path(__file__).resolve().parents[1] / "registry" / "model-identity.toml"
+CLAUDE_ASSISTANT_MODEL_REGEX = (
+    r'(?m)^\{(?=[^\r\n]*"type"\s*:\s*"assistant")[^\r\n]*'
+    r'"message"\s*:\s*\{[^\r\n]*?"model"\s*:\s*"([^"]+)"'
+)
+
+
 def attempt(model: str, *, engine: str = "codex") -> dict[str, object]:
     return {
         "run_id": f"run-{model}",
@@ -113,6 +120,60 @@ access = "OpenRouter API"
         engine = load_engines(None)["codex"]
         output = "OpenAI Codex v0.144.0\n--------\nmodel: gpt-5.6-sol\nprovider: openai\n"
         self.assertEqual("gpt-5.6-sol", parse_reported_model(output, engine.model_report_regex))
+
+    def test_claude_stream_report_uses_assistant_model_not_auxiliary_usage(self) -> None:
+        output = "\n".join(
+            (
+                '{"type":"system","subtype":"init","session_id":"session"}',
+                '{"type":"assistant","message":{"id":"msg","model":"claude-opus-5",'
+                '"role":"assistant","content":[{"type":"text","text":"done"}]}}',
+                '{"type":"result","subtype":"success","modelUsage":{'
+                '"claude-haiku-4-5-20251001":{"inputTokens":12,"outputTokens":3},'
+                '"claude-opus-5":{"inputTokens":120,"outputTokens":30}}}',
+            )
+        )
+        self.assertIn('"modelUsage":{"claude-haiku-4-5-20251001"', output)
+        self.assertEqual(
+            "claude-opus-5",
+            parse_reported_model(output, CLAUDE_ASSISTANT_MODEL_REGEX),
+        )
+
+    def test_claude_opus_max_table_has_registered_reported_identity(self) -> None:
+        log_path = self.root / "claude.jsonl"
+        item = attempt("claude-opus-5", engine="claude")
+        item.update(
+            expected_model="claude-opus-5",
+            reported_model="claude-opus-5",
+            reasoning_effort="max",
+        )
+        self.write_log(log_path, [item])
+        payload = build_models_api_payload(
+            log_path=log_path,
+            default_log_path=self.root / "other.jsonl",
+            registry_path=BUNDLED_REGISTRY,
+            catalog_path=self.root / "missing.json",
+        )
+        group = payload["groups"][0]
+        self.assertEqual("Claude Opus 5 · max", group["model_display"])
+        self.assertEqual("Anthropic", group["lab"])
+        self.assertEqual("Claude Code", group["harness"])
+        self.assertEqual("Claude.ai OAuth", group["access"])
+        self.assertFalse(group["unregistered"])
+        self.assertEqual("reported match · max", group["invocation_label"])
+        self.assertEqual("probation", group["tier"])
+        self.assertEqual(["claude-opus-5"], group["requested_models"])
+        self.assertEqual(["claude-opus-5"], group["reported_models"])
+
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            print_model_log_table(log_path, 1, 0, payload["groups"])
+        table = out.getvalue()
+        self.assertIn("Claude Opus 5 · max", table)
+        self.assertIn("Anthropic", table)
+        self.assertIn("Claude Code", table)
+        self.assertIn("reported match · max", table)
+        self.assertIn("probation", table)
+        self.assertNotIn("[unregistered]", table)
 
     def test_reported_model_wins_and_resolved_model_is_fallback(self) -> None:
         rows = self.log_attempts(
