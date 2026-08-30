@@ -98,6 +98,7 @@ Each task gets its own directory, its own worker, its own log, and its own verdi
 | `spec` | The prompt handed to the worker |
 | `check` | Shell command run after the worker exits; exit 0 = PASS |
 | `expect_files` | Files that must exist and be non-empty before the check runs |
+| `known_bad` | Optional shell command that mutates the task's scratch dir into a known-bad state; used only by `--prove-fail`; absent means the task has no prove-fail coverage |
 | `engine` | Which configured engine runs this task (default `codex`) |
 | `model` | Which model a harness engine runs for this task — fills the engine's `{model}` placeholder (e.g. `"openrouter/moonshotai/kimi-k2.7"`); empty uses the engine's `model_default` |
 | `task_type` | Optional free-form string naming the kind of work this task is, so the model-performance log can slice pass rates by task shape rather than only by model. Suggested vocabulary: `code-feature`, `code-fix`, `code-review`, `test-hardening`, `docs`, `research`, `persona-review`, `copywriting`, `site-build`, `motion-design`, `image-gen`, `data-pipeline`, `format-conversion`, `probe`, `bakeoff`. Empty is allowed; the log just reports it under `(none)`. |
@@ -168,6 +169,20 @@ Lint reads the manifest; `--baseline` executes it — every task's `check` runs 
 ```
 
 Each check runs in a fresh scratch dir (a detached worktree when the manifest uses worktrees) through the same verifier as a real run. Reading the results: an assertion that demands the NEW behavior workers will build is *expected* to FAIL baseline; an assertion about UNCHANGED behavior that fails baseline is a bug in the check itself, and at run time it would burn a worker's attempts against something no model can satisfy. Fix the check before spawning.
+
+### Prove-fail: prove your checks can catch a lie
+
+`--baseline` catches checks that false-FAIL on a good tree. `--prove-fail` catches the opposite — checks that false-PASS on a bad one. A check proven both ways is worth trusting.
+
+For each task that declares `known_bad`, prove-fail makes a fresh scratch dir (a detached worktree when the manifest uses worktrees), runs the `known_bad` command there to fake a broken deliverable, then runs the task's real `check` against that bad state. The mode spawns no workers and writes no eval rows:
+
+```bash
+./ringer.py run swarm.json --prove-fail
+```
+
+The check FAILING is the good outcome — reported as **proved**, with the check's failure output shown (that output is what a retry prompt would see). A check that PASSES on the known-bad state is **broken**: it cannot be trusted to verify the task. A check that passes while `expect_files` are missing is **inconclusive** — the `known_bad` command must fabricate the deliverables in bad form for the test to mean anything. A `known_bad` command that itself fails or times out is an **error**. Tasks without `known_bad` are **skipped**; coverage is opt-in per task.
+
+The summary reads `prove-fail: P proved, B broken, I inconclusive, E error, S skipped of T task(s).` Exit code is 0 only when broken, inconclusive, and error are all zero — unlike `--baseline` (always 0, judgment left to you), a check that passes on a known-bad state is objectively broken. The two flags cannot be combined in one invocation.
 
 ## Make your agent actually use this
 
@@ -392,6 +407,7 @@ Every community PR that lands in main is credited here — that's a project rule
 - [@davekopecek](https://github.com/davekopecek) (Dave Kopecek) — committed the design-reference fixture so the design-token guard runs on every machine (#30)
 - [@snapsynapse](https://github.com/snapsynapse) (Sam Rogers) — graceful shutdown on SIGINT/SIGTERM with worker-tree cleanup and finished state, plus the 14-test end-to-end CLI regression suite (#4)
 - [@mlava](https://github.com/mlava) (Mark Lavercombe) — named setup failures across every diagnostic surface (#37) and `run --baseline`, the no-workers check preflight (#38)
+- [@heyjawrsh](https://github.com/heyjawrsh) (Joshua Butner) — `run --prove-fail`, the known-bad mirror of `--baseline` (#104)
 
 Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the philosophy and what gets a PR merged fast. The short version: small and scoped, rebased on current main, every claim backed by an executed test. Authorship is always preserved — where a maintainer pushes a mechanical fix to your branch, you remain the commit author.
 
