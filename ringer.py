@@ -5228,7 +5228,9 @@ def inject_models_tab_into_ringside_html(html: str) -> str:
           const bucketId = String(row.display_bucket_id || `bucket-${index}`);
           const expanded = expandedModel === bucketId;
           const tierClass = safeClass(row.tier);
-          const marker = row.misrouted ? "misrouted" : (row.unregistered ? "unregistered" : "");
+          const marker = row.invocation_evidence === "reported-mismatch"
+            ? "reported mismatch"
+            : (row.misrouted ? "misrouted" : (row.unregistered ? "unregistered" : ""));
           const tier = row.unattributed || row.misrouted ? "not ranked" : (row.tier || "unknown");
           const notes = Array.isArray(row.notes) ? row.notes.join("\n\n") : "";
           body.push(
@@ -5240,6 +5242,7 @@ def inject_models_tab_into_ringside_html(html: str) -> str:
             `<td>${html(row.lab || "(unknown)")}</td>`,
             `<td>${html(row.harness || "unknown")}</td>`,
             `<td>${html(row.access || "unknown")}</td>`,
+            `<td title="${html(row.invocation_detail || "")}">${html(row.invocation_label || "legacy label")}</td>`,
             `<td><span class="tier-badge ${html(tierClass)}">${html(tier)}</span></td>`,
             `<td class="numeric">${numberOrZeroLocal(row.tasks).toLocaleString()}</td>`,
             `<td class="numeric">${html(percent(row.first_try_pass_rate))}</td>`,
@@ -5250,12 +5253,12 @@ def inject_models_tab_into_ringside_html(html: str) -> str:
             `<td class="model-notes" title="${html(notes)}">${html(row.latest_note || "")}</td>`,
             '</tr>',
           );
-          if (expanded) body.push(`<tr class="model-breakdown"><td colspan="12">${breakdown(bucketId)}</td></tr>`);
+          if (expanded) body.push(`<tr class="model-breakdown"><td colspan="13">${breakdown(bucketId)}</td></tr>`);
         });
         wrap.innerHTML = [
           '<table class="models-table">',
           '<thead><tr>',
-          '<th>Model</th><th>Lab</th><th>Harness</th><th>API/Plan</th><th>Tier</th>',
+          '<th>Model</th><th>Lab</th><th>Harness</th><th>API/Plan</th><th>Invocation</th><th>Performance</th>',
           '<th class="numeric">Tasks</th><th class="numeric">First try</th><th class="numeric">Pass</th>',
           '<th class="numeric">Tokens (median)</th><th>Speed (median)</th><th>Last used</th><th>Notes</th>',
           '</tr></thead>',
@@ -6139,7 +6142,8 @@ MODEL_SCOREBOARD_COLUMNS = (
     "Lab",
     "Harness",
     "API/Plan",
-    "Tier",
+    "Invocation",
+    "Performance",
     "Tasks",
     "First try",
     "Pass",
@@ -6213,6 +6217,19 @@ class ModelIdentityRegistry:
     defaults: dict[str, str]
     engine_meta: dict[str, ModelIdentity]
     noncanonical_routes: dict[tuple[str, str], NoncanonicalRoute]
+    report_aliases: dict[tuple[str, str], str]
+
+    def canonical_model_key(self, engine: str, model_key: str) -> str:
+        """Return the selectable registry key for a harness-reported alias."""
+        engine_key = model_log_text(engine)
+        key = model_log_text(model_key)
+        return self.report_aliases.get((engine_key, key), key)
+
+    def model_keys_equivalent(self, engine: str, left: str, right: str) -> bool:
+        """True when two raw labels resolve to the same registered model key."""
+        left_key = self.canonical_model_key(engine, left)
+        right_key = self.canonical_model_key(engine, right)
+        return bool(left_key and left_key == right_key)
 
     def resolve(self, engine: str, model_key: str) -> ModelIdentity:
         engine_key = model_log_text(engine)
@@ -6269,7 +6286,7 @@ class ModelIdentityRegistry:
         )
 
 
-EMPTY_MODEL_IDENTITY_REGISTRY = ModelIdentityRegistry({}, {}, {}, {})
+EMPTY_MODEL_IDENTITY_REGISTRY = ModelIdentityRegistry({}, {}, {}, {}, {})
 
 
 def load_model_identity_registry(path: Path | None = None) -> ModelIdentityRegistry:
@@ -6286,6 +6303,7 @@ def load_model_identity_registry(path: Path | None = None) -> ModelIdentityRegis
     defaults: dict[str, str] = {}
     engine_meta: dict[str, ModelIdentity] = {}
     pending_noncanonical: list[tuple[str, str, str]] = []
+    report_aliases: dict[tuple[str, str], str] = {}
     for engine_name, raw_engine in engines_raw.items():
         if not isinstance(raw_engine, dict):
             continue
@@ -6330,6 +6348,12 @@ def load_model_identity_registry(path: Path | None = None) -> ModelIdentityRegis
                     route_key = model_log_text(value)
                     if route_key:
                         pending_noncanonical.append((engine, model_key, route_key))
+            raw_report_aliases = raw_model.get("report_aliases", [])
+            if isinstance(raw_report_aliases, list):
+                for value in raw_report_aliases:
+                    report_alias = model_log_text(value)
+                    if report_alias:
+                        report_aliases[(engine, report_alias)] = model_key
     noncanonical_routes: dict[tuple[str, str], NoncanonicalRoute] = {}
     for canonical_engine, canonical_model_key, route_key in pending_noncanonical:
         route_engine, separator, route_model_key = route_key.partition(":")
@@ -6345,7 +6369,13 @@ def load_model_identity_registry(path: Path | None = None) -> ModelIdentityRegis
             canonical_model_key=canonical_model_key,
             identity=canonical_identity,
         )
-    return ModelIdentityRegistry(identities, defaults, engine_meta, noncanonical_routes)
+    return ModelIdentityRegistry(
+        identities,
+        defaults,
+        engine_meta,
+        noncanonical_routes,
+        report_aliases,
+    )
 
 
 def noncanonical_route_findings(
@@ -6412,6 +6442,82 @@ def row_identity_fields(row: dict[str, Any], registry: ModelIdentityRegistry) ->
     }
 
 
+INVOCATION_EVIDENCE_LABELS = {
+    "reported-match": "reported match",
+    "reported": "harness reported",
+    "pinned": "pinned request",
+    "legacy": "legacy label",
+    "unattributed": "unattributed",
+    "reported-mismatch": "reported mismatch",
+    "mixed": "mixed evidence",
+}
+
+
+def row_invocation_evidence(
+    row: dict[str, Any], registry: ModelIdentityRegistry
+) -> dict[str, str]:
+    """Describe how an attempt's model identity was established."""
+    model = model_log_text(row.get("model"))
+    requested = model_log_text(row.get("expected_model"))
+    reported = model_log_text(row.get("reported_model"))
+    if not model:
+        status = "unattributed"
+    elif reported and requested:
+        status = (
+            "reported-match"
+            if registry.model_keys_equivalent(model_log_row_engine(row), reported, requested)
+            else "reported-mismatch"
+        )
+    elif reported:
+        status = "reported"
+    elif requested:
+        status = "pinned"
+    else:
+        status = "legacy"
+    return {
+        "status": status,
+        "label": INVOCATION_EVIDENCE_LABELS[status],
+        "requested": requested,
+        "reported": reported,
+    }
+
+
+def invocation_evidence_summary(
+    entries: list[dict[str, str]], *, reasoning_effort: str | None
+) -> dict[str, Any]:
+    """Aggregate exact requested/reported labels without overstating proof."""
+    counts: dict[str, int] = {}
+    requested = sorted({item["requested"] for item in entries if item["requested"]})
+    reported = sorted({item["reported"] for item in entries if item["reported"]})
+    for item in entries:
+        status = item["status"]
+        counts[status] = counts.get(status, 0) + 1
+    status = next(iter(counts)) if len(counts) == 1 else "mixed"
+    label = INVOCATION_EVIDENCE_LABELS[status]
+    if reasoning_effort:
+        label = f"{label} · {reasoning_effort}"
+    detail_parts = [
+        ", ".join(
+            f"{count} {INVOCATION_EVIDENCE_LABELS[key]}"
+            for key, count in sorted(counts.items())
+        )
+    ]
+    if requested:
+        detail_parts.append("requested: " + ", ".join(requested))
+    if reported:
+        detail_parts.append("reported: " + ", ".join(reported))
+    if reasoning_effort:
+        detail_parts.append("effort: " + reasoning_effort)
+    return {
+        "invocation_evidence": status,
+        "invocation_label": label,
+        "invocation_detail": "; ".join(part for part in detail_parts if part),
+        "requested_models": requested,
+        "reported_models": reported,
+        "invocation_evidence_counts": counts,
+    }
+
+
 def task_final_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     finals: list[dict[str, Any]] = []
     for task_rows in group_model_log_tasks(rows):
@@ -6437,6 +6543,7 @@ def enrich_model_groups_with_identity(
 ) -> list[dict[str, Any]]:
     catalog_by_id = catalog_models_by_id(catalog_models or [])
     identity_rows: dict[tuple[Any, ...], dict[str, Any]] = {}
+    invocation_rows: dict[tuple[Any, ...], list[dict[str, str]]] = {}
     latest: dict[tuple[Any, ...], str] = {}
     for row in task_final_rows(rows):
         if model_log_row_is_reserved_fixture(row):
@@ -6461,6 +6568,9 @@ def enrich_model_groups_with_identity(
                     catalog_identity_fields(model_log_text(row.get("model")), catalog_by_id)
                 )
             identity_rows[key] = identity
+        invocation_rows.setdefault(key, []).append(
+            row_invocation_evidence(row, registry)
+        )
     enriched: list[dict[str, Any]] = []
     for group in groups:
         key = (
@@ -6497,6 +6607,22 @@ def enrich_model_groups_with_identity(
                 },
             )
         )
+        item.update(
+            invocation_evidence_summary(
+                invocation_rows.get(
+                    key,
+                    [
+                        {
+                            "status": "unattributed" if item.get("unattributed") else "legacy",
+                            "label": "",
+                            "requested": "",
+                            "reported": "",
+                        }
+                    ],
+                ),
+                reasoning_effort=item.get("reasoning_effort"),
+            )
+        )
         if item.get("unregistered") and str(item.get("model") or "").startswith("openrouter/"):
             if item.get("model_display") == item.get("model"):
                 item["model_display"] = short_model_name(item.get("model"))
@@ -6507,7 +6633,11 @@ def enrich_model_groups_with_identity(
             # The aggregation helper retains the engine as a legacy grouping key.
             # Public payloads must not expose harness branding as a model identity.
             item["model"] = ""
-        if item.get("unattributed") or item.get("misrouted"):
+        if (
+            item.get("unattributed")
+            or item.get("misrouted")
+            or "reported-mismatch" in item.get("invocation_evidence_counts", {})
+        ):
             item["tier"] = "unranked"
         elif "tier" not in item:
             item["tier"] = model_scoreboard_tier(
@@ -7073,7 +7203,7 @@ def load_identity_registry_from_db(conn: Any) -> ModelIdentityRegistry:
             confidence="engine",
             source="",
         )
-    return ModelIdentityRegistry(identities, defaults, engine_meta, {})
+    return ModelIdentityRegistry(identities, defaults, engine_meta, {}, {})
 
 
 def db_attempt_rows(
@@ -8152,6 +8282,8 @@ def render_model_table_pair(
     lab = str(row.get("lab") or "(unknown)")
     harness = str(row.get("harness") or "unknown")
     access = str(row.get("access") or "unknown")
+    invocation_label = str(row.get("invocation_label") or "legacy label")
+    invocation_detail = str(row.get("invocation_detail") or invocation_label)
     last_verified = str(row.get("last_verified") or "")
     notes = list(row.get("notes") or model_judgment_notes_for_row(row, notes_sections))
     latest_note = str(
@@ -8188,6 +8320,7 @@ def render_model_table_pair(
       <td>{html_escape(lab)}{verified_date}</td>
       <td>{html_escape(harness)}</td>
       <td>{html_escape(access)}</td>
+      <td title="{html_escape(invocation_detail)}">{html_escape(invocation_label)}</td>
       <td><span class="tier-badge {html_escape(tier)}">{html_escape(tier_display)}</span></td>
       <td class="num">{fmt_int(row.get("tasks"))}</td>
       <td class="num rate-cell">{rate_cell_html(row.get("first_try_pass_rate"))}</td>
@@ -8198,7 +8331,7 @@ def render_model_table_pair(
       <td class="notes-cell" title="{html_escape(notes_title)}">{html_escape(latest_note)}</td>
     </tr>
     <tr class="detail-row">
-      <td colspan="12">
+      <td colspan="13">
         <details class="model-detail">
           <summary>details for {html_escape(model_display)}</summary>
           <div class="detail-content">
@@ -8247,7 +8380,7 @@ def render_model_scoreboard_html(
         )
     table_rows = "".join(rendered_rows)
     if not table_rows:
-        table_rows = '<tr><td colspan="12" class="muted">No local model evidence matched these filters.</td></tr>'
+        table_rows = '<tr><td colspan="13" class="muted">No local model evidence matched these filters.</td></tr>'
     unregistered_slugs = sorted(
         {str(row.get("model") or "") for row in ordered if row.get("unregistered") and row.get("model")}
     )
@@ -8303,7 +8436,8 @@ def render_model_scoreboard_html(
             <th>Lab</th>
             <th>Harness</th>
             <th>API/Plan</th>
-            <th>Tier</th>
+            <th>Invocation</th>
+            <th>Performance</th>
             <th class="num">Tasks</th>
             <th class="num">First try</th>
             <th class="num">Pass</th>
@@ -8318,7 +8452,7 @@ def render_model_scoreboard_html(
     </div>
   </main>
   <footer class="scoreboard-footer">
-    <span>{fmt_int(rows_read)} rows read, {fmt_int(skipped)} skipped lines. Ordering sorts by evidence tier first: proven n&gt;=3, then probation; ties use first-try pass rate and pass rate. Misrouted and unattributed legacy rows are not ranked or tiered.</span>
+    <span>{fmt_int(rows_read)} rows read, {fmt_int(skipped)} skipped lines. Performance "proven" means n&gt;=3 with at least two-thirds first-try passes; it does not prove model routing. Invocation separately shows harness-reported, pinned-only, legacy, unattributed, or mismatch evidence plus explicit effort. Misrouted, mismatched, and unattributed rows are not ranked.</span>
     {unregistered_pointer}
     {misrouted_pointer}
   </footer>
@@ -8371,7 +8505,7 @@ def write_model_scoreboard_html(
 
 def print_model_log_table(path: Path, rows_read: int, skipped: int, groups: list[dict[str, Any]]) -> None:
     print(f"Model log: {path} ({rows_read} rows, {skipped} skipped lines)")
-    widths = (32, 20, 18, 18, 10, 7, 10, 7, 15, 14, 14, 60)
+    widths = (32, 20, 18, 18, 24, 12, 7, 10, 7, 15, 14, 14, 60)
     header = " | ".join(
         f"{name:<{width}}" for name, width in zip(MODEL_SCOREBOARD_COLUMNS, widths)
     )
@@ -8400,6 +8534,7 @@ def print_model_log_table(path: Path, rows_read: int, skipped: int, groups: list
             str(group.get("lab") or "(unknown)"),
             str(group.get("harness") or "unknown"),
             str(group.get("access") or "unknown"),
+            str(group.get("invocation_label") or "legacy label"),
             "not ranked" if group.get("tier") == "unranked" else str(group.get("tier") or ""),
             fmt_int(group.get("tasks")),
             fmt_percent(group.get("first_try_pass_rate")),
@@ -8454,6 +8589,7 @@ def build_models_api_payload(
             identity_registry = dataclass_replace(
                 identity_registry,
                 noncanonical_routes=disk_registry.noncanonical_routes,
+                report_aliases=disk_registry.report_aliases,
             )
             catalog_models = db_catalog_models(resolved_db_path)
         except Exception:
@@ -8529,6 +8665,7 @@ def run_models_command(config: AppConfig, args: argparse.Namespace) -> int:
             identity_registry = dataclass_replace(
                 identity_registry,
                 noncanonical_routes=disk_registry.noncanonical_routes,
+                report_aliases=disk_registry.report_aliases,
             )
             skipped = sync_result.skipped
             catalog_models_from_db = db_catalog_models(db_path)
@@ -9176,9 +9313,28 @@ class RingerRunner:
             runtime.last_worker_command,
         )
         reported_model = model_log_text(worker.reported_model) or None
-        mismatch = bool(reported_model and resolved_model and reported_model != resolved_model)
-        stamped_model = reported_model or resolved_model
-        expected_model = resolved_model if mismatch else None
+        identity_registry = load_model_identity_registry()
+        reported_matches = bool(
+            reported_model
+            and resolved_model
+            and identity_registry.model_keys_equivalent(
+                runtime.task.engine,
+                reported_model,
+                resolved_model,
+            )
+        )
+        mismatch = bool(reported_model and resolved_model and not reported_matches)
+        # Keep the selectable/requested key as the aggregation identity when a
+        # harness reports an equivalent backend or billing alias. The raw
+        # report remains in reported_model for audit and UI provenance.
+        stamped_model = (
+            resolved_model
+            if reported_matches
+            else (reported_model or resolved_model)
+        )
+        # This field is the requested invocation, not merely a mismatch aid.
+        # Older rows leave it null and are deliberately labeled legacy.
+        expected_model = resolved_model or None
         if mismatch:
             with contextlib.suppress(Exception):
                 append_text(
@@ -9475,15 +9631,28 @@ def effective_model_from_command(command: list[str]) -> str:
 
 def effective_reasoning_effort_from_command(command: list[str]) -> str | None:
     """Return an explicitly configured model reasoning effort from worker argv."""
-    for item in command:
+    effort: str | None = None
+    value_flags = {"--effort", "--reasoning-effort", "--variant"}
+    for index, item in enumerate(command):
+        if item in value_flags and index + 1 < len(command):
+            candidate = command[index + 1].strip()
+            if candidate:
+                effort = candidate
+            continue
+        for flag in value_flags:
+            if item.startswith(flag + "="):
+                candidate = item.removeprefix(flag + "=").strip()
+                if candidate:
+                    effort = candidate
         match = re.search(
             r"(?:^|[=,\s])model_reasoning_effort\s*=\s*[\"']?([^\"',\s]+)",
             item,
         )
         if match:
-            effort = match.group(1).strip()
-            return effort or None
-    return None
+            candidate = match.group(1).strip()
+            if candidate:
+                effort = candidate
+    return effort
 
 
 def resolved_task_model(

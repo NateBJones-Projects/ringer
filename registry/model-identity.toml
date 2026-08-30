@@ -40,21 +40,40 @@ confidence = "verified"
 source = "https://developers.openai.com/codex/models"
 last_verified = 2026-07-10
 
+[engines.claude]
+harness = "Claude Code"
+access = "Claude.ai OAuth"
+default_model_key = "claude-opus-5"
+
+[engines.claude.models."claude-opus-5"]
+display = "Claude Opus 5"
+lab = "Anthropic"
+confidence = "verified"
+source = "https://platform.claude.com/docs/en/about-claude/models/overview"
+last_verified = 2026-08-19
+
 [engines.grok]
 harness = "Grok Build CLI"
 access = "OAuth plan"
-default_model_key = "grok-build"
+default_model_key = "grok-4.6"
 
-[engines.grok.models."grok-build"]
-# "Grok Build" is the HARNESS (the CLI product), never a model name. The CLI
-# serves exactly two models: Grok 4.5 (xAI) and Composer 2.5 (Cursor). The
-# 'grok-build' engine default resolves to Grok 4.5. An earlier entry here
-# wrongly recorded "Grok Build 0.1" as a model — do not reintroduce it.
+[engines.grok.models."grok-4.6"]
+display = "Grok 4.6"
+lab = "xAI"
+confidence = "verified"
+source = "Grok Build CLI 1.0.4 local model catalog plus headless modelUsage; https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/14-headless-mode.md"
+last_verified = 2026-08-19
+# The CLI accepts grok-4.6 as its selectable model ID but reports this backend
+# usage key in its final JSON. Both raw values remain visible in attempt data.
+report_aliases = ["grok-4.6-build"]
+
+[engines.grok.models."grok-4.5"]
 display = "Grok 4.5"
 lab = "xAI"
-confidence = "verified"     # operator-confirmed (Jon, 2026-07-10): Grok Build CLI serves Grok 4.5 + Composer 2.5
-source = "https://docs.x.ai/developers/release-notes"
-last_verified = 2026-07-10
+confidence = "verified"
+source = "https://docs.x.ai/build/overview"
+last_verified = 2026-08-19
+report_aliases = ["grok-4.5-build"]
 noncanonical_slugs = ["opencode:openrouter/x-ai/grok-4.5"]
 
 [engines.grok.models."grok-composer-2.5-fast"]
@@ -63,6 +82,18 @@ lab = "Cursor (Anysphere)"
 confidence = "verified"     # Cursor (Anysphere) model, served through xAI's Grok Build CLI in our setup
 source = "https://cursor.com/blog/composer-2-5"
 last_verified = 2026-07-10
+
+[engines.fugu]
+harness = "Codex CLI"
+access = "Sakana API"
+default_model_key = "fugu-ultra"
+
+[engines.fugu.models."fugu-ultra"]
+display = "Fugu Ultra"
+lab = "Sakana AI"
+confidence = "verified"
+source = "https://console.sakana.ai/get-started"
+last_verified = 2026-08-19
 
 [engines.opencode]
 harness = "OpenCode"
