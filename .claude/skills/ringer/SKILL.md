@@ -202,7 +202,9 @@ Pattern-selection judgment:
   your own having seen the prior art.
 - **Review before fix.** Run a read-only review swarm, read the reports
   yourself, then compile the confirmed findings into a fix-swarm manifest.
-  Don't let the same worker find and fix.
+  Don't let the same worker find and fix. When the reviewer can be decided up
+  front, `depends_on` (below) puts both stages in ONE manifest so you aren't
+  sitting between them waiting to launch the second.
 - **Personas must be separate workers.** Parallel personas in one context
   bleed into each other. One persona per task, one session dir per task.
 - **Iterating on a prompt/product? Re-run the same panel.** A fixed persona
@@ -213,6 +215,40 @@ Pattern-selection judgment:
   and a validator as the check. Diagnosing a failed worker's output is a
   read-only scout task. If it calls a model, it runs under Ringer — that is
   what makes it visible, verified, and logged.
+
+## Staged tasks: `depends_on`
+
+A task can name prerequisites that must all PASS before it becomes eligible:
+
+```json
+{"key": "schema-qc", "depends_on": ["schema-producer"], "engine": "opencode"}
+```
+
+Use it when the second stage is decidable up front — producer then QC, build
+then audit, draft then persona panel. It buys you one thing: you stop being the
+thing that notices stage one finished and launches stage two.
+
+- **A failed prerequisite SKIPS its dependent.** No worker is launched, no
+  attempt is consumed, and no eval row is written — the reviewer never runs
+  against work that didn't build, and the scoreboard doesn't get a row for a
+  model that never saw the task. `blocked_by` names what stopped it, and
+  skips propagate down the chain.
+- **Waiting happens before the concurrency slot**, so a two-stage manifest at
+  `max_parallel: 1` runs stage one then stage two instead of deadlocking.
+- **A prerequisite isn't terminal until its retries finish.** Fails attempt 1,
+  passes attempt 2 — the dependent runs.
+- **It is a CONTROL dependency, not a data one.** Nothing flows between tasks
+  automatically. In worktrees mode a passing task's worktree is DELETED before
+  its dependent starts, so anything the dependent needs must be exported by the
+  producer's *check* to a durable path outside the worktree, and the dependent's
+  spec must name that exact path. This is the mistake to expect: a QC task that
+  says "review the patch" without saying where the patch is will review nothing.
+- **Don't stage what doesn't need it.** Independent tasks should stay
+  independent — dependencies serialize work that could have run in parallel.
+
+Cycles, self-dependencies, unknown keys, duplicates and malformed values are
+rejected when the manifest is parsed, so `lint` catches a bad graph before any
+worker spawns.
 
 ## Engine selection
 
