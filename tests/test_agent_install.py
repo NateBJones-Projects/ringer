@@ -10,6 +10,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+AGENT_SKILLS = ("ringer", "amazon-pr-faq")
 
 
 class AgentInstallTests(unittest.TestCase):
@@ -54,13 +55,33 @@ class AgentInstallTests(unittest.TestCase):
                         handlers.append(handler)
         return handlers
 
-    def test_fresh_install_creates_skill_copy_and_hook_entries(self) -> None:
+    def assert_skill_trees_match(self, claude_root: Path) -> None:
+        for skill_name in AGENT_SKILLS:
+            source = ROOT / ".claude" / "skills" / skill_name
+            target = claude_root / "skills" / skill_name
+            source_files = sorted(
+                path.relative_to(source)
+                for path in source.rglob("*")
+                if path.is_file()
+            )
+            target_files = sorted(
+                path.relative_to(target)
+                for path in target.rglob("*")
+                if path.is_file()
+            )
+            self.assertEqual(source_files, target_files)
+            for relative in source_files:
+                self.assertEqual(
+                    (source / relative).read_bytes(),
+                    (target / relative).read_bytes(),
+                    f"installed {skill_name}/{relative} differs from its bundle",
+                )
+
+    def test_fresh_install_copies_both_complete_skills_and_hook_entries(self) -> None:
         result = self.run_cli("install-agent")
         self.assertEqual(0, result.returncode, result.stderr)
 
-        skill = self.home / ".claude" / "skills" / "ringer" / "SKILL.md"
-        self.assertTrue(skill.exists())
-        self.assertEqual((ROOT / ".claude" / "skills" / "ringer" / "SKILL.md").read_text(), skill.read_text())
+        self.assert_skill_trees_match(self.home / ".claude")
 
         settings = self.read_settings()
         hooks = settings["hooks"]
@@ -84,10 +105,42 @@ class AgentInstallTests(unittest.TestCase):
 
         self.assertEqual(settings_before, settings_after)
         self.assertEqual(2, len(self.ringer_handlers(settings_after)))
+        self.assert_skill_trees_match(self.home / ".claude")
+        self.assertEqual(
+            [],
+            list((self.home / ".claude").glob("settings.json.bak-*")),
+        )
+
+    def test_reinstall_replaces_owned_trees_and_preserves_unrelated_skill(self) -> None:
+        first = self.run_cli("install-agent")
+        self.assertEqual(0, first.returncode, first.stderr)
+
+        claude = self.home / ".claude"
+        stale_files = []
+        for skill_name in AGENT_SKILLS:
+            stale = claude / "skills" / skill_name / "stale-owned-file.txt"
+            stale.write_text("remove this stale owned file\n", encoding="utf-8")
+            stale_files.append(stale)
+        unrelated_skill = claude / "skills" / "keep-me" / "SKILL.md"
+        unrelated_skill.parent.mkdir(parents=True)
+        unrelated_skill.write_text("keep this skill\n", encoding="utf-8")
+
+        second = self.run_cli("install-agent")
+        self.assertEqual(0, second.returncode, second.stderr)
+
+        self.assertTrue(all(not path.exists() for path in stale_files))
+        self.assertEqual(
+            "keep this skill\n",
+            unrelated_skill.read_text(encoding="utf-8"),
+        )
+        self.assert_skill_trees_match(claude)
 
     def test_install_preserves_unrelated_hooks_and_settings_keys(self) -> None:
         claude = self.home / ".claude"
         claude.mkdir()
+        unrelated_skill = claude / "skills" / "keep-me" / "SKILL.md"
+        unrelated_skill.parent.mkdir(parents=True)
+        unrelated_skill.write_text("keep this skill\n", encoding="utf-8")
         settings_path = claude / "settings.json"
         settings_path.write_text(
             json.dumps(
@@ -120,10 +173,63 @@ class AgentInstallTests(unittest.TestCase):
         commands = [handler["command"] for group in pre_groups for handler in group["hooks"]]
         self.assertIn("echo unrelated", commands)
         self.assertEqual(1, len(list(claude.glob("settings.json.bak-*"))))
+        self.assertEqual("keep this skill\n", unrelated_skill.read_text(encoding="utf-8"))
+        self.assert_skill_trees_match(claude)
 
-    def test_uninstall_removes_only_ringer_entries_and_skill_dir(self) -> None:
+    def test_install_and_uninstall_preserve_ringer_nudge_lookalike(self) -> None:
+        claude = self.home / ".claude"
+        claude.mkdir()
+        lookalike = "python3 /unrelated/ringer_nudge.py audit"
+        settings_path = claude / "settings.json"
+        settings_path.write_text(
+            json.dumps(
+                {
+                    "hooks": {
+                        "PreToolUse": [
+                            {
+                                "matcher": "Bash",
+                                "hooks": [
+                                    {"type": "command", "command": lookalike}
+                                ],
+                            }
+                        ]
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
         install = self.run_cli("install-agent")
         self.assertEqual(0, install.returncode, install.stderr)
+        installed = self.read_settings()
+        commands = [
+            handler["command"]
+            for groups in installed["hooks"].values()
+            for group in groups
+            for handler in group["hooks"]
+        ]
+        self.assertIn(lookalike, commands)
+        self.assertEqual(3, len(commands))
+
+        uninstall = self.run_cli("uninstall-agent")
+        self.assertEqual(0, uninstall.returncode, uninstall.stderr)
+        after = self.read_settings()
+        remaining = [
+            handler["command"]
+            for groups in after["hooks"].values()
+            for group in groups
+            for handler in group["hooks"]
+        ]
+        self.assertEqual([lookalike], remaining)
+
+    def test_uninstall_removes_only_owned_hooks_and_both_skill_dirs(self) -> None:
+        install = self.run_cli("install-agent")
+        self.assertEqual(0, install.returncode, install.stderr)
+        unrelated_skill = (
+            self.home / ".claude" / "skills" / "keep-me" / "SKILL.md"
+        )
+        unrelated_skill.parent.mkdir(parents=True)
+        unrelated_skill.write_text("keep this skill\n", encoding="utf-8")
         settings_path = self.home / ".claude" / "settings.json"
         settings = self.read_settings()
         settings["hooks"]["PreToolUse"].append(
@@ -152,22 +258,38 @@ class AgentInstallTests(unittest.TestCase):
             for handler in group["hooks"]
         ]
         self.assertEqual(["echo keep-me"], kept)
-        self.assertFalse((self.home / ".claude" / "skills" / "ringer").exists())
+        for skill_name in AGENT_SKILLS:
+            self.assertFalse(
+                (self.home / ".claude" / "skills" / skill_name).exists()
+            )
+        self.assertEqual("keep this skill\n", unrelated_skill.read_text(encoding="utf-8"))
 
     def test_project_variant_writes_under_temp_cwd(self) -> None:
         project = Path(self.tmp.name) / "project"
         project.mkdir()
         os.symlink(ROOT / "ringer.py", project / "ringer.py")
+        unrelated_skill = project / ".claude" / "skills" / "keep-me" / "SKILL.md"
+        unrelated_skill.parent.mkdir(parents=True)
+        unrelated_skill.write_text("keep this project skill\n", encoding="utf-8")
 
         install = self.run_cli("install-agent", "--project", cwd=project)
         self.assertEqual(0, install.returncode, install.stderr)
-        self.assertTrue((project / ".claude" / "skills" / "ringer" / "SKILL.md").exists())
+        self.assert_skill_trees_match(project / ".claude")
         self.assertTrue((project / ".claude" / "settings.json").exists())
         self.assertFalse((self.home / ".claude").exists())
 
+        second = self.run_cli("install-agent", "--project", cwd=project)
+        self.assertEqual(0, second.returncode, second.stderr)
+        self.assert_skill_trees_match(project / ".claude")
+
         uninstall = self.run_cli("uninstall-agent", "--project", cwd=project)
         self.assertEqual(0, uninstall.returncode, uninstall.stderr)
-        self.assertFalse((project / ".claude" / "skills" / "ringer").exists())
+        for skill_name in AGENT_SKILLS:
+            self.assertFalse((project / ".claude" / "skills" / skill_name).exists())
+        self.assertEqual(
+            "keep this project skill\n",
+            unrelated_skill.read_text(encoding="utf-8"),
+        )
         settings = self.read_settings(project)
         self.assertEqual([], self.ringer_handlers(settings))
 
