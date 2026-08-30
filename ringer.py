@@ -1762,6 +1762,12 @@ class Manifest:
         if duplicates:
             raise ValueError(f"duplicate task keys: {', '.join(duplicates)}")
         worktrees = bool(obj.get("worktrees", False))
+        if worktrees and repo is None:
+            raise ValueError(
+                "worktrees: true requires a manifest-level 'repo' - without it no "
+                "worktrees are created and every worker starts in an empty taskdir "
+                "(the checks then fail with 'Not a git repository')"
+            )
         if worktrees:
             reserved_logs_dir = (workdir / "logs").resolve()
             collisions = []

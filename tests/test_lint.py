@@ -313,3 +313,38 @@ class LintManifestTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestWorktreesRequireRepo(unittest.TestCase):
+    """worktrees: true without a manifest-level repo used to silently no-op:
+    no worktrees were created, every worker started in an empty taskdir, and
+    the failure surfaced as check errors that looked like worker faults
+    (2026-08-19, two runs lost to it). It must refuse at parse time."""
+
+    def _obj(self, **overrides):
+        obj = {
+            "run_name": "wt-guard",
+            "workdir": "/tmp/wt-guard",
+            "worktrees": True,
+            "repo": "/tmp/some-repo",
+            "tasks": [{
+                "key": "t1",
+                "spec": "do the thing",
+                "check": "true",
+                "verified": "it happened",
+            }],
+        }
+        obj.update(overrides)
+        return obj
+
+    def test_worktrees_without_repo_is_a_parse_error(self):
+        obj = self._obj()
+        del obj["repo"]
+        with self.assertRaises(ValueError) as ctx:
+            Manifest.from_obj(obj)
+        self.assertIn("repo", str(ctx.exception))
+
+    def test_worktrees_with_repo_parses(self):
+        manifest = Manifest.from_obj(self._obj())
+        self.assertTrue(manifest.worktrees)
+        self.assertIsNotNone(manifest.repo)
