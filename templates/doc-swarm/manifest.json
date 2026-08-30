@@ -12,6 +12,7 @@
         "{{DOCS_DIR}}/{{DOC_FILE}}"
       ],
       "timeout_s": 1800,
+      "check_timeout_s": 1800,
       "verified": "the doc has the required sections and substance, documented symbols exist in source, and every configured runnable example executes"
     }
   ]
