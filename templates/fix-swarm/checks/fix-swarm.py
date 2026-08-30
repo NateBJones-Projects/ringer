@@ -131,9 +131,27 @@ def main() -> int:
                 )
             )
 
-    add_result = run_git(["add", "-A"])
-    if add_result.returncode != 0:
-        failures.append(fail("git_add_failed", output_tail(add_result.stdout)))
+    if "*" in owned_files:
+        add_result = run_git(["add", "-A"])
+        if add_result.returncode != 0:
+            failures.append(fail("git_add_failed", output_tail(add_result.stdout)))
+    else:
+        # Stage tracked-file modifications (so out-of-lane edits to existing
+        # files still get caught by the owned-files check below) plus any
+        # new files under the owned paths. Deliberately does NOT `add -A`:
+        # worker/check subprocesses can leave untracked debris in the
+        # worktree (e.g. a sandboxed pytest run falling back to cwd for its
+        # basetemp) that has nothing to do with the agent's actual diff.
+        add_u_result = run_git(["add", "-u"])
+        if add_u_result.returncode != 0:
+            failures.append(fail("git_add_failed", output_tail(add_u_result.stdout)))
+        # Only pass owned paths that actually exist: `git add -- <path>` hard-fails
+        # ("did not match any files") for a declared-but-untouched owned path.
+        existing_owned = [item for item in owned_files if Path(item).exists()]
+        if existing_owned:
+            add_owned_result = run_git(["add", "--"] + existing_owned)
+            if add_owned_result.returncode != 0:
+                failures.append(fail("git_add_failed", output_tail(add_owned_result.stdout)))
 
     if not args.summary.is_absolute() and args.summary.exists():
         run_git(["reset", "--quiet", "--", str(args.summary)])
