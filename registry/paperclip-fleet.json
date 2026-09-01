@@ -1,0 +1,1532 @@
+{
+  "synced_at": "2026-07-11T18:11:29.576768+00:00",
+  "source": {
+    "surface": "paperclip",
+    "url": "http://127.0.0.1:3100",
+    "company_id": "87c32b8e-f131-4df8-ad8e-963d01b458e7",
+    "company": "jack.digital"
+  },
+  "doctrine": "Paperclip issues are the Ringer manifest source; Ringer is a check-gate layer over Paperclip (decision hermes-6ax).",
+  "totals": {
+    "issues": 2493,
+    "by_status": {
+      "blocked": 12,
+      "done": 1837,
+      "in_progress": 90,
+      "todo": 40,
+      "cancelled": 508,
+      "backlog": 4,
+      "in_review": 2
+    },
+    "actionable": 144,
+    "projects": 4
+  },
+  "projects": [
+    {
+      "id": null,
+      "name": "(company-level / unassigned)",
+      "urlKey": null,
+      "status": null,
+      "repoUrl": null,
+      "issue_counts": {
+        "blocked": 11,
+        "done": 1827,
+        "todo": 35,
+        "cancelled": 508,
+        "backlog": 3,
+        "in_review": 2,
+        "in_progress": 89
+      },
+      "actionable": 137
+    },
+    {
+      "id": "f99704da-43b5-4cf7-89ef-13f59a348d90",
+      "name": "Agentic OS",
+      "urlKey": "agentic-os",
+      "status": "in_progress",
+      "repoUrl": null,
+      "issue_counts": {
+        "todo": 4,
+        "done": 1,
+        "backlog": 1
+      },
+      "actionable": 4
+    },
+    {
+      "id": "3edbceaa-842b-4cbd-8a2d-a06b9264db86",
+      "name": "Sea Ranch AI",
+      "urlKey": "sea-ranch-ai",
+      "status": "planned",
+      "repoUrl": "https://github.com/jar-reis/sea-ranch-ai",
+      "issue_counts": {
+        "done": 8,
+        "blocked": 1,
+        "todo": 1
+      },
+      "actionable": 2
+    },
+    {
+      "id": "60bf492f-74ce-4084-83c9-d80c5f8bfaa9",
+      "name": "Onboarding",
+      "urlKey": "onboarding",
+      "status": "in_progress",
+      "repoUrl": null,
+      "issue_counts": {
+        "in_progress": 1,
+        "done": 1
+      },
+      "actionable": 1
+    },
+    {
+      "id": "97c2505c-53bb-4975-964f-0a5f6780b419",
+      "name": "Echo Springs",
+      "urlKey": "echo-springs",
+      "status": "in_progress",
+      "repoUrl": null,
+      "issue_counts": {},
+      "actionable": 0
+    }
+  ],
+  "actionable_issues": [
+    {
+      "identifier": "JAC-2447",
+      "title": "Get 2009 Prius fixed in Ardmore, OK",
+      "status": "blocked",
+      "priority": "critical",
+      "project": null,
+      "needs_human_action": true,
+      "attention_state": "needs_attention",
+      "assignee_agent_id": "3fad92dc-255f-4223-8899-ce8516a1c99e"
+    },
+    {
+      "identifier": "JAC-3300",
+      "title": "Trace Cloudflare MCP OAuth requester and centralize human-action visibility",
+      "status": "blocked",
+      "priority": "critical",
+      "project": null,
+      "needs_human_action": true,
+      "attention_state": "needs_attention",
+      "assignee_agent_id": "dc2ca597-dd20-4a73-9fd3-8bef3da92ea9"
+    },
+    {
+      "identifier": "JAC-3250",
+      "title": "[hermes-puq] Sea Ranch: Dad-facing triads \u2014 republish blog batch + v9 proposal",
+      "status": "blocked",
+      "priority": "high",
+      "project": "Sea Ranch AI",
+      "needs_human_action": true,
+      "attention_state": "needs_attention",
+      "assignee_agent_id": "dc2ca597-dd20-4a73-9fd3-8bef3da92ea9"
+    },
+    {
+      "identifier": "JAC-2657",
+      "title": "AIEC Codex: Subagents Pattern",
+      "status": "blocked",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": true,
+      "attention_state": "needs_attention",
+      "assignee_agent_id": "dc2ca597-dd20-4a73-9fd3-8bef3da92ea9"
+    },
+    {
+      "identifier": "JAC-2667",
+      "title": "AIEC Workflow: Postmortem (Root Cause Analysis)",
+      "status": "blocked",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": true,
+      "attention_state": "needs_attention",
+      "assignee_agent_id": "dc2ca597-dd20-4a73-9fd3-8bef3da92ea9"
+    },
+    {
+      "identifier": "JAC-2669",
+      "title": "AIEC Workflow: Red Team Parallel Analysis",
+      "status": "blocked",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": true,
+      "attention_state": "needs_attention",
+      "assignee_agent_id": "dc2ca597-dd20-4a73-9fd3-8bef3da92ea9"
+    },
+    {
+      "identifier": "JAC-2700",
+      "title": "Fleet inventory audit: verify all nodes have rbitr + beads",
+      "status": "blocked",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": true,
+      "attention_state": "needs_attention",
+      "assignee_agent_id": "dc2ca597-dd20-4a73-9fd3-8bef3da92ea9"
+    },
+    {
+      "identifier": "JAC-2742",
+      "title": "Prompt Kit: New RAG War Not Vectors Prompt Kit",
+      "status": "blocked",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": true,
+      "attention_state": "needs_attention",
+      "assignee_agent_id": "dc2ca597-dd20-4a73-9fd3-8bef3da92ea9"
+    },
+    {
+      "identifier": "JAC-2749",
+      "title": "Prompt Kit: Working with AI agents makes you a better communicator - edit Prompt Kit",
+      "status": "blocked",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": true,
+      "attention_state": "needs_attention",
+      "assignee_agent_id": "dc2ca597-dd20-4a73-9fd3-8bef3da92ea9"
+    },
+    {
+      "identifier": "JAC-3267",
+      "title": "Founder Cockpit: Update stale fleet marker and verify data freshness",
+      "status": "blocked",
+      "priority": "low",
+      "project": null,
+      "needs_human_action": true,
+      "attention_state": "needs_attention",
+      "assignee_agent_id": "dc2ca597-dd20-4a73-9fd3-8bef3da92ea9"
+    },
+    {
+      "identifier": "JAC-3271",
+      "title": "Fable 5 Standby: Available for consultation during parallel fleet operations",
+      "status": "blocked",
+      "priority": "low",
+      "project": null,
+      "needs_human_action": true,
+      "attention_state": "needs_attention",
+      "assignee_agent_id": "f1ef5e14-d8d4-4030-9e37-7b4fc764ce3d"
+    },
+    {
+      "identifier": "JAC-3279",
+      "title": "Formalize Full Cycle Science as fleet skill",
+      "status": "blocked",
+      "priority": "low",
+      "project": null,
+      "needs_human_action": true,
+      "attention_state": "needs_attention",
+      "assignee_agent_id": "dc2ca597-dd20-4a73-9fd3-8bef3da92ea9"
+    },
+    {
+      "identifier": "JAC-3301",
+      "title": "Cloudflare MCP OAuth provenance + fleet visibility gate (Beads hermes-jhq)",
+      "status": "in_progress",
+      "priority": "high",
+      "project": "Onboarding",
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": "f1ef5e14-d8d4-4030-9e37-7b4fc764ce3d"
+    },
+    {
+      "identifier": "JAC-3280",
+      "title": "Initiative Map Sync \u2014 All Surfaces (2026-07-09)",
+      "status": "todo",
+      "priority": "high",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-3281",
+      "title": "Fable 5 Review: Initiative Map accuracy + Ringer alignment",
+      "status": "todo",
+      "priority": "high",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-3282",
+      "title": "Analyst-Opus: Ringer check-gate review of Initiative Map",
+      "status": "todo",
+      "priority": "high",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-3288",
+      "title": "Aegis watcher: trigger Hermes on coordination-file change",
+      "status": "todo",
+      "priority": "high",
+      "project": "Agentic OS",
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-3291",
+      "title": "Fleet coordination bus \u2014 file-based vault channel",
+      "status": "todo",
+      "priority": "high",
+      "project": "Agentic OS",
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-3293",
+      "title": "Beads ready-queue triage (2026-07-09): prioritized plan",
+      "status": "todo",
+      "priority": "high",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-3294",
+      "title": "Memory/vault audit (2026-07-09): findings + discrepancies",
+      "status": "todo",
+      "priority": "high",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2279",
+      "title": "Aegis: apply base power-recovery settings (pmset autorestart, FileVault off, auto-login, Remote Login)",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2280",
+      "title": "Harden Aegis power-failure recovery (execute when reachable)",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2282",
+      "title": "Memory-plane sync: verify + close gaps (hindsight/holographic/honcho/OB1/OBn)",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2284",
+      "title": "Fleet memory-layer sync sweep + Paperclip agents rebuild",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2287",
+      "title": "Sally bot answer formatting fix \u2013 diagnose & fix JSON payload",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2288",
+      "title": "Hermes: guard against non-reducing context compression (infinite loop)",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2289",
+      "title": "Execute hermes-agent upstream catch-up plan on Aegis (blue/green cutover)",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2293",
+      "title": "Fleet token-cost + quota observability \u2014 restore/wire CodexBar",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2294",
+      "title": "AAO transfer form \u2014 complete remaining clinician/records sections (Chang to Gerken)",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2295",
+      "title": "Paperclip fan-out: triage ready queue + wave-dispatch agents per bead",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2299",
+      "title": "Fleet address indirection \u2014 kill hardcoded host:port (names-map + MagicDNS + proxy)",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2302",
+      "title": "Fleet systems integration \u2014 Open Engine + Paperclip + OB1 across Aegis/Hermes",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2304",
+      "title": "Host Ollama embedding on Aegis + Cloudflare tunnel for OB1/Supabase (Pattern B)",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2306",
+      "title": "Fleet worker spawn/resume is impossible \u2014 add checkpoint/resume contract",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2312",
+      "title": "Headless Host Acceleration & Thin-Client Topology",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2313",
+      "title": "Jack/Dad approve first checkpoint scope for OB1 re-ingest before full re-embed",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2349",
+      "title": "Arch review Lane 3 (Codex): Dramatis spec, n8n catalog, launchd catalog, permission trace",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2351",
+      "title": "Arch review Lane 1 (Hermes/Wings): runtime substrate \u2192 closed-loop playbook",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2352",
+      "title": "Fleet architecture review \u2014 3 parallel lanes (Hermes / Claude Code / Codex)",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2417",
+      "title": "Open Skills \u00d7 Open Engine completion \u2014 Nate Jones full prescription (cheap-lane dispatchable)",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2418",
+      "title": "Talaris: off-box Aegis heartbeat -> Telegram alert on unreachable",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2419",
+      "title": "Aegis: promote critical services LaunchAgent->LaunchDaemon + vault SoT plists",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2420",
+      "title": "Caliber router skill: integrate with Open Skills + Open Engine (model-agnostic)",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2422",
+      "title": "Beads unification: single SSOT, reconcile stray DBs + aegis dolt remote",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2423",
+      "title": "honcho-local flapping up/down on Aegis (com.hermes.honcho-local)",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2428",
+      "title": "fleet | claude-code | Federate Cloudflare account topology \u2014 canonical account/token/domain/tunnel map (fix cross-account deploy ambiguity)",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2429",
+      "title": "sea-ranch | claude-code | Consolidate Sally surfaces (retire dead FastAPI + stale tunnel routes)",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2432",
+      "title": "Repoint codex MCP servers off ollama-cloud provider",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2433",
+      "title": "Felicity \u2014 bounded scheduled memory-curator agent",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2435",
+      "title": "Fleet channel integration: redux Matrix + Discord surfaces",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2436",
+      "title": "AAO form \u00a7Patient identifying fields (page1 blanks)",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2437",
+      "title": "AAO form \u00a7Available Records for Transfer (+dates)",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2438",
+      "title": "AAO form \u00a7Financial",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2439",
+      "title": "AAO form \u00a7Active TX time estimates + Recommendations + Additional comments",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2440",
+      "title": "AAO form \u00a7Patient Cooperation",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2441",
+      "title": "AAO form \u00a7Appliances detail",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2442",
+      "title": "AAO form \u00a7Treatment Plan + Treatment Progress (chronology)",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2443",
+      "title": "AAO form \u00a7Analysis + Special Health/History + Patient concerns",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2444",
+      "title": "Jack-blocked items: human-gated bead queue (auto-generated 2026-07-02)",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2446",
+      "title": "Mission Control: Cross-Model Code Review Lane",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2448",
+      "title": "Ascertain nature of AC joint disconnect (shoulder)",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2449",
+      "title": "Fix Paperclip error agents: Aegis Hermes + local CEO (invalid gemma4:31b model + broken-Hermes window)",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2453",
+      "title": "Take down paperclip.jack.digital (disable com.jackreis.paperclip-tailnet-proxy)",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2454",
+      "title": "Unload laptop Paperclip launchd (ai.paperclip.plist) \u2014 stop retired hub",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2455",
+      "title": "Decommission retired laptop Paperclip hub + lock in Aegis canonical",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2456",
+      "title": "Upgrade fleet notifications \u2192 LibreChat (feasibility + fleet implementation plan)",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2458",
+      "title": "Family Hermes: per-scope full memory stack (holographic+hindsight+Honcho+OB1) + move_scope primitive",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2459",
+      "title": "Paperclip \u2192 receipt evidence integration (gated on consolidation)",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2461",
+      "title": "Fleet architecture map \u2014 Aegis+Hermes (durable doc)",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2462",
+      "title": "[research] Nate Jones Open Engine \u2014 NOT OpenRouter; Linear-based agent handoff framework (correct the switchboard investigation)",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2465",
+      "title": "Repair Sally guest-resources bot launchd supervisor",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2469",
+      "title": "Prune ~1915 orphaned Codex verifier-spam conclusions from local Honcho",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2483",
+      "title": "AIEC: Curated Examples Review (30 items)",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2496",
+      "title": "PAI Steal Everything \u2014 execute 5-plan series (ISA, reasoning skills, adversarial, capability gate, tier-2)",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2514",
+      "title": "Bridge Claude Cloud into local OB1 dual-core memory",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2528",
+      "title": "Migrate claude-telegram-bridge token from plaintext .envrc to SOPS",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2533",
+      "title": "PAI Steal Everything \u2014 execute 5-plan series (ISA, reasoning skills, adversarial, capability gate, tier-2)",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2535",
+      "title": "PT: Execute Telegram Surface Audit (Plan Block B)",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2538",
+      "title": "Commit ~/.hermes nix fixes (web.nix, home.nix, flake.lock)",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2539",
+      "title": "Phase 5: WhatsApp Exec Circle via Beeper",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2543",
+      "title": "[P2] sea-ranch-ai: consolidate guest knowledge into one canonical source",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2563",
+      "title": "PAI Steal: port reasoning + adversarial skills to dancer (Plans 2/3/5)",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2568",
+      "title": "Verify web/package-lock.json change was intentional before finalizing npm hash",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2569",
+      "title": "Commit ~/.hermes nix fixes (web.nix hash, home.nix, flake.lock)",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2588",
+      "title": "[P3] telegram-agent-gateway: reduce duplicated spawn/worktree logic",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2592",
+      "title": "Restore/audit multi-session coordination skill and hooks",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2601",
+      "title": "Scope audit-trail Stop-hook for artifact-bound workflows",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2604",
+      "title": "Apply and verify rbitr Linear routing labels",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2605",
+      "title": "Resolve consensus-skill SKILL.md target before rewriting documentation",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2610",
+      "title": "Prepare MR: Linear inbox and rbitr dispatch sync",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2611",
+      "title": "Integrate GitLab MR !4: pi-vault-bridge",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2628",
+      "title": "Investigate Hindsight plane returning 0 recall results since 2026-06-26",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2629",
+      "title": "sea-ranch | claude-code | Sally static keyword branch mis-routes multi-intent questions (first-match wins)",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2630",
+      "title": "Hermes off-ollama C: add Claude/anthropic provider to hermes_cli",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2631",
+      "title": "Hermes off-ollama B: remove the ollama base_url override",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2632",
+      "title": "Evaluate Perplexity (Sonar API) as a fleet-wide grounded-research lane",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2633",
+      "title": "Reconcile tracked root-stray daily note 20260627.md into canonical + symlink",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2634",
+      "title": "Reconcile gateway/identity roster (verify PI 2nd Telegram user; confirm canonical set)",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2635",
+      "title": "Audit Hermes stuck platform connectors (Slack retrying, WhatsApp disconnected)",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2636",
+      "title": "Company OS 3-layer architecture: add Ontology + Delivery layers to Agentic OS",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2637",
+      "title": "Investigate Mattermost onboarding gap \u2014 fleet gap, unclear status",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2638",
+      "title": "Investigate KimiClaw Android \u2014 fleet gap, purpose and status unclear",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2639",
+      "title": "AIEC Evals: Evals Skill Definition",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2640",
+      "title": "AIEC Evals: AI Evaluation Framework",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2641",
+      "title": "AIEC Agents SDK: State & Scheduling",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2642",
+      "title": "AIEC Agents SDK: MCP Integration",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2643",
+      "title": "AIEC Agents SDK: Streaming Chat (AIChatAgent)",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2644",
+      "title": "AIEC Script: Chroma Key Removal",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2645",
+      "title": "AIEC Script: Skill Installer from GitHub",
+      "status": "in_progress",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2694",
+      "title": "Integration: Execute Goal B Telegram Decision Packet (\u00a72)",
+      "status": "in_review",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": "d4bcfdbe-9ddb-4ecd-b68f-a1aef6ae088d"
+    },
+    {
+      "identifier": "JAC-2734",
+      "title": "Prompt Kit: The Anticipation Gap \u2014 v2 (Editorial Kit) Prompt Kit",
+      "status": "in_review",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": "dc2ca597-dd20-4a73-9fd3-8bef3da92ea9"
+    },
+    {
+      "identifier": "JAC-1",
+      "title": "[ai-dev] session ai-dev",
+      "status": "todo",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-1947",
+      "title": "Get 2009 Prius repaired in Ardmore, OK",
+      "status": "todo",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-1948",
+      "title": "Ascertain nature of AC joint disconnect (shoulder)",
+      "status": "todo",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-1955",
+      "title": "Aegis: wire USB UPS + configure macOS UPS graceful shutdown (HUMAN/hardware)",
+      "status": "todo",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-1959",
+      "title": "infra | any | unify Open Engine + Agentic OS dashboards: one ledger, one window (epic)",
+      "status": "todo",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-1962",
+      "title": "Hermes: move primary off glm-5.2 (ollama-cloud)",
+      "status": "todo",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2046",
+      "title": "Activate nix-darwin config (sudo darwin-rebuild switch)",
+      "status": "todo",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2059",
+      "title": "Deploy OB1 Slack capture Edge Function ingest-thought",
+      "status": "todo",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2075",
+      "title": "Aegis + Pixel session review follow-ups",
+      "status": "todo",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2076",
+      "title": "Migrate stray ~/Documents/.beads issues (Aegis hardening epic jack_reis-ozc + children) into vault DB",
+      "status": "todo",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2080",
+      "title": "spike | pi | eval apple-silicon-openbrain: graft MLX embeddings + LLM enrichment onto Aegis OB1?",
+      "status": "todo",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2083",
+      "title": "Invisalign care transition \u2014 release records from Chang Orthodontics (Belmont CA) to Dr. Gerkins (Ardmore)",
+      "status": "todo",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2087",
+      "title": "Family Hermes: Jack human-only go-live steps (BotFather rename + live DM test)",
+      "status": "todo",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2091",
+      "title": "Activate or retire dormant n8n workflows (4/10 imported, all active:false)",
+      "status": "todo",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2099",
+      "title": "Evaluate paid Devin MCP for private-repo DeepWiki coverage",
+      "status": "todo",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2160",
+      "title": "Phase 6 \u2014 consolidation INDEX",
+      "status": "todo",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2231",
+      "title": "Hermes: session-file sprawl \u2014 compaction spins a new session JSON every turn",
+      "status": "todo",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2241",
+      "title": "Decide final home for orphaned build artifacts in =notes working tree",
+      "status": "todo",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2244",
+      "title": "Supabase credentials needed for OpenBrain1",
+      "status": "todo",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2245",
+      "title": "Drive access: Google Service Account key needed",
+      "status": "todo",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2246",
+      "title": "Token rotation: Telegram bot token exposed in logs",
+      "status": "todo",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2247",
+      "title": "KIMI_DROID: Fleet sync and credential setup",
+      "status": "todo",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2265",
+      "title": "Prompt Kit: Six protocols emerged. Three decide which agents survive. Prompt Kit",
+      "status": "todo",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-2727",
+      "title": "Prompt Kit: GPT-5.5 Review: The best model in the world, and why that still matters Prompt Kit",
+      "status": "todo",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-3244",
+      "title": "Decide: retire ob1-token.sh wiring from ai-dev pane env (SOPS is canonical)",
+      "status": "todo",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-3246",
+      "title": "Decide: ai-dev dashboard window local :3012 dev-server vs pushed here.now surfaces",
+      "status": "todo",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-3248",
+      "title": "Identify process that squatted Wings Telegram token 7868231416 (dup poller 14:54-17:56 2026-07-06)",
+      "status": "todo",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-3252",
+      "title": "Review productivity for JAC-1946",
+      "status": "todo",
+      "priority": "medium",
+      "project": "Sea Ranch AI",
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-3269",
+      "title": "Phase 3 follow-up: live parallel-session soak test (maxConcurrentSessions=3)",
+      "status": "todo",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-3286",
+      "title": "[ai-dev] session ai-dev-test",
+      "status": "todo",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-3289",
+      "title": "Verify fleet agents read the coordination bus at session start",
+      "status": "todo",
+      "priority": "medium",
+      "project": "Agentic OS",
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-3290",
+      "title": "Daily rollover + retention for coordination/ notes",
+      "status": "todo",
+      "priority": "medium",
+      "project": "Agentic OS",
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    },
+    {
+      "identifier": "JAC-3298",
+      "title": "Qwen prewarm strategy artifact \u2014 2026-07-10",
+      "status": "todo",
+      "priority": "medium",
+      "project": null,
+      "needs_human_action": false,
+      "attention_state": "none",
+      "assignee_agent_id": null
+    }
+  ]
+}

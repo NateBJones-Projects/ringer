@@ -1,0 +1,22 @@
+{
+  "review_version": "ringer-contract-review.v1",
+  "contract_id": "jac-3643-nate-native-upgrade-v1",
+  "contract_sha256": "435f4b61ef10af076e3ea368db65140a25fb7ebc35cf3e460a8ffa8ca58d2ead",
+  "verdict": "PASS",
+  "reviewer": {
+    "provider": "anthropic",
+    "model": "claude-opus-4-8",
+    "runtime": "claude-cli-2.1.196",
+    "harness_session_id": "3636c212-7a73-4bab-8aea-0c5484e232f6",
+    "attestation": "Claude CLI init and assistant events both reported model claude-opus-4-8."
+  },
+  "reviewed_at": "2026-07-17T02:28:33Z",
+  "requirement_gaps": [],
+  "required_changes": [],
+  "summary": "PASS. The contract preserves frontier orchestration, economical isolated workers, executable acceptance authority, exactly one raw-failure retry, evidence-based task-type routing, conditional cross-family semantic review, and the Beads/Vault/Ringer/Paperclip/Ringside authority boundaries. Its two worker lanes have disjoint owned paths, its acceptance gates and falsifiers are independently testable, and its rollback does not mutate the dirty Aegis checkout.",
+  "advisories": [
+    "Keep each lane's targeted check scoped to its owned paths; gate cross-lane behavior only after both patches are integrated.",
+    "Canonicalize the semantic contract field set before SHA-256 so JSON key order cannot affect the hash.",
+    "The pre-dispatch contract PASS cannot satisfy the separate post-integration semantic-review gate; run that Judge fresh."
+  ]
+}

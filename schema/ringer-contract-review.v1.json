@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/JackReis/ringer/schema/ringer-contract-review.v1.json",
+  "title": "Ringer contract review receipt v1",
+  "description": "Strict PASS/FAIL receipt for a frozen contract review. It records the reviewed contract hash, the harness attestation, and the reviewer's identity without becoming the contract itself.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "receipt_version",
+    "receipt_id",
+    "verdict",
+    "contract_sha256",
+    "reviewed_at",
+    "reviewer",
+    "harness_attestation",
+    "requirement_gaps",
+    "required_changes",
+    "advisories"
+  ],
+  "properties": {
+    "receipt_version": {
+      "const": 1
+    },
+    "receipt_id": {
+      "type": "string",
+      "pattern": "^cr-[0-9A-HJKMNP-TV-Z]{26}$",
+      "description": "cr- prefix plus a 26-character Crockford-base32 ULID."
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["PASS", "FAIL"]
+    },
+    "contract_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "SHA-256 of the exact manifest contract content."
+    },
+    "reviewed_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+    },
+    "reviewer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "model", "family", "runtime"],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "family": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "runtime": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        }
+      }
+    },
+    "harness_attestation": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240
+    },
+    "requirement_gaps": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 240
+      },
+      "default": []
+    },
+    "required_changes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 240
+      },
+      "default": []
+    },
+    "advisories": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 240
+      },
+      "default": []
+    }
+  },
+  "if": {
+    "properties": {
+      "verdict": {
+        "const": "PASS"
+      }
+    }
+  },
+  "then": {
+    "properties": {
+      "requirement_gaps": {
+        "maxItems": 0
+      },
+      "required_changes": {
+        "maxItems": 0
+      }
+    }
+  },
+  "else": {
+    "anyOf": [
+      {
+        "properties": {
+          "requirement_gaps": {
+            "minItems": 1
+          }
+        }
+      },
+      {
+        "properties": {
+          "required_changes": {
+            "minItems": 1
+          }
+        }
+      }
+    ]
+  }
+}

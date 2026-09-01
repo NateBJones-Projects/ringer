@@ -1,0 +1,33 @@
+{
+  "review_version": "ringer-contract-review.v1",
+  "contract_id": "jac-3643-nate-native-upgrade-manifest-v1",
+  "contract_sha256": "0f9857b4287e728c7d2f5aede5fdf5de19886f041a9355e4b0c0a21a01d593a9",
+  "verdict": "PASS",
+  "reviewer": {
+    "provider": "anthropic",
+    "model": "claude-opus-4-8",
+    "family": "claude-4.8",
+    "runtime": "claude-cli-2.1.196",
+    "harness_session_id": "56e14e58-98bf-4ebb-9e02-28932300e169",
+    "attestation": "Claude CLI init and assistant events reported model claude-opus-4-8."
+  },
+  "reviewed_at": "2026-07-17T02:37:31Z",
+  "summary": "PASS. The exact two-lane manifest is self-contained, disjoint, least-privilege, one-retry compatible, and executable-check governed. The Judge independently reproduced the declared semantic contract hash and confirmed that exported patches cannot collide or disappear with the worktrees.",
+  "requirement_gaps": [
+    "Lane-local checks cannot by themselves judge the quality of worker-authored tests or prose; the integrated full suite, fresh semantic Judge, and canary remain mandatory downstream gates.",
+    "The implementation should lint missing or placeholder harness attestation as well as reviewer model/family/runtime so a fabricated review block cannot satisfy a high-risk gate."
+  ],
+  "required_changes": [
+    "Replace the exact-manifest review placeholder with this harness session ID before dispatch.",
+    "Persist this review receipt at the manifest's referenced artifact path before dispatch."
+  ],
+  "required_changes_resolution": [
+    "Manifest harness_session_id now equals 56e14e58-98bf-4ebb-9e02-28932300e169.",
+    "This receipt is persisted at contracts/jac-3643-manifest-review-opus.v1.json."
+  ],
+  "advisories": [
+    "Keep the post-integration full-suite, semantic-review, and canary gates distinct.",
+    "Confirm the two exported patches apply cleanly before any deployment.",
+    "Keep the hard-coded Aegis orchestration paths host-scoped when deriving future templates."
+  ]
+}

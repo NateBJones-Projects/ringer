@@ -21,6 +21,12 @@ TASKDIR="${1:?usage: opencode-sandboxed.sh <taskdir> [--no-sandbox] <args...>}";
 SANDBOX=1
 if [ "${1:-}" = "--no-sandbox" ]; then SANDBOX=0; shift; fi
 
+# Ringer's OpenCode lane runs local Qwen, not Claude Code. Keep Claude's skills
+# installed for Claude while preventing OpenCode's compatibility layer from
+# importing ~/.claude skills and inflating every Qwen task's prompt context.
+# Export before either execution path so sandboxed and full-access runs agree.
+export OPENCODE_DISABLE_CLAUDE_CODE=1
+
 # Resolve opencode without tripping `set -e` (command -v returns nonzero when absent).
 if ! OPENCODE_BIN="$(command -v opencode)" || [ -z "$OPENCODE_BIN" ]; then
   echo "opencode-sandboxed.sh: opencode not found on PATH" >&2
@@ -43,8 +49,8 @@ TASKDIR_REAL="$(cd "$TASKDIR" && pwd -P)"
 # we never have to open all of /private/tmp or ~/.cache to the sandboxed agent.
 # Resolve to the real path (/var/folders symlinks to /private/var/folders);
 # Seatbelt subpath matching needs the canonical path or writes EPERM-crash.
-SCRATCH="$(cd "$(mktemp -d -t ringer-opencode-scratch)" && pwd -P)"
-PROFILE="$(mktemp -t ringer-opencode-prof)"
+SCRATCH="$(cd "$(mktemp -d -t ringer-opencode-scratch.XXXXXX)" && pwd -P)"
+PROFILE="$(mktemp -t ringer-opencode-prof.XXXXXX)"
 cleanup() { rm -rf "$SCRATCH" "$PROFILE"; }
 trap cleanup EXIT
 

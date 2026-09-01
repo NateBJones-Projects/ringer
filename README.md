@@ -31,7 +31,7 @@ manifest.json ──▶ ringer.py ──▶ N parallel workers (codex exec, each
 
 ## Quickstart
 
-Ringer runs on macOS and Linux (Windows via WSL) and needs Python 3.12+.
+Ringer runs on macOS and Linux (Windows via WSL) and needs Python 3.11+.
 
 1. Install a worker CLI and sign in (Codex is the built-in default engine):
 
@@ -102,8 +102,6 @@ Each task gets its own directory, its own worker, its own log, and its own verdi
 | `model` | Which model a harness engine runs for this task — fills the engine's `{model}` placeholder (e.g. `"openrouter/moonshotai/kimi-k2.7"`); empty uses the engine's `model_default` |
 | `task_type` | Optional free-form string naming the kind of work this task is, so the model-performance log can slice pass rates by task shape rather than only by model. Suggested vocabulary: `code-feature`, `code-fix`, `code-review`, `test-hardening`, `docs`, `research`, `persona-review`, `copywriting`, `site-build`, `motion-design`, `image-gen`, `data-pipeline`, `format-conversion`, `probe`, `bakeoff`. Empty is allowed; the log just reports it under `(none)`. |
 | `timeout_s` | Per-task kill timer (default 900) |
-| `max_attempts` | How many times this task may run (default 2 — one try plus one retry with the check's failure output injected). Set `1` for a hard no-retry lane |
-| `redact_spec` | Replace this task's spec with `[redacted request packet]` in the run state, the logged command line, and the eval row, for specs carrying sensitive material. Redacts Ringer's own records only — captured worker output is never rewritten (invariant), so a worker that echoes its request still puts that text in `worker.log` |
 | `engine_args` | Extra CLI flags for this task's worker, spliced in at the engine's `{engine_args}` placeholder — e.g. `["-c", "model_reasoning_effort=low"]` so the orchestrator picks reasoning depth per task |
 | `verified` | One plain-English sentence saying what the check proves — shown on the results page next to "finished & checked" |
 | `full_access` | Worker runs unsandboxed — required for workers that spawn their own sub-workers; must also be enabled in config |
@@ -112,39 +110,6 @@ Each task gets its own directory, its own worker, its own log, and its own verdi
 > **Worktree footgun:** on PASS the task's worktree is removed — including anything written inside it. In worktrees mode, worker logs live outside task worktrees in `workdir/logs/`; have workers write deliverables outside the worktree too, or have your `check` copy artifacts out before it exits 0.
 
 Not sure what your tasks even are yet? [`docs/interview-prompt.md`](docs/interview-prompt.md) is a prompt you paste into any chatbot; it interviews you about the job and hands back a brief your orchestrating agent can turn into a manifest. Ready-made skeletons for the patterns that work live in [`templates/`](templates/).
-
-## `ask` — one bounded question, one clean worker
-
-Not every question deserves a manifest. When you want a read-only answer over
-source you can already point at, `ask` selects the passages that match the
-request, caps the packet, and runs a single worker on it:
-
-```bash
-./ringer.py ask "Why did the Wednesday release slip?" --source notes/status.md
-./ringer.py ask "..." --source src/ --source docs/ --dry-run   # show the packet, spend nothing
-```
-
-Repeat `--source` for more files or directories. `--state` takes a small file
-of settled decisions and is preferred over ordinary sources when the packet is
-tight. `--max-packet-bytes` sets the budget (default 16,000). `--dry-run`
-prints the selection report and stops before any model call. `--redact` keeps
-the request out of the run state and eval row. The run appears on Ringside and
-in the artifact library like any other.
-
-If everything that matches is too big for the packet, `ask` says so — naming the
-budget you'd need — and stops **before** calling a model. It never sends an
-empty packet. A source small enough to fit whole is included whole, whether or
-not it looks relevant, so pointing `ask` at unrelated material still costs one
-call: the packet is only as good as the sources you name.
-
-Directory scans stay inside the tree you named. A symlink pointing out of it, or
-one resolving to a sensitive filename, is skipped and reported. A file you name
-explicitly is always read — naming it is consent.
-
-> `ask` verifies only that an answer was produced and is non-empty. There is
-> nothing to execute against free-form prose, so this is the one lane in Ringer
-> where the check does not prove the result is right. Read the answer. Anything
-> whose output a check could actually execute belongs in a manifest.
 
 ## Lint
 
@@ -375,6 +340,27 @@ The per-user philosophy, stated plainly: every user's workload is different, so 
 
 Ringer can optionally load per-model steering profiles, prepend applicable worker rules to both first-attempt and retry prompts, print driver guidance for the orchestrator, and collect one local observation row per attempt. The feature is fail-open: missing or malformed steering data never blocks a run. Setup, the profile contract, and the observation schema are documented in [`docs/STEERING.md`](docs/STEERING.md).
 
+## Launch receipts — provenance for every worker
+
+Every worker spawn appends a **launch receipt** to `<state_dir>/receipts/launches.jsonl` (default `~/.ringer/receipts/launches.jsonl`), so the next observer can attribute who launched what, when, and why — including ambient side effects (MCP OAuth flows, port binds) that no transcript records. The format is one JSON line per lifecycle event (`launched` → optional `bound` → `completed`/`failed`/`abandoned`), append-only, latest line per `receipt_id` wins. Schema: [`schema/launch-receipt.v1.json`](schema/launch-receipt.v1.json).
+
+Each worker child inherits the **FLEET_\* env contract** — `FLEET_LAUNCHER`, `FLEET_LAUNCHER_KIND`, `FLEET_LAUNCH_ID` (the receipt id), plus `FLEET_BEAD` and `FLEET_PARENT_SESSION` when known (passed through from ringer's own environment). Any other launcher (an orchestrator session, a cron lane) adopts provenance the same way: export the five variables, append one receipt line.
+
+Rules the code enforces:
+
+- **Receipts observe; they never block.** Any receipt failure is logged to the task log and the launch proceeds (fail-open).
+- **No secrets, ever — rejected, not redacted.** Receipts carry identities, IDs, hashes, paths, and coarse capability classes only. The writer refuses any material shaped like a URL with a query string, an `Authorization:`/cookie header, an OAuth `code=`/`state=`/token parameter, a JWT, or a private key — nothing matching those shapes is stored in any form, and the prompt/spec appears only as a SHA-256 hash.
+- **Append-only.** Lifecycle updates are new lines, never rewrites; the file is inert data no consumer depends on for correctness.
+
+Audit with the read-only verifier (exit non-zero on violations):
+
+```bash
+tools/verify_launch_receipts.py            # checks ~/.ringer/receipts/launches.jsonl
+tools/verify_launch_receipts.py --json     # machine-readable report
+```
+
+It validates every line against the schema, scans for forbidden material, resolves lifecycle state, reports unbound and stale-open receipts (abandoned candidates after 24h), and — joined against `~/.claude/projects` transcripts — flags post-cutover `sdk-cli`/`external` sessions with no receipt as **unattributed launches**. Sessions predating the first receipt are pre-cutover and never backfilled.
+
 ## Hard-won invariants
 
 Four rules are baked into every worker invocation. They all cost us real debugging hours; you get them for free:
@@ -392,6 +378,7 @@ Every community PR that lands in main is credited here — that's a project rule
 - [@davekopecek](https://github.com/davekopecek) (Dave Kopecek) — committed the design-reference fixture so the design-token guard runs on every machine (#30)
 - [@snapsynapse](https://github.com/snapsynapse) (Sam Rogers) — graceful shutdown on SIGINT/SIGTERM with worker-tree cleanup and finished state, plus the 14-test end-to-end CLI regression suite (#4)
 - [@mlava](https://github.com/mlava) (Mark Lavercombe) — named setup failures across every diagnostic surface (#37) and `run --baseline`, the no-workers check preflight (#38)
+- [@JackReis](https://github.com/JackReis) (Jack Reis) — Nate-native fleet policy, launch receipts, contract-review gates, Paperclip projection, and integration hardening, coordinated with Hermes
 
 Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the philosophy and what gets a PR merged fast. The short version: small and scoped, rebased on current main, every claim backed by an executed test. Authorship is always preserved — where a maintainer pushes a mechanical fix to your branch, you remain the commit author.
 
@@ -401,8 +388,7 @@ Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the phi
 
 ## Requirements
 
-- Python 3.12+ (stdlib only; `psycopg` needed only for the optional Postgres eval backend)
-  - **Changed:** the supported floor moved from 3.11 to 3.12. CI has only ever run 3.12, so 3.11 was a promise nothing enforced — the honest fix is to state the version we actually test. Today's code still happens to run on 3.11; that is no longer guaranteed, and 3.11 breakage won't be treated as a bug.
+- Python 3.11+ (stdlib only; `psycopg` needed only for the optional Postgres eval backend)
 - At least one agent CLI (Codex works out of the box)
 - Rust toolchain, only if you're building Ringside from source
 

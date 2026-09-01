@@ -1,0 +1,33 @@
+{
+  "schema_version": 3,
+  "run_name": "jac-3458-family-bulletin-ops-admission-v2",
+  "workdir": "/private/tmp/ringer-jac-3458-family-bulletin-ops-admission-v2",
+  "max_parallel": 1,
+  "worktrees": false,
+  "default_engine": "codex",
+  "identity": "aegis",
+  "_correlation": {
+    "paperclip_issue": "JAC-3458",
+    "bead_ref": "notes-io59y.3.7",
+    "project": "Agentic OS",
+    "mode": "read-only-admission",
+    "predecessor": "jac-3458-family-bulletin-ops-admission-v1 (orchestrator wrapper timeout before artifact)"
+  },
+  "tasks": [
+    {
+      "key": "ops-runbook-admission-v2",
+      "task_type": "planning",
+      "engine": "codex",
+      "model": "gpt-5.6-sol",
+      "engine_args": ["-c", "model_reasoning_effort=medium"],
+      "timeout_s": 480,
+      "full_access": false,
+      "paperclip_issue": "JAC-3458",
+      "bead_id": "notes-io59y.3.7",
+      "spec": "Write immediately; do not inspect repositories, memory, logs, services, trackers, or other files, and do not run bootstrap or skill commands. You are a read-only admission planner for Paperclip JAC-3458 / Bead reference notes-io59y.3.7. Create exactly one file: ./family-bulletin-ops-runbook-plan.md. Do not modify any other state and do not claim the issue complete. The Markdown plan must exceed 5000 bytes and contain explicit sections named Health, Observability, Backup, Restore, Kill switch, Rollback, Source ownership, Proposal-only boundary, Public/private separation, Monitoring hooks, Commands, Evidence, Fresh Judge, Ordered implementation sequence, Acceptance matrix, Rollback matrix, and Exact evidence bundle. State verbatim that health exposes no family content. State that implementation, deployment, service mutation, tracker mutation, and source-tree writes require separate human approval. Every proposed command must identify target host/path, expected output or exit condition, be safe to copy only after approval, and reveal no secrets or family content. Require implementation execution and judging to avoid local Qwen. Name an independent Codex gpt-5.6-sol lane (or separately approved non-local frontier route) as Fresh Judge and require judge identity, model, run ID, raw executed checks, and check output in evidence. Use placeholder variables for topology not provided; fail closed rather than inventing paths. Write the file now and stop.",
+      "check": "set -eu; f=family-bulletin-ops-runbook-plan.md; if [ ! -s \"$f\" ]; then echo 'FAIL: family-bulletin-ops-runbook-plan.md is missing or empty' >&2; exit 1; fi; bytes=$(wc -c < \"$f\" | tr -d ' '); if [ \"$bytes\" -lt 5000 ]; then printf 'FAIL: plan is too small: %s bytes (minimum 5000)\\n' \"$bytes\" >&2; exit 1; fi; for term in 'Health' 'Observability' 'Backup' 'Restore' 'Kill switch' 'Rollback' 'Source ownership' 'Proposal-only boundary' 'Public/private separation' 'Monitoring hooks' 'Commands' 'Evidence' 'Fresh Judge' 'Ordered implementation sequence' 'Acceptance matrix' 'Rollback matrix' 'Exact evidence bundle' 'health exposes no family content' 'separate human approval' 'local Qwen' 'gpt-5.6-sol' 'run ID' 'executed checks'; do if ! grep -Fiq -- \"$term\" \"$f\"; then printf 'FAIL: required phrase missing: %s\\n' \"$term\" >&2; exit 1; fi; done; if ! grep -Eiq 'implementation.*deployment.*tracker.*separate human approval|separate human approval.*implementation' \"$f\"; then echo 'FAIL: approval boundary does not explicitly cover implementation/deployment/tracker writes' >&2; exit 1; fi; printf 'EXECUTED_CHECK=PASS JAC-3458 admission-v2 bytes=%s non-content-health-and-nonlocal-judge-contract=verified\\n' \"$bytes\"",
+      "expect_files": ["family-bulletin-ops-runbook-plan.md"],
+      "verified": "The JAC-3458 read-only admission plan is substantive, covers required operational/recovery boundaries, prohibits family content in health, preserves the human change gate, and specifies non-local independent judging with raw executed evidence."
+    }
+  ]
+}

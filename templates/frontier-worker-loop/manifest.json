@@ -1,0 +1,58 @@
+{
+  "run_name": "{{RUN_SLUG}}",
+  "template_unfilled": true,
+  "workdir": "{{WORKDIR}}",
+  "risk": "high",
+  "orchestrator": {
+    "provider": "{{ORCHESTRATOR_PROVIDER}}",
+    "model": "{{ORCHESTRATOR_MODEL}}",
+    "family": "{{ORCHESTRATOR_FAMILY}}",
+    "runtime": "{{ORCHESTRATOR_RUNTIME}}",
+    "attestation": "{{ORCHESTRATOR_ATTESTATION}}"
+  },
+  "contract_review": {
+    "contract_sha256": "{{CONTRACT_SHA256}}",
+    "verdict": "PASS",
+    "reviewer_provider": "{{REVIEWER_PROVIDER}}",
+    "reviewer_model": "{{REVIEWER_MODEL}}",
+    "reviewer_family": "{{REVIEWER_FAMILY}}",
+    "reviewer_runtime": "{{REVIEWER_RUNTIME}}",
+    "harness_attestation": "{{HARNESS_ATTESTATION}}",
+    "cross_family_required": true,
+    "dispatch_gate": "A high-risk run is not dispatchable before exact-manifest cross-family PASS.",
+    "artifact": "{{CONTRACT_REVIEW_RECEIPT_PATH}}"
+  },
+  "max_parallel": 2,
+  "tasks": [
+    {
+      "key": "policy-lane",
+      "task_type": "policy-write",
+      "engine": "codex",
+      "model": "{{ECONOMICAL_MODEL_POLICY}}",
+      "paperclip_issue": "{{PAPERCLIP_ISSUE_POLICY}}",
+      "bead_id": "{{BEAD_ID_POLICY}}",
+      "spec": "You are an economical worker in the frontier policy lane. Boundary: you own only ./policy.md in the current task directory. Write a compact policy draft that preserves the corrected control loop, authority boundaries, and mode policy without changing any other file. The frontier orchestrator owns the immutable contract and executable checks; you do not. If the draft is missing a required policy statement, treat that as a failure and stop.",
+      "check": "python3 -c 'from pathlib import Path; text = Path(\"policy.md\").read_text(encoding=\"utf-8\"); required = [\"frontier orchestrator writes the immutable contract and executable checks\", \"economical proven workers implement in isolated parallel lanes\", \"executable checks decide PASS/FAIL\", \"exactly one retry receives raw failure output\", \"receipts drive per-task-type routing\", \"semantic review is conditional and can veto green but never override red\", \"Ringside is observational\", \"Paperclip is trigger/telemetry/work-product projection\", \"Beads/Vault remain authoritative\"]; missing = [phrase for phrase in required if phrase not in text]; print(\"FAIL: missing: \" + \", \".join(missing) if missing else \"PASS: policy draft matches the lane contract\"); raise SystemExit(1 if missing else 0)'",
+      "expect_files": [
+        "policy.md"
+      ],
+      "timeout_s": 900,
+      "verified": "policy.md preserves the corrected loop, authority boundaries, and mode policy, and the check prints named failures before exiting nonzero."
+    },
+    {
+      "key": "template-lane",
+      "task_type": "template-write",
+      "engine": "codex",
+      "model": "{{ECONOMICAL_MODEL_TEMPLATE}}",
+      "paperclip_issue": "{{PAPERCLIP_ISSUE_TEMPLATE}}",
+      "bead_id": "{{BEAD_ID_TEMPLATE}}",
+      "spec": "You are an economical worker in the frontier template lane. Boundary: you own only ./template.md in the current task directory. Write a reusable template note that explains fill, freeze, hash, review, lint, run, integrate, semantic-review, and receipt. Do not edit sibling files or try to become the orchestrator.",
+      "check": "python3 -c 'from pathlib import Path; text = Path(\"template.md\").read_text(encoding=\"utf-8\"); required = [\"fill\", \"freeze\", \"hash\", \"review\", \"lint\", \"run\", \"integrate\", \"semantic-review\", \"receipt\"]; missing = [word for word in required if word not in text] + ([] if \"frontier orchestrator\" in text else [\"frontier orchestrator\"]); print(\"FAIL: missing: \" + \", \".join(missing) if missing else \"PASS: template note covers the workflow\"); raise SystemExit(1 if missing else 0)'",
+      "expect_files": [
+        "template.md"
+      ],
+      "timeout_s": 900,
+      "verified": "template.md covers the workflow words and boundary text, and the check prints explicit failures instead of silently passing."
+    }
+  ]
+}
