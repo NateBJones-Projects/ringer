@@ -1934,6 +1934,8 @@ def lint_manifest(
                 f"{task.key}: spec is a pointer to an instruction file; anyone watching Ringside "
                 "sees no real brief and the retry prompt loses context — put the instructions in the spec itself."
             )
+        for finding in allowlist_findings(task):
+            findings.append(f"{task.key}: {finding}")
         if not task.expect_files and not manifest.worktrees:
             findings.append(
                 f"{task.key}: no expect_files; the results page will guess deliverables from the "
@@ -2000,6 +2002,110 @@ def spec_is_file_pointer(spec: str) -> bool:
     if len(text) >= 600:
         return False
     return bool(FILE_POINTER_SPEC_RE.search(text))
+
+
+ALLOWED_TOOLS_FLAG = "--allowedTools"
+BASH_ALLOW_ENTRY_RE = re.compile(r"^Bash\((.+?)(?::\*)?\)$")
+SPEC_BACKTICK_RE = re.compile(r"`([^`\n]{1,240})`")
+SPEC_HASH_REQUIREMENT_RE = re.compile(r"\b(sha-?(1|256|512)|shasum|sha256sum|md5(sum)?|checksum|cksum)\b", re.IGNORECASE)
+HASHING_BINARIES = {"shasum", "sha1sum", "sha256sum", "sha512sum", "md5", "md5sum", "cksum", "openssl"}
+COMMAND_TOKEN_RE = re.compile(r"^[A-Za-z0-9_./~-]+$")
+NOT_A_COMMAND_SUFFIXES = (".json", ".png", ".jpg", ".jpeg", ".txt", ".md", ".py", ".csv", ".html", ".log", ".yaml", ".toml")
+
+
+def bash_allowlist(engine_args: tuple[str, ...] | list[str]) -> tuple[bool, set[str]]:
+    """Read the Claude `--allowedTools` list out of engine_args.
+
+    Returns (restricted, allowed_bash_prefixes). `restricted` is False when
+    Bash is not gated at all: no --allowedTools flag, or a bare `Bash` entry.
+    When --allowedTools is present without any `Bash(...)` entry the worker has
+    no shell, so restricted is True with an empty set.
+    """
+    args = list(engine_args)
+    if ALLOWED_TOOLS_FLAG not in args:
+        return False, set()
+    entries: list[str] = []
+    for item in args[args.index(ALLOWED_TOOLS_FLAG) + 1 :]:
+        if item.startswith("--"):
+            break
+        entries.extend(part.strip() for part in item.split(",") if part.strip())
+    if "Bash" in entries:
+        return False, set()
+    prefixes: set[str] = set()
+    for entry in entries:
+        match = BASH_ALLOW_ENTRY_RE.match(entry)
+        if match:
+            prefixes.add(match.group(1).strip())
+    return True, prefixes
+
+
+def command_is_allowed(command: str, prefixes: set[str]) -> bool:
+    first = command.split()[0] if command.split() else command
+    base = first.rsplit("/", 1)[-1]
+    for prefix in prefixes:
+        prefix_first = prefix.split()[0] if prefix.split() else prefix
+        if command.startswith(prefix) or first == prefix_first:
+            return True
+        if base == prefix_first.rsplit("/", 1)[-1]:
+            return True
+    return False
+
+
+def spec_commands(spec: str) -> list[str]:
+    """Commands the spec tells the worker to run, read from backticked snippets.
+
+    Conservative on purpose: a backticked snippet counts only when it has at
+    least two tokens (command plus argument) or names a known hashing binary,
+    and its first token does not look like a filename or a flag.
+    """
+    commands: list[str] = []
+    for snippet in SPEC_BACKTICK_RE.findall(spec):
+        snippet = snippet.strip()
+        tokens = snippet.split()
+        if not tokens:
+            continue
+        first = tokens[0]
+        if first.startswith("-") or not COMMAND_TOKEN_RE.match(first):
+            continue
+        if first.lower().endswith(NOT_A_COMMAND_SUFFIXES):
+            continue
+        if len(tokens) < 2 and first.rsplit("/", 1)[-1] not in HASHING_BINARIES:
+            continue
+        commands.append(snippet)
+    return commands
+
+
+def allowlist_findings(task: "TaskSpec") -> list[str]:
+    """Spec asks for a command the worker's Bash allowlist will refuse.
+
+    Observed failure: two image-generation workers were told to verify SHA-256
+    values before a paid call, with an allowlist of the generation CLI and curl
+    only. `shasum` hit a permission prompt no one could answer, both attempts
+    stopped, and the retry prompts carried the stall into the next failure.
+    Lint should have said so before the run started.
+    """
+    restricted, prefixes = bash_allowlist(task.engine_args)
+    if not restricted:
+        return []
+    findings: list[str] = []
+    seen: set[str] = set()
+    for command in spec_commands(task.spec):
+        first = command.split()[0]
+        if first in seen or command_is_allowed(command, prefixes):
+            continue
+        seen.add(first)
+        findings.append(
+            f"spec tells the worker to run '{first}' but --allowedTools permits no matching Bash entry; "
+            "the worker stalls on a permission prompt it cannot answer."
+        )
+    if SPEC_HASH_REQUIREMENT_RE.search(task.spec) and not any(
+        command_is_allowed(binary, prefixes) for binary in HASHING_BINARIES
+    ):
+        findings.append(
+            "spec requires hash verification but --allowedTools permits no hashing tool "
+            "(shasum, sha256sum, md5, openssl); add e.g. Bash(shasum:*)."
+        )
+    return findings
 
 
 def check_cannot_fail(check: str) -> bool:
