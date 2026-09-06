@@ -16,14 +16,14 @@ default_model_key = "gpt-5.5"
 display = "GPT-5.5"
 lab = "OpenAI"
 confidence = "verified"     # snapshot gpt-5.5-2026-04-23, Codex CLI default; see capability file
-source = "https://developers.openai.com/codex/models"
+source = "https://learn.chatgpt.com/docs/models"
 last_verified = 2026-07-10
 
 [engines.codex.models."gpt-5.6-sol"]
 display = "GPT-5.6 Sol"
 lab = "OpenAI"
 confidence = "verified"
-source = "https://developers.openai.com/codex/models"
+source = "https://learn.chatgpt.com/docs/models"
 last_verified = 2026-07-10
 
 [engines.codex.models."gpt-6-astra"]
@@ -38,14 +38,14 @@ last_verified = 2026-09-06
 display = "GPT-5.6 Luna"
 lab = "OpenAI"
 confidence = "verified"
-source = "https://developers.openai.com/codex/models"
+source = "https://learn.chatgpt.com/docs/models"
 last_verified = 2026-07-10
 
 [engines.codex.models."gpt-5.6-terra"]
 display = "GPT-5.6 Terra"
 lab = "OpenAI"
 confidence = "verified"
-source = "https://developers.openai.com/codex/models"
+source = "https://learn.chatgpt.com/docs/models"
 last_verified = 2026-07-10
 
 [engines.grok]
