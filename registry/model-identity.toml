@@ -26,6 +26,14 @@ confidence = "verified"
 source = "https://developers.openai.com/codex/models"
 last_verified = 2026-07-10
 
+[engines.codex.models."gpt-6-astra"]
+display = "GPT-6 Astra"
+lab = "OpenAI"
+confidence = "verified"     # Codex CLI header self-report: `model: gpt-6-astra` / `provider: openai`
+                            # (codex-cli 0.153.4). OpenAI's Codex model list names it "Astra".
+source = "https://learn.chatgpt.com/docs/models"
+last_verified = 2026-09-06
+
 [engines.codex.models."gpt-5.6-luna"]
 display = "GPT-5.6 Luna"
 lab = "OpenAI"
@@ -98,3 +106,89 @@ lab = "Meta"
 confidence = "verified"
 source = "manifest model field; OpenRouter slug meta-llama/llama-3.3-70b-instruct:free"
 last_verified = 2026-07-10
+
+[engines.opencode.models."openrouter/google/gemini-3.7-flash"]
+display = "Gemini 3.7 Flash"
+lab = "Google"
+confidence = "unverified"   # catalog-derived per TAXONOMY.md (slug org segment + OpenRouter
+                            # catalog name "Google: Gemini 3.7 Flash"). Confirm Google's own
+                            # model page before promoting to verified.
+source = "OpenRouter catalog id google/gemini-3.7-flash"
+last_verified = 2026-09-06
+
+[engines.opencode.models."openrouter/google/gemini-3.1-pro-preview"]
+display = "Gemini 3.1 Pro Preview"
+lab = "Google"
+confidence = "unverified"   # catalog-derived; see the gemini-3.7-flash note above.
+source = "OpenRouter catalog id google/gemini-3.1-pro-preview"
+last_verified = 2026-09-06
+
+[engines.opencode.models."openrouter/deepseek/deepseek-v4-flash"]
+display = "DeepSeek V4 Flash"
+lab = "DeepSeek"
+confidence = "unverified"   # catalog-derived (OpenRouter catalog name
+                            # "DeepSeek: DeepSeek V4 Flash 0423").
+source = "OpenRouter catalog id deepseek/deepseek-v4-flash"
+last_verified = 2026-09-06
+
+[engines.opencode.models."openrouter/x-ai/grok-4.6"]
+display = "Grok 4.6"
+# LAB DELIBERATELY LEFT UNVERIFIED — the vendor's own naming is inconsistent.
+# xAI's release notes (2026-09-06) use both names: "xAI" for the API platform and console,
+# and "SpaceXAI" for the entity behind the frontier models — Grok 4.6 is described there as
+# "SpaceXAI's frontier model". The OpenRouter catalog name is "SpaceXAI: Grok 4.6"; the slug
+# org segment is x-ai. Recorded as xAI to match the existing Grok 4.5 entry and left
+# unverified until the relationship between the two names is established. Please don't
+# normalize this to one name without a source.
+lab = "xAI"
+confidence = "unverified"
+source = "https://docs.x.ai/developers/release-notes"
+last_verified = 2026-09-06
+
+# ─── claude — Claude Code CLI, headless, on an Anthropic subscription ───
+# Display names, model IDs and the lab are from Anthropic's own models overview.
+# Claude Code additionally self-reports identity in its `--output-format json` envelope:
+# modelUsage."<id>" carries canonicalModel = "<id>" and provider = "firstParty", which is
+# harness-reported model — the top tier of TAXONOMY.md's evidence precedence.
+# claude-fable-5 and claude-opus-4-8 are legacy-but-served models (each still has its own
+# vendor model page). claude-haiku-4-5 is an alias; its pinned snapshot is
+# claude-haiku-4-5-20251001.
+[engines.claude]
+harness = "Claude Code"
+access = "OAuth plan"
+default_model_key = "claude-fable-5"
+
+[engines.claude.models."claude-fable-5"]
+display = "Claude Fable 5"
+lab = "Anthropic"
+confidence = "verified"
+source = "https://platform.claude.com/docs/en/about-claude/models/overview"
+last_verified = 2026-09-06
+
+[engines.claude.models."claude-opus-5"]
+display = "Claude Opus 5"
+lab = "Anthropic"
+confidence = "verified"
+source = "https://platform.claude.com/docs/en/about-claude/models/overview"
+last_verified = 2026-09-06
+
+[engines.claude.models."claude-opus-4-8"]
+display = "Claude Opus 4.8"
+lab = "Anthropic"
+confidence = "verified"
+source = "https://platform.claude.com/docs/en/about-claude/models/overview"
+last_verified = 2026-09-06
+
+[engines.claude.models."claude-sonnet-5"]
+display = "Claude Sonnet 5"
+lab = "Anthropic"
+confidence = "verified"
+source = "https://platform.claude.com/docs/en/about-claude/models/overview"
+last_verified = 2026-09-06
+
+[engines.claude.models."claude-haiku-4-5"]
+display = "Claude Haiku 4.5"
+lab = "Anthropic"
+confidence = "verified"
+source = "https://platform.claude.com/docs/en/about-claude/models/overview"
+last_verified = 2026-09-06
