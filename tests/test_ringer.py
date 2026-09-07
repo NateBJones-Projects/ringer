@@ -4,6 +4,7 @@ import asyncio
 import importlib.util
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -143,6 +144,47 @@ class RingerCliTests(unittest.TestCase):
         except PermissionError:
             return True
         return True
+
+    def test_demo_alpha_check_requires_exactly_one_trailing_newline(self) -> None:
+        manifest_path = ringer.create_demo_manifest()
+        self.addCleanup(shutil.rmtree, manifest_path.parent)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        alpha_task = next(task for task in manifest["tasks"] if task["key"] == "alpha")
+        check = alpha_task["check"]
+        self.assertIsInstance(check, str)
+
+        taskdir = self.root / "demo-alpha"
+        taskdir.mkdir()
+        output_path = taskdir / "alpha.txt"
+        cases = (
+            ("no trailing newline", b"alpha ready", 1),
+            ("one trailing newline", b"alpha ready\n", 0),
+            ("two trailing newlines", b"alpha ready\n\n", 1),
+            ("punctuation mismatch", b"alpha ready.", 1),
+            ("missing file", None, 1),
+        )
+
+        for label, contents, expected_returncode in cases:
+            with self.subTest(case=label):
+                output_path.unlink(missing_ok=True)
+                if contents is not None:
+                    output_path.write_bytes(contents)
+                result = subprocess.run(
+                    check,
+                    cwd=taskdir,
+                    shell=True,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    check=False,
+                )
+                self.assertEqual(
+                    expected_returncode,
+                    result.returncode,
+                    result.stdout.decode("utf-8", errors="replace"),
+                )
+                if expected_returncode:
+                    self.assertIn(b"FAIL:", result.stdout)
 
     def test_failing_check_output_is_logged_and_injected_into_retry(self) -> None:
         manifest = self.write_manifest(
