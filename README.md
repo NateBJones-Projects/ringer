@@ -76,7 +76,7 @@ Run your own batch:
   "tasks": [
     {
       "key": "alpha",
-      "spec": "Create alpha.txt containing exactly one line: alpha ready. End the file with exactly one newline.",
+      "spec": "Create alpha.txt containing exactly one line: alpha ready\nEnd the file with exactly one newline. Do not add punctuation.",
       "check": "printf 'alpha ready\\n' | diff -u - alpha.txt || { echo 'FAIL: alpha.txt must contain exactly alpha ready followed by one newline'; exit 1; }",
       "expect_files": ["alpha.txt"]
     }
@@ -388,6 +388,7 @@ Four rules are baked into every worker invocation. They all cost us real debuggi
 
 Every community PR that lands in main is credited here — that's a project rule, enforced by a test. Thank you:
 
+- [@Fiddlehead-MB](https://github.com/Fiddlehead-MB) (Melinda Byerley) — exact-byte demo checks, explicit newline instructions, and regression coverage (#101)
 - [@oceanonline](https://github.com/oceanonline) — portable `python3` in template checks + lint quickstart path fix (#24)
 - [@davekopecek](https://github.com/davekopecek) (Dave Kopecek) — committed the design-reference fixture so the design-token guard runs on every machine (#30)
 - [@snapsynapse](https://github.com/snapsynapse) (Sam Rogers) — graceful shutdown on SIGINT/SIGTERM with worker-tree cleanup and finished state, plus the 14-test end-to-end CLI regression suite (#4)
