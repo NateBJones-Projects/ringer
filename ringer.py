@@ -1821,6 +1821,15 @@ def lint_manifest(
             findings.append(
                 f"{task.key}: check may fail without printing why; retry prompt and eval log depend on failure output."
             )
+        if config is not None and task.engine in config.engines:
+            dropped = dropped_engine_args(config.engines[task.engine], task.engine_args)
+            if dropped:
+                findings.append(
+                    f"ERROR: {task.key}: \"engine_args\" {list(dropped)} would be dropped — "
+                    f"engine {task.engine} has no {{engine_args}} placeholder in its "
+                    f"args_template. Add {{engine_args}} to engines.{task.engine}.args_template "
+                    "in config.toml, or remove the field."
+                )
         if manifest.worktrees and any(is_relative_expect_file(path) for path in task.expect_files):
             findings.append(
                 f"{task.key}: deliverable would be deleted with the worktree; write it outside the worktree or export it in the check."
@@ -9498,6 +9507,21 @@ def resolved_task_model(
     )
 
 
+def dropped_engine_args(engine: EngineConfig, engine_args: tuple[str, ...]) -> tuple[str, ...]:
+    """Per-task engine_args that the resolved args_template would discard.
+
+    build_worker_command expands engine_args only where the template holds the
+    literal {engine_args} token. Without it the arguments are dropped in
+    silence: the field validates as a list of strings, lint passes, the worker
+    spawns, and the flag never reaches the process.
+    """
+    if not engine_args:
+        return ()
+    if "{engine_args}" in engine.args_template:
+        return ()
+    return tuple(engine_args)
+
+
 def build_worker_command(
     engine: EngineConfig,
     *,
@@ -9628,6 +9652,14 @@ def validate_manifest_engines(manifest: Manifest, config: AppConfig) -> None:
             raise ValueError(
                 f"task {task.key}: \"model\" is set but engine {engine.name} has no "
                 "{model} placeholder in its args_template, so it would be silently ignored"
+            )
+        dropped = dropped_engine_args(engine, task.engine_args)
+        if dropped:
+            raise ValueError(
+                f"task {task.key}: \"engine_args\" {list(dropped)} would be dropped — engine "
+                f"{engine.name} has no {{engine_args}} placeholder in its args_template. "
+                f"Add {{engine_args}} to engines.{engine.name}.args_template in config.toml, "
+                "or remove the field."
             )
 
 
