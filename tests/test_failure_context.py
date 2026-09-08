@@ -5,7 +5,7 @@ Fixtures are captured from a real failed run — BLP-252, PR #223, the
 `appointments-sort` task at /srv/swarm/blp-252 — with absolute paths under
 /srv rewritten and nothing else changed:
 
-* ``gemini_json_stats_tail.txt`` — the last 6000 bytes of the worker log as
+* ``blp252_worker_log_attempt1.txt`` — the last 6000 bytes of the worker log as
   it stood when attempt 1's retry context was built. Its final 40 lines (what
   ``tail_text`` returns) are pure ``--output-format json`` accounting.
 * ``blp252_check_output.txt`` — attempt 1's check output, recovered from the
@@ -28,7 +28,7 @@ sys.path.insert(0, str(ROOT))
 from ringer import build_failure_context  # noqa: E402
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
-STATS_TAIL = FIXTURES / "gemini_json_stats_tail.txt"
+WORKER_LOG = FIXTURES / "blp252_worker_log_attempt1.txt"
 CHECK_OUTPUT = FIXTURES / "blp252_check_output.txt"
 VITEST_ATTEMPT2 = FIXTURES / "blp252_vitest_attempt2.txt"
 
@@ -49,7 +49,7 @@ class BuildFailureContextTest(unittest.TestCase):
     # --- ordering -----------------------------------------------------
     def test_check_output_comes_first(self) -> None:
         check = CHECK_OUTPUT.read_text(encoding="utf-8")
-        context = build_failure_context(STATS_TAIL, check)
+        context = build_failure_context(WORKER_LOG, check)
         self.assertTrue(
             context.startswith(check.strip()[:200]),
             f"context must open with the check output, got: {context[:200]!r}",
@@ -57,7 +57,7 @@ class BuildFailureContextTest(unittest.TestCase):
 
     def test_surviving_attempt1_failure_detail_is_present(self) -> None:
         check = CHECK_OUTPUT.read_text(encoding="utf-8")
-        context = build_failure_context(STATS_TAIL, check)
+        context = build_failure_context(WORKER_LOG, check)
         # The single failure that survived, its cause, and the count line
         # proving five more were buried.
         self.assertIn("ReferenceError: isisNaNB is not defined", context)
@@ -73,14 +73,14 @@ class BuildFailureContextTest(unittest.TestCase):
         other thirteen here are the same ReferenceError cascading.
         """
         check = VITEST_ATTEMPT2.read_text(encoding="utf-8")
-        context = build_failure_context(STATS_TAIL, check)
+        context = build_failure_context(WORKER_LOG, check)
         self.assertIn("RUN  v2.1.9", context, "the run header orients the retry")
         for arm in ("[1/15]", "[2/15]", "[3/15]"):
             self.assertIn(arm, context, f"{arm} is a root-cause arm, not a cascade")
 
     # --- the stats block is dropped -----------------------------------
     def test_engine_json_accounting_is_absent(self) -> None:
-        context = build_failure_context(STATS_TAIL, CHECK_OUTPUT.read_text(encoding="utf-8"))
+        context = build_failure_context(WORKER_LOG, CHECK_OUTPUT.read_text(encoding="utf-8"))
         for token in ("session_id", "stats", "durationMs"):
             self.assertNotIn(token, context, f"{token!r} is engine accounting, not a failure")
 
@@ -99,12 +99,32 @@ class BuildFailureContextTest(unittest.TestCase):
             "worker tail must follow the check output, not precede it",
         )
 
+    def test_ringer_scaffolding_lines_are_not_echoed_back(self) -> None:
+        """An echoed marker must not look like a real one.
+
+        Caught by tests/test_mock_engine.py: once the worker tail follows the
+        check output it begins at a line boundary, so a quoted
+        "[ringer.py] attempt 1 started" parsed as a genuine third attempt.
+        The command: line is worse — it carries the entire previous prompt.
+        """
+        log = self.write_log(
+            "[ringer.py] attempt 1 started 2026-09-07T22:11:56.061376+00:00\n"
+            "[ringer.py] engine: gemini\n"
+            "[ringer.py] command: some-engine --flag 'the entire previous spec'\n"
+            "TypeError: cannot read property 'id' of undefined\n"
+            "[ringer.py] attempt 1 exited rc=1\n"
+        )
+        context = build_failure_context(log, "CHECK FAIL: build FAILED (rc=1)")
+        self.assertIn("TypeError: cannot read property 'id' of undefined", context)
+        self.assertNotIn("[ringer.py]", context)
+        self.assertNotIn("the entire previous spec", context)
+
     # --- dirty tree ---------------------------------------------------
     def test_dirty_tree_is_stated_when_not_in_worktrees_mode(self) -> None:
         repo = self.tmpdir / "repo"
         make_dirty_repo(repo)
         context = build_failure_context(
-            STATS_TAIL,
+            WORKER_LOG,
             CHECK_OUTPUT.read_text(encoding="utf-8"),
             repo=repo,
             worktrees=False,
@@ -121,7 +141,7 @@ class BuildFailureContextTest(unittest.TestCase):
         repo = self.tmpdir / "repo"
         make_dirty_repo(repo)
         context = build_failure_context(
-            STATS_TAIL,
+            WORKER_LOG,
             CHECK_OUTPUT.read_text(encoding="utf-8"),
             repo=repo,
             worktrees=True,
@@ -133,7 +153,7 @@ class BuildFailureContextTest(unittest.TestCase):
     def test_over_the_cap_the_head_of_the_check_output_survives(self) -> None:
         check = VITEST_ATTEMPT2.read_text(encoding="utf-8")
         self.assertGreater(len(check), 6000, "fixture must exceed the per-section cap")
-        context = build_failure_context(STATS_TAIL, check)
+        context = build_failure_context(WORKER_LOG, check)
         head = check.strip().splitlines()[0]
         tail = check.strip().splitlines()[-1]
         self.assertIn(head, context, "the HEAD of the check output must survive the cap")

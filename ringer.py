@@ -8803,7 +8803,12 @@ class RingerRunner:
                     await self._cleanup_worktree_on_pass(runtime)
                     return
                 if attempt < max_attempts and verdict in {"FAIL", "TIMEOUT"}:
-                    failure_context = build_failure_context(runtime.log_path, verify.raw_output_excerpt)
+                    failure_context = build_failure_context(
+                        runtime.log_path,
+                        verify.raw_output_excerpt,
+                        repo=self.manifest.repo,
+                        worktrees=self.manifest.worktrees,
+                    )
                     current_spec = (
                         f"{runtime.task.spec}\n\n"
                         f"Previous attempt failed: {failure_context}. Fix it."
@@ -9844,12 +9849,120 @@ def looks_like_assistant_text(line: str) -> bool:
     return bool(re.search(r"[A-Za-z]", line))
 
 
-def build_failure_context(log_path: Path, raw_check_output: str) -> str:
-    worker_tail = tail_text(log_path)
-    context = f"{worker_tail}\n{raw_check_output}".strip()
-    if len(context) > 6000:
-        return context[-6000:]
-    return context
+FAILURE_CONTEXT_SECTION_CAP = 6000
+# The engine's stats object sits at the very end of the worker log, so the
+# 40-line tail lands *inside* it and carries no opening brace. Finding the
+# object needs a window wide enough to contain the whole thing.
+STATS_SCAN_BYTES = 65536
+# tail_text caps lines as well as bytes. A stats object runs ~110 lines, so a
+# 40-line tail lands inside it and the opening brace is never in view. One line
+# per byte is the worst case, so this cannot truncate the byte window.
+STATS_SCAN_LINES = STATS_SCAN_BYTES
+DIRTY_TREE_SENTENCE = "The tree carries the previous attempt's edits."
+
+
+def strip_trailing_engine_stats(text: str) -> str:
+    """Drop a trailing engine stats object from worker output.
+
+    Engines invoked with a JSON output mode (gemini's `--output-format json`)
+    end their log with a ~110-line accounting object, so a plain tail of the
+    log is always `"durationMs": 894` and never assistant text. Detection uses
+    the same shape token accounting keys on — a top-level JSON object starting
+    at a line boundary — and additionally requires a "stats" member so that a
+    worker which merely printed JSON keeps its output. Text before the object
+    is assistant output and is kept.
+    """
+    starts: list[int] = []
+    pos = 0
+    for line in text.splitlines(keepends=True):
+        stripped = line.lstrip()
+        if stripped.startswith("{"):
+            starts.append(pos + (len(line) - len(stripped)))
+        pos += len(line)
+    decoder = json.JSONDecoder()
+    for start in reversed(starts):
+        try:
+            obj, end = decoder.raw_decode(text, start)
+        except ValueError:
+            continue
+        if isinstance(obj, dict) and "stats" in obj:
+            return text[:start] + text[end:]
+    return text
+
+
+def drop_ringer_markers(text: str) -> str:
+    """Remove ringer's own scaffolding lines from worker output.
+
+    Two reasons. The `[ringer.py] command:` line holds the whole previous
+    prompt, so echoing it back into a retry re-injects the spec the worker
+    already has. And once the worker tail follows the check output it starts
+    at a line boundary, which made an echoed `[ringer.py] attempt 1 started`
+    indistinguishable from a real attempt marker to anything parsing the log.
+    """
+    return "\n".join(
+        line for line in text.splitlines() if not line.startswith("[ringer.py] ")
+    )
+
+
+def dirty_tree_note(repo: Path) -> str:
+    """A diff --stat of the repo plus one sentence naming what it means.
+
+    A retry inherits the previous attempt's edits. Without this the worker
+    reads its own half-finished work as the starting state and spends the
+    attempt fighting it (BLP-252 attempt 2 removed "a rogue useState line"
+    it had itself written).
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo), "diff", "--stat"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if proc.returncode != 0:
+        return ""
+    stat = proc.stdout.strip()
+    if not stat:
+        return ""
+    return f"{stat}\n\n{DIRTY_TREE_SENTENCE}"
+
+
+def build_failure_context(
+    log_path: Path,
+    raw_check_output: str,
+    *,
+    repo: Path | None = None,
+    worktrees: bool = False,
+) -> str:
+    """Assemble the text injected into a retry prompt.
+
+    Check output first and capped from its head: it is the executed evidence
+    of what is wrong, and truncating it from the end -- as a single combined
+    cap did -- removes the earliest, usually causal, failures.
+    """
+    sections: list[str] = []
+
+    check = raw_check_output.strip()
+    if check:
+        sections.append(check[:FAILURE_CONTEXT_SECTION_CAP].strip())
+
+    worker_text = strip_trailing_engine_stats(
+        tail_text(log_path, max_bytes=STATS_SCAN_BYTES, line_count=STATS_SCAN_LINES)
+    )
+    worker_text = drop_ringer_markers(worker_text)
+    worker_tail = "\n".join(worker_text.splitlines()[-40:])
+    worker_tail = worker_tail[-FAILURE_CONTEXT_SECTION_CAP:].strip()
+    if worker_tail:
+        sections.append(worker_tail)
+
+    if repo is not None and not worktrees:
+        note = dirty_tree_note(repo)
+        if note:
+            sections.append(note)
+
+    return "\n\n".join(sections)
 
 
 def shorten(value: str, limit: int) -> str:
