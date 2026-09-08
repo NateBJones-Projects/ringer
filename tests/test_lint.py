@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import io
+import json
 import os
 import sys
 import tempfile
@@ -11,7 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from ringer import Manifest, TaskSpec, Verifier, lint_manifest  # noqa: E402
+from ringer import AppConfig, Manifest, TaskSpec, Verifier, lint_manifest, main  # noqa: E402
 
 
 LONG_SPEC = (
@@ -309,6 +312,127 @@ class LintManifestTests(unittest.TestCase):
                 manifest = Manifest.from_path(path)
                 findings = lint_manifest(manifest)
                 self.assertEqual([], findings, f"{path} should lint clean, got: {findings}")
+
+
+class UnknownEngineLintTests(unittest.TestCase):
+    """`ringer lint` called a manifest naming a nonexistent engine clean.
+
+    Two separate holes, and the second is the one that made the first
+    invisible: `lint_manifest` never resolved the engine name at all, AND the
+    `lint` CLI branch returned before the shared `AppConfig.load`, so even a
+    correct check would have run with `config=None` and found nothing.
+    Both halves are pinned here, and each guard is exercised in BOTH
+    directions - a guard only proven to block is indistinguishable from one
+    welded shut.
+    """
+
+    def config_with(self, *engines: str) -> AppConfig:
+        path = self.write_config(*engines)
+        return AppConfig.load(path)
+
+    def write_config(self, *engines: str) -> Path:
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        path = Path(temp_dir.name) / "config.toml"
+        body = "".join(
+            f'[engines.{name}]\nbin = "{name}"\nargs_template = ["{{spec}}"]\n\n' for name in engines
+        )
+        path.write_text(body, encoding="utf-8")
+        return path
+
+    def manifest_using(self, engine: str) -> Manifest:
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        return Manifest.from_obj(
+            {
+                "run_name": "engine-lint-test",
+                "workdir": str(Path(temp_dir.name) / "work"),
+                "max_parallel": 1,
+                "tasks": [
+                    {
+                        "key": "one",
+                        "engine": engine,
+                        "spec": LONG_SPEC,
+                        "check": GOOD_CHECK,
+                        "expect_files": ["output.txt"],
+                        "verified": "the output file exists and contains the expected content",
+                    }
+                ],
+            }
+        )
+
+    def engine_findings(self, findings: list[str]) -> list[str]:
+        return [f for f in findings if "is not configured" in f]
+
+    def test_unknown_engine_is_reported(self) -> None:
+        findings = lint_manifest(self.manifest_using("no-such-engine-xyz"), config=self.config_with("cline"))
+        self.assertEqual(1, len(self.engine_findings(findings)), findings)
+        self.assertIn("no-such-engine-xyz", self.engine_findings(findings)[0])
+        # The message must name what IS available, so a config that failed to
+        # load is diagnosable from the finding alone.
+        self.assertIn("cline", self.engine_findings(findings)[0])
+
+    def test_configured_engine_is_not_reported(self) -> None:
+        # The half that proves the guard is not welded shut.
+        findings = lint_manifest(self.manifest_using("cline"), config=self.config_with("cline"))
+        self.assertEqual([], self.engine_findings(findings), findings)
+
+    def test_check_is_vacuous_without_config(self) -> None:
+        # Documents WHY the CLI must load the config: with config=None the
+        # check cannot fire at all, which is exactly how the bug survived.
+        findings = lint_manifest(self.manifest_using("no-such-engine-xyz"))
+        self.assertEqual([], self.engine_findings(findings), findings)
+
+    def run_lint_cli(self, engine: str, config_path: Path) -> tuple[int, str]:
+        manifest_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(manifest_dir.cleanup)
+        manifest_path = Path(manifest_dir.name) / "manifest.json"
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "run_name": "engine-lint-cli",
+                    "workdir": str(Path(manifest_dir.name) / "work"),
+                    "max_parallel": 1,
+                    "tasks": [
+                        {
+                            "key": "one",
+                            "engine": engine,
+                            "spec": LONG_SPEC,
+                            "check": GOOD_CHECK,
+                            "expect_files": ["output.txt"],
+                            "verified": "the output file exists and contains the expected content",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        previous = os.environ.get("RINGER_NO_SELF_UPDATE")
+        os.environ["RINGER_NO_SELF_UPDATE"] = "1"
+        buffer = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buffer):
+                code = main(["lint", str(manifest_path), "--config", str(config_path)])
+        finally:
+            if previous is None:
+                os.environ.pop("RINGER_NO_SELF_UPDATE", None)
+            else:
+                os.environ["RINGER_NO_SELF_UPDATE"] = previous
+        return code, buffer.getvalue()
+
+    def test_cli_lint_loads_the_config(self) -> None:
+        # The wiring test. lint_manifest can be perfectly correct while the CLI
+        # keeps passing config=None, which is the state this fix found.
+        config_path = self.write_config("cline")
+        code, output = self.run_lint_cli("no-such-engine-xyz", config_path)
+        self.assertEqual(1, code, output)
+        self.assertIn("is not configured", output)
+
+    def test_cli_lint_stays_clean_on_a_configured_engine(self) -> None:
+        config_path = self.write_config("cline")
+        code, output = self.run_lint_cli("cline", config_path)
+        self.assertEqual(0, code, output)
+        self.assertIn("lint: clean", output)
 
 
 if __name__ == "__main__":

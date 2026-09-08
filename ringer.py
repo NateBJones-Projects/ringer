@@ -1814,6 +1814,22 @@ def lint_manifest(
     if manifest.run_name == MODEL_SCOREBOARD_RUN_NAME:
         findings.append("manifest: run_name model-scoreboard is reserved for the scoreboard page.")
 
+    # An engine name that resolves to nothing is the one manifest error that
+    # costs a whole dispatch to discover: `run` fails at spawn time, once the
+    # run row, the worktree and the dashboard entry already exist. Lint used to
+    # call a manifest naming `no-such-engine-xyz` clean, because nothing here
+    # ever looked the name up: the only code that touched it,
+    # noncanonical_route_findings, does a `.get()` that returns None and then
+    # `continue`s, so an unknown engine took the quiet path out.
+    if config is not None:
+        known = ", ".join(sorted(config.engines))
+        for task in manifest.tasks:
+            if task.engine not in config.engines:
+                findings.append(
+                    f"ERROR: {task.key}: engine {task.engine!r} is not configured; "
+                    f"engines available here: {known}."
+                )
+
     for task in manifest.tasks:
         if check_cannot_fail(task.check):
             findings.append(f"{task.key}: check cannot fail, so the task cannot be verified.")
@@ -10925,6 +10941,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     lint_parser = subparsers.add_parser("lint", help="lint a ringer manifest")
     lint_parser.add_argument("manifest", type=Path, help="path to ringer.json")
+    # Lint reads the config now (engine names, model routes), so it takes the
+    # same suppressed --config every other config-consuming command takes.
+    lint_parser.add_argument("--config", type=Path, default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     lint_parser.add_argument(
         "--allow-noncanonical-route",
         action="store_true",
@@ -11039,10 +11058,33 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "lint":
             manifest = Manifest.from_path(args.manifest)
+            # Lint ran with config=None until 2026-08-15 - the shared
+            # `AppConfig.load` below sits AFTER this branch returns. That made
+            # two checks vacuous at once: engine names were never resolvable,
+            # and noncanonical_route_findings fell back to the identity
+            # registry's defaults instead of the engine's real model_default
+            # for every task that does not name a model. Load it here.
+            lint_config: AppConfig | None
+            config_error = ""
+            try:
+                lint_config = AppConfig.load(args.config)
+            except Exception as exc:  # noqa: BLE001 - reported, not swallowed
+                lint_config = None
+                config_error = str(exc)
             findings = lint_manifest(
                 manifest,
+                config=lint_config,
                 allow_noncanonical_route=args.allow_noncanonical_route,
             )
+            if config_error:
+                # Say so rather than degrade quietly: without a config the
+                # engine and route checks did not run, and a bare "clean" would
+                # claim more than was actually checked.
+                findings.insert(
+                    0,
+                    f"ERROR: manifest: ringer config could not be loaded ({config_error}); "
+                    "engine names and model routes were NOT checked.",
+                )
             if findings:
                 print_lint_findings(findings)
                 return 1
