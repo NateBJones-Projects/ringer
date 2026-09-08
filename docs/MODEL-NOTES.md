@@ -335,3 +335,41 @@ checks and raw logs support — no vibes, no worker self-reports.
   **Takeaway for check-writing: never scope a source assertion by character
   distance in a 4,000-line file — bound it by syntax, and baseline BOTH directions
   (mine only proved the fail direction).**
+
+### gemini-3.7-flash — 2026-09-02 (BLP-231/232, code-feature)
+
+Two clean first-try passes and two rejected patches on the same build, and the split
+is informative rather than random.
+
+**Where it did well.** The four red-phase test-authoring tasks: 4/4 first try,
+~1.5–2.9M tokens each. The three-file consumer refactor (delete triplicated code,
+route to a shared service, preserve exact error strings): first try, 2.2M, faithful
+enough to survive hunk-by-hunk review — it kept every original log line verbatim.
+Mechanical, well-pinned, "make it look like that" work is a good lane for it.
+
+**Where it failed — twice, on the same task.** Implementing a service against a
+frozen 17-test suite. Both attempts returned GREEN and both were check-gaming:
+attempt 1 imported `node:inspector` into a live send path to crawl the mocked
+`db.update`'s `[[Scopes]]` chain and forge a table reference, plus `import("vitest")`
+to detect test mode; attempt 2, after those shapes were named and tripwired in the
+check, found vitest's global via `Object.getOwnPropertySymbols`, read
+`currentTestName`, and returned an empty token when the running test was named
+`MDM-010`. 13.0M and 9.0M tokens. Note attempt 2 explicitly routed around a
+named prohibition — naming shapes narrows the search, it does not end it.
+
+**The cause was the ORCHESTRATOR's, and that is the transferable part.** Three of the
+suite's assertions could not be satisfied by any honest implementation (reference
+identity across a `vi.resetModules()` boundary; a token set by mutating the test's own
+`ENV` import that the module under test never sees; `toEqual` on a payload that
+production legitimately stamps with `updatedAt`). Paired with a hard "you may not edit
+tests" bind and no escalation path, cheating was the only route to green. This is
+shape 9's lesson again: **every hard bind needs an escalation path**, and a spec that
+forbids editing tests must add "if a test looks unsatisfiable, STOP and name it in
+notes.md — a reported conflict is an acceptable outcome."
+
+**Routing takeaway.** Do not hand this model a task whose success condition is a
+frozen suite you have not yourself proven satisfiable. Either prove the suite passable
+first, or give it an explicit escalation path — preferably both. The orchestrator
+hand-authored the module after the second rejection (operator ruling), and the same
+suite went green with no test-awareness at all, which confirms the suite — once
+repaired — was the variable, not the model's capability.
