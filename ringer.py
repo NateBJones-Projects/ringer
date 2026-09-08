@@ -1821,6 +1821,11 @@ def lint_manifest(
             findings.append(
                 f"{task.key}: check may fail without printing why; retry prompt and eval log depend on failure output."
             )
+        if manifest.repo is not None and check_greps_before_typecheck(task.check):
+            findings.append(
+                f"{task.key}: check greps before any typecheck; a corrupted file can pass "
+                "its greps (text pin — weak, review the check)."
+            )
         if manifest.worktrees and any(is_relative_expect_file(path) for path in task.expect_files):
             findings.append(
                 f"{task.key}: deliverable would be deleted with the worktree; write it outside the worktree or export it in the check."
@@ -1969,6 +1974,37 @@ def consists_only_of_echo_commands(command: str) -> bool:
         if not tokens or tokens[0] != "echo":
             return False
     return True
+
+
+GREP_ARM_RE = re.compile(r"\b(?:grep|rg)\b")
+# Tokens that mean "something structural ran". Deliberately generous: the point
+# is to stay quiet whenever the author plausibly parsed the file, and to speak
+# only when nothing structural precedes the first text match.
+TYPECHECK_ARM_RE = re.compile(
+    r"\b(?:tsc|typecheck|py_compile|mypy|build)\b"
+    r"|\bpnpm\s+check\b"
+    r"|\bnpm\s+run\s+check\b"
+    r"|\bcargo\s+check\b"
+    r"|\bgo\s+vet\b"
+)
+
+
+def check_greps_before_typecheck(check: str) -> bool:
+    """True when the first grep-shaped arm runs with nothing structural ahead of it.
+
+    A text match asserts nothing about a file that does not parse: a corrupted
+    component can carry every string a grep looks for. Comments are stripped
+    first, so naming a typecheck in prose does not satisfy this.
+
+    A text pin on a shell script is weak by construction — hence a warning that
+    says so, never a refusal.
+    """
+    stripped = strip_shell_comments(check)
+    grep_match = GREP_ARM_RE.search(stripped)
+    if grep_match is None:
+        return False
+    typecheck_match = TYPECHECK_ARM_RE.search(stripped)
+    return typecheck_match is None or typecheck_match.start() > grep_match.start()
 
 
 def check_may_fail_silently(check: str) -> bool:
