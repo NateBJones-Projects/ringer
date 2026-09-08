@@ -184,6 +184,37 @@ the check's failure output.
   own validator" test so the checker exercises what it preaches. And keep
   orchestrator patch review mandatory regardless of PASS status — a green
   check is not proof of semantic correctness.
+- **Structure before text.** On a task with a `repo`, the first arm over owned
+  source is a parse or typecheck; grep arms run after it and are floors, not
+  proofs. A text match asserts nothing about a file that does not parse — a
+  component with `useState` spliced into a props type literal, a duplicated
+  declaration and a deleted `<tr>` still satisfied every grep written against
+  it, because each string it looked for was present in the wreckage. Ringer's
+  manifest lint now warns when a repo task's check greps with nothing
+  structural ahead of it.
+- **Print every arm, never exit at the first.** Collect results and print an
+  arms table (`ARM n PASS|FAIL — why`) before exiting non-zero. The retry
+  prompt is built from this output, so a check that fail-fasts is a one-defect
+  retry: the worker fixes the one arm it was shown and walks back into the
+  others. `templates/repo-feature/checks/check_repo_feature.py` already does
+  this — reach for it before hand-writing a check.
+- **Tripwire the build pipeline, not just source.** Added-line scans must
+  cover `package.json` scripts and build configs: a gamed output-scan almost
+  always edits the pipeline (post-processing the artifact) rather than the
+  sources. Assert script purity where feasible (`scripts.build` equals the
+  bare builder).
+- **Frozen artifacts have chain of custody.** Reviewers get isolated COPIES,
+  never the canonical export path — a reviewer once silently fixed the frozen
+  tests instead of returning FAIL. After any review touches frozen inputs,
+  re-verify their red/green state by execution before treating them as the
+  contract.
+- **Baseline every manifest before spawning** (`./ringer.py run manifest.json
+  --baseline` — executes each check against the unmodified tree, zero
+  workers). Reading it: assertions demanding the NEW behavior are expected to
+  fail; an assertion about UNCHANGED behavior (a [legacy]-style canary, an
+  ownership sweep, a harness-health probe) that fails baseline is a bug in
+  YOUR check — and skipping this step once cost two full worker attempts
+  (~7M tokens) against a check no model could satisfy.
 
 ## Pattern playbook
 
