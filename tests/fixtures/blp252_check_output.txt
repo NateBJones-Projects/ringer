@@ -1,0 +1,21 @@
+ FAIL  shared/appointmentSort.test.ts > unparseable start dates (APT-S7) > sorts unparseable dates last within their status group
+ReferenceError: isisNaNB is not defined
+ ❯ tieBreaker shared/appointmentSort.ts:45:23
+     43|   // Tie-break 1: startAt ASCENDING (Good dates < Bad dates)
+     44|   if (isNaNA && !isNaNB) tieComparison = 1; // a is bad, sorts after b
+     45|   else if (!isNaNA && isisNaNB) tieComparison = -1; // a is good, sort…
+       |                       ^
+     46|   else if (!isNaNA && !isNaNB) {
+     47|     // Both good, standard chronological ASC
+ ❯ shared/appointmentSort.ts:100:12
+ ❯ Module.sortAppointments shared/appointmentSort.ts:68:10
+ ❯ shared/appointmentSort.test.ts:171:16
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/6]⎯
+
+ Test Files  1 failed (1)
+      Tests  6 failed | 17 passed (23)
+   Start at  22:15:12
+   Duration  378ms (transform 70ms, setup 60ms, collect 37ms, tests 16ms, environment 0ms, prepare 84ms)
+
+CHECK FAIL: vitest FAILED (rc=1) — full log at /out/vitest.log. Fix it.
