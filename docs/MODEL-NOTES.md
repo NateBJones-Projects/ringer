@@ -319,3 +319,19 @@ checks and raw logs support — no vibes, no worker self-reports.
 ## Process lessons (2026-07-28, PR #82 review)
 - **Ideas worth keeping from a rejected PR.** PR #82's pre-call gateway was dropped (needs your own API key, so it converts flat-rate OAuth plans into metered API billing; incompatible with Claude Code; and it saves tokens by stripping the tool list, which is the thing that makes the CLI worth using). One idea inside it is worth remembering if the problem ever comes back: an *explicitly blessed* answer cache — key a reviewed answer to the exact request plus the exact selected source packet, and replay it with zero upstream calls, never auto-accepting a model answer. It only fires on byte-identical repeats, which is why it didn't justify 2,000 lines here.
 - **Doc-stated support floors need a CI job or they are fiction.** README promised Python 3.11+ while CI only ever ran 3.12; a 3.12-only f-string reached review with a fully green suite. Either test the floor or move it.
+
+### gemini-3.7-flash
+- **2026-08-28 — code-feature (BLP-153 Rescrape UI, React/tRPC).** 2 attempts, ~4.8M
+  tokens, ~14 min, logged FAIL. **The failure was the CHECK, not the model.** Both
+  attempts produced correct code (role-gated button, confirm dialog naming the
+  consequence, handler passing only propertyData, clean typecheck); my validator
+  reported two false failures from character-window scoping — a dialog test that
+  scanned 8000 chars around the first keyword while the dialog sat ~700 lines away,
+  and a greedy 3000-char handler slice that ran into the NEXT handler and picked up
+  its `averageCompPrice` write. Rewritten to bound regions by syntax (state-bound
+  dialog match; handler delimited by its useCallback dep array), the same artifact
+  passes and the pre-change baseline still fails with six named assertions.
+  **Takeaway for routing: do not read this FAIL as evidence against 3.7-flash.**
+  **Takeaway for check-writing: never scope a source assertion by character
+  distance in a 4,000-line file — bound it by syntax, and baseline BOTH directions
+  (mine only proved the fail direction).**
