@@ -8605,6 +8605,106 @@ def run_models_command(config: AppConfig, args: argparse.Namespace) -> int:
     return 0
 
 
+_REDACTED = "[REDACTED]"
+
+# Bearer tokens: `Authorization: Bearer xyz`, `'Authorization'=>'Bearer xyz'`,
+# `"authorization": "Bearer xyz"` — any quoting style. Keeps the word Bearer.
+_BEARER_RE = re.compile(r"\b([Bb]earer)\s+([^\s'\"]+)")
+
+# Known credential prefixes, with a minimum token length so short/generic
+# prefixes (like "re_") don't fire on ordinary identifiers such as
+# "failure_reason" or "store_key" — those already fail the word-boundary
+# lookbehind, but the length floor is a second line of defense.
+_CREDENTIAL_PREFIXES: tuple[tuple[str, int], ...] = (
+    ("sk-ant-", 4),
+    ("github_pat_", 4),
+    ("sk_live_", 4),
+    ("sk_test_", 4),
+    ("rk_live_", 4),
+    ("rk_test_", 4),
+    ("ghp_", 8),
+    ("gho_", 8),
+    ("ghu_", 8),
+    ("ghs_", 8),
+    ("xoxb-", 8),
+    ("xoxp-", 8),
+    ("xoxa-", 8),
+    ("xoxs-", 8),
+    ("glpat-", 8),
+    ("sk-", 8),
+    ("re_", 8),
+)
+_PREFIX_RES = tuple(
+    (
+        re.compile(
+            r"(?<![A-Za-z0-9_])" + re.escape(prefix) + r"([A-Za-z0-9_\-\.]{" + str(min_len) + r",})"
+        ),
+        prefix,
+    )
+    for prefix, min_len in _CREDENTIAL_PREFIXES
+)
+_AKIA_RE = re.compile(r"(?<![A-Za-z0-9])AKIA[0-9A-Z]{16}(?![A-Za-z0-9])")
+
+# Generic `key = value` / `key: value` / `key => value` assignments where the
+# key name signals a credential. Keeps the key name and separator, redacts
+# only the value.
+_GENERIC_KEY_RE = re.compile(
+    r"""(?ix)
+    (?<![A-Za-z0-9_])
+    (?P<key>api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|token|secret|password|passwd)
+    (?P<q1>['"]?)
+    (?P<sep>\s*(?:=>|=|:)\s*)
+    (?:
+        "(?P<dval>[^"]*)"
+      | '(?P<sval>[^']*)'
+      | (?P<uval>[^\s,}'"]+)
+    )
+    """
+)
+
+
+def _redact_bearer(match: re.Match[str]) -> str:
+    return f"{match.group(1)} {_REDACTED}"
+
+
+def _redact_generic_key(match: re.Match[str]) -> str:
+    key = match.group("key")
+    q1 = match.group("q1") or ""
+    sep = match.group("sep")
+    if match.group("dval") is not None:
+        return f'{key}{q1}{sep}"{_REDACTED}"'
+    if match.group("sval") is not None:
+        return f"{key}{q1}{sep}'{_REDACTED}'"
+    return f"{key}{q1}{sep}{_REDACTED}"
+
+
+def redact_secrets(text: str) -> str:
+    """Replace credential values with [REDACTED], keeping surrounding text,
+    key names and structure intact so the result stays diagnostic.
+
+    FAILS CLOSED. If the redaction itself blows up, the input is dropped
+    entirely rather than returned — returning it would hand back the exact
+    cleartext this function exists to remove, silently, on the one code path
+    nobody is watching. Losing a check excerpt is recoverable; leaking a
+    credential into a file on disk is not.
+    """
+    if not text:
+        return "" if text is None else text
+    try:
+        redacted = _BEARER_RE.sub(_redact_bearer, text)
+        for prefix_re, prefix in _PREFIX_RES:
+            redacted = prefix_re.sub(prefix + _REDACTED, redacted)
+        redacted = _AKIA_RE.sub("AKIA" + _REDACTED, redacted)
+        redacted = _GENERIC_KEY_RE.sub(_redact_generic_key, redacted)
+        return redacted
+    except Exception as exc:
+        return (
+            f"[ringer] redaction failed ({type(exc).__name__}: {exc}); "
+            f"{len(text)} characters withheld because they could not be "
+            "screened for credentials."
+        )
+
+
 class Verifier:
     async def verify(self, task: TaskSpec, taskdir: Path) -> VerifyResult:
         check_returncode, check_timed_out, output = await self._run_check(task.check, taskdir)
@@ -8627,7 +8727,7 @@ class Verifier:
             ok=ok,
             check_returncode=check_returncode,
             check_timed_out=check_timed_out,
-            raw_output_excerpt=output[:2000],
+            raw_output_excerpt=redact_secrets(output)[:2000],
             missing_files=missing_files,
         )
 
@@ -9649,7 +9749,7 @@ def tail_lines(path: Path, line_count: int) -> list[str]:
             data = fh.read()
     except OSError:
         return []
-    text = data.decode("utf-8", errors="replace")
+    text = redact_secrets(data.decode("utf-8", errors="replace"))
     return text.splitlines()[-line_count:]
 
 
@@ -9664,7 +9764,7 @@ def tail_file_text(path: Path, max_bytes: int) -> str:
             data = fh.read()
     except OSError:
         return ""
-    return data.decode("utf-8", errors="replace")
+    return redact_secrets(data.decode("utf-8", errors="replace"))
 
 
 def tail_text(path: Path, max_bytes: int = 6000, line_count: int = 40) -> str:
