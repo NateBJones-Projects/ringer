@@ -10837,7 +10837,15 @@ def unwritable_deliverables(task: TaskSpec) -> list[str]:
 
 
 async def execute_baseline(manifest: Manifest) -> BaselineResult:
-    """Execute every task's CHECK against the unmodified tree. Spawn nothing.
+    """Execute every task's CHECK against the unmodified tree. Spawn no WORKERS.
+
+    ⚠️ Not "spawn nothing", which is what this said before and is not true:
+    the checks themselves are subprocesses, and the worktree path launches
+    `git` helpers. What the phase guarantees is that no worker -- no model,
+    no billable token -- is started. That is the guarantee worth having and
+    the one the refusal below depends on; stating a broader one invites a
+    maintainer to assume there are no side effects at all, when a check can
+    legitimately export files.
 
     The point: a check assertion that encodes NEW behavior is *expected* to
     fail here, but an assertion that encodes UNCHANGED behavior and fails
