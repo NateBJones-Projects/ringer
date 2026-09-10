@@ -2524,6 +2524,9 @@ class StateWriter:
         # what the judgment was. Preflight itself stays frozen and describes
         # only what was decided BEFORE dispatch.
         self.canary_verdict: dict[str, Any] | None = None
+        # WHICH task was the canary and why that one. Separate from the
+        # verdict: the verdict says what it found, this says what it spoke for.
+        self.canary_selection: dict[str, Any] | None = None
         self.run_id = run_id
         self.run_name = run_name
         self.identity = identity
@@ -2701,6 +2704,7 @@ class StateWriter:
         """
         record = self.preflight.to_record()
         record["canary"]["verdict"] = self.canary_verdict
+        record["canary"]["selection"] = self.canary_selection
         return record
 
     def build_summary(self) -> dict[str, int]:
@@ -9193,7 +9197,76 @@ class RingerRunner:
                     "reason": "single-task run is its own canary",
                 }
             return None, list(self.runtimes)
-        return self.runtimes[0], list(self.runtimes[1:])
+        canary = self._pick_canary()
+        rest = [r for r in self.runtimes if r is not canary]
+        return canary, rest
+
+    def _worker_pair(self, runtime: TaskRuntime) -> tuple[str, str]:
+        """What a task will actually be run BY. The unit of representativeness.
+
+        Engine and model together, because either alone can mislead: two tasks
+        on the same engine may run different models, and the same model under a
+        different engine is a different harness.
+        """
+        engine = self.config.engines.get(runtime.task.engine)
+        model = runtime.task.model or (engine.model_default if engine else "") or ""
+        return (runtime.task.engine, model)
+
+    def _pick_canary(self) -> TaskRuntime:
+        """The first task that RESEMBLES the batch, not simply the first task.
+
+        The canary is only evidence about the tasks it resembles. Taking
+        `runtimes[0]` blindly gets that wrong in both directions, and the two
+        directions cost very differently:
+
+          too weak  — a minority probe fails and holds a healthy batch. Free
+                      and reversible, but it is the wrong answer, and a hold
+                      nobody can explain is how a gate gets waived by reflex.
+          too strong— a minority probe passes and releases work that then fails
+                      once per task. This is the expensive direction, and it
+                      reaches it THROUGH the gate.
+
+        Measured 2026-09-10 (work#1044): a 32-task scout ran 31 tasks on one
+        model and task 1 on a different, weaker one left over from an earlier
+        audition. It failed, 31 tasks were skipped, and the model they would
+        have used had passed the identical check first try minutes before.
+
+        Ties are broken by manifest order, so selection is deterministic: the
+        dominant pair is the most common one, and the earliest-declared of
+        equally common pairs wins.
+        """
+        counts: dict[tuple[str, str], int] = {}
+        for runtime in self.runtimes:
+            pair = self._worker_pair(runtime)
+            counts[pair] = counts.get(pair, 0) + 1
+        # max() keeps the first maximum it meets, and dicts preserve insertion
+        # order, so this is "most common, earliest declared" without a sort key
+        # that could reorder equal counts differently between runs.
+        dominant = max(counts, key=lambda pair: counts[pair])
+        for runtime in self.runtimes:
+            if self._worker_pair(runtime) == dominant:
+                return runtime
+        return self.runtimes[0]  # unreachable: dominant came from this list
+
+    def _canary_selection(self, canary: TaskRuntime) -> dict[str, Any]:
+        """Why this task, and how much of the batch it actually speaks for."""
+        pair = self._worker_pair(canary)
+        same = sum(1 for r in self.runtimes if self._worker_pair(r) == pair)
+        total = len(self.runtimes)
+        first_pair = self._worker_pair(self.runtimes[0])
+        engine, model = pair
+        return {
+            "task": canary.task.key,
+            "engine": engine,
+            "model": model,
+            "covers": same,
+            "of": total,
+            # A canary speaking for less than half the batch is a weak probe
+            # whatever it says. Naming that is the difference between "the
+            # batch is broken" and "the canary was the wrong instrument".
+            "representative": same * 2 >= total,
+            "moved_from": self.runtimes[0].task.key if pair != first_pair else None,
+        }
 
     async def _dispatch(self) -> None:
         """Release the canary, judge it, then release the rest.
@@ -9206,11 +9279,38 @@ class RingerRunner:
         if canary is None:
             await asyncio.gather(*(self._run_task(runtime) for runtime in rest))
             return
+        selection = self._canary_selection(canary)
+        self.state_writer.canary_selection = selection
         print(
             f"\nCanary: running 1 of {len(self.runtimes)} tasks "
             f"({canary.task.key}) before releasing the other {len(rest)}.",
             flush=True,
         )
+        if selection["moved_from"]:
+            # Silence here would be the defect: a canary quietly moved is
+            # indistinguishable from a canary that was always first.
+            print(
+                f"    not {selection['moved_from']}, which is the only task on "
+                f"{selection['engine']}/{selection['model'] or '(engine default)'}"
+                if selection["covers"] == 1
+                else f"    not {selection['moved_from']} — a minority "
+                f"engine/model for this batch",
+                flush=True,
+            )
+        print(
+            f"    speaks for {selection['covers']} of {selection['of']} task(s) "
+            f"({selection['engine']}/{selection['model'] or 'engine default'})",
+            flush=True,
+        )
+        if not selection["representative"]:
+            # A weak probe is still worth running -- it is one task's spend --
+            # but its verdict must not be read as a statement about the batch.
+            print(
+                "    ⚠️  this batch has no majority engine/model, so the canary "
+                "speaks for less than half of it. Read a FAIL as 'this task "
+                "failed', not 'the batch is broken'.",
+                flush=True,
+            )
         await self._run_task(canary)
         await self._judge_canary(canary, held_back=len(rest))
         await asyncio.gather(*(self._run_task(runtime) for runtime in rest))
