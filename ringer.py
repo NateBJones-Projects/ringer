@@ -53,6 +53,10 @@ CONFIG_FILE_NAME = "config.toml"
 DEFAULT_ENGINE_NAME = "codex"
 DEFAULT_TIMEOUT_S = 900
 CHECK_TIMEOUT_S = 60
+# How often a run with a budget re-reads live worker costs. Short enough that a
+# parallel run cannot overshoot far, long enough not to re-read every log
+# constantly.
+BUDGET_POLL_INTERVAL_S = 10
 DEFAULT_DASHBOARD_PORT_BASE = 8787
 DEFAULT_HUD_PORT = 8700
 DEFAULT_CATALOG_SOURCE = "https://openrouter.ai/api/v1/models"
@@ -8873,7 +8877,18 @@ class RingerRunner:
             self.state_writer.start()
             if self.dashboard is not None:
                 self.state_writer.set_port(self.dashboard.start())
-            await asyncio.gather(*(self._run_task(runtime) for runtime in self.runtimes))
+            watcher = (
+                asyncio.ensure_future(self._watch_budget())
+                if self.manifest.budget_usd
+                else None
+            )
+            try:
+                await asyncio.gather(*(self._run_task(runtime) for runtime in self.runtimes))
+            finally:
+                if watcher is not None:
+                    watcher.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await watcher
             final_state = True
             return 0 if all(runtime.status == "pass" for runtime in self.runtimes) else 1
         except asyncio.CancelledError:
@@ -8916,9 +8931,28 @@ class RingerRunner:
                 kill_process_group(proc)
 
     def run_cost_usd(self) -> float:
-        """What this run has cost so far, summed from what providers reported."""
+        """Measured spend: what providers actually reported. For REPORTING."""
         with self.lock:
             return sum(r.cost_usd or 0.0 for r in self.runtimes)
+
+    def run_exposure_usd(self) -> tuple[float, float]:
+        """(measured, estimated) — what a budget must weigh. For ENFORCEMENT.
+
+        Reporting keeps these apart, because presenting a guess as a measurement
+        is how a number stops being trustworthy. Enforcement must add them: an
+        engine that reports no cost of its own still spends real money, and a
+        budget that ignores it is no budget at all for exactly the case it is
+        most needed -- a plan-billed or separately-billed worker, which on one
+        estate was 797 of 922 tasks.
+        """
+        with self.lock:
+            measured = sum(r.cost_usd or 0.0 for r in self.runtimes)
+            estimated = sum(
+                r.cost_estimated_usd or 0.0
+                for r in self.runtimes
+                if r.cost_usd is None
+            )
+        return measured, estimated
 
     def _refresh_cost(self, runtime: TaskRuntime) -> None:
         """Re-read the task's log; it accumulates across attempts, so this is total."""
@@ -8966,17 +9000,47 @@ class RingerRunner:
             print(f"\n*** RUN STOPPED: {self.stop_reason} ***", flush=True)
             await self.kill_all_workers()
 
+    async def _watch_budget(self) -> None:
+        """Re-read live costs on a timer, so a budget is not merely a post-mortem.
+
+        A task's price is not knowable before it runs -- it exists only in what
+        the worker has already written to its log -- so no reservation is
+        possible. Checking only when a worker EXITS therefore lets N parallel
+        workers each spend the whole budget before any of them reports: with
+        max_parallel=4 a $6 budget can reach $24 without one check firing.
+
+        Polling closes most of that gap. The residual is bounded by this
+        interval and by how fast a worker can spend inside it, which is why the
+        documentation says the run stops as soon as the spend is VISIBLE rather
+        than promising a ceiling that cannot be exceeded. A hard guarantee here
+        would be a lie with a number attached to it.
+        """
+        while True:
+            await asyncio.sleep(BUDGET_POLL_INTERVAL_S)
+            with self.lock:
+                if self.stop_reason is not None:
+                    return
+                live = [r for r in self.runtimes
+                        if r.status in {"running", "retrying", "verifying"}]
+            for runtime in live:
+                self._refresh_cost(runtime)
+            await self._check_budget()
+
     async def _check_budget(self) -> None:
         budget = self.manifest.budget_usd
         if not budget:
             return
-        spent = self.run_cost_usd()
+        measured, estimated = self.run_exposure_usd()
+        spent = measured + estimated
         if spent < budget:
             return
+        detail = f"${measured:.2f} measured"
+        if estimated:
+            detail += f" + ~${estimated:.2f} estimated"
         with self.lock:
             if self.stop_reason is not None:
                 return
-            self.stop_reason = f"budget of ${budget:.2f} reached (spent ${spent:.2f})"
+            self.stop_reason = f"budget of ${budget:.2f} reached ({detail})"
         print(f"\n*** RUN STOPPED: {self.stop_reason} ***", flush=True)
         await self.kill_all_workers()
 
@@ -9031,8 +9095,6 @@ class RingerRunner:
                         runtime.ended_at_monotonic = time.monotonic()
                     await self._cleanup_worktree_on_pass(runtime)
                     return
-                if verdict in {"FAIL", "TIMEOUT"}:
-                    await self._note_failure(runtime, verify)
                 with self.lock:
                     stopped = self.stop_reason
                 if stopped is not None and verdict != "PASS":
@@ -9052,6 +9114,12 @@ class RingerRunner:
                     runtime.status = "fail"
                     runtime.final_verdict = verdict
                     runtime.ended_at_monotonic = time.monotonic()
+                # Counted once the TASK has failed, retries included -- not once
+                # per attempt. Counting attempts made a single task with two
+                # identical failures reach a limit of 2 on its own, which is not
+                # "tasks in a row" by any reading of the name.
+                if verdict in {"FAIL", "TIMEOUT"}:
+                    await self._note_failure(runtime, verify)
                 return
 
     def _harvest_deliverables_on_pass(self, runtime: TaskRuntime) -> None:

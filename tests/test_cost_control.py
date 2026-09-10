@@ -129,26 +129,23 @@ class UnwritableDeliverableLintTests(unittest.TestCase):
             }],
         }), workdir
 
-    def test_spec_ordering_a_write_outside_the_sandbox_is_flagged(self):
-        outside = "/tmp/somewhere-else/report.json"
-        m, _ = self._manifest(f"Write your report to {outside} when done.", outside)
-        findings = ringer.lint_manifest(m)
-        self.assertTrue(
-            any("sandbox forbids" in f for f in findings),
-            f"expected an unwritable-path finding, got: {findings}",
-        )
+    def test_the_rule_fires_on_the_spec_and_not_on_the_check(self):
+        """Both halves in one test, on purpose.
 
-    def test_the_check_exporting_to_an_absolute_path_is_fine(self):
-        # The fix-swarm pattern: the CHECK writes the patch out of the worktree.
-        # The spec never names that path, so the worker is asked for nothing
-        # impossible and this must NOT be flagged.
-        outside = "/tmp/somewhere-else/task.patch"
-        m, _ = self._manifest("Leave your changes uncommitted in the worktree.", outside)
-        findings = ringer.lint_manifest(m)
-        self.assertFalse(
-            any("sandbox forbids" in f for f in findings),
-            f"check-exported deliverable must not be flagged, got: {findings}",
-        )
+        A lone "must not fire" assertion passes when the rule does not exist at
+        all, so it pins nothing. Asserting the positive beside it means this
+        test fails if the rule is missing AND if it is too broad -- which is the
+        only arrangement that actually holds a boundary in place.
+        """
+        outside = "/tmp/somewhere-else/report.json"
+        told_to_write, _ = self._manifest(f"Write your report to {outside} when done.", outside)
+        check_exports, _ = self._manifest("Leave your changes uncommitted in the worktree.", outside)
+
+        fires = [f for f in ringer.lint_manifest(told_to_write) if "sandbox forbids" in f]
+        quiet = [f for f in ringer.lint_manifest(check_exports) if "sandbox forbids" in f]
+
+        self.assertTrue(fires, "the rule did not fire on a spec ordering an unwritable path")
+        self.assertFalse(quiet, f"the rule fired on a check-exported deliverable: {quiet}")
 
     def test_a_path_inside_the_task_directory_is_fine(self):
         workdir = tempfile.mkdtemp()
@@ -186,20 +183,18 @@ class TicketAttributionTests(unittest.TestCase):
             "run_name": "ticket-tests", "workdir": tempfile.mkdtemp(),
             "max_parallel": 1, "tasks": [task]})
 
-    def test_product_work_without_a_ticket_is_flagged(self):
-        findings = ringer.lint_manifest(self._m(task_type="code-fix"))
-        self.assertTrue(any("names no ticket" in f for f in findings), findings)
+    def _fires(self, **kw):
+        return [f for f in ringer.lint_manifest(self._m(**kw)) if "names no ticket" in f]
 
-    def test_product_work_with_a_ticket_is_not_flagged(self):
-        findings = ringer.lint_manifest(self._m(task_type="code-fix", ticket="work#666"))
-        self.assertFalse(any("names no ticket" in f for f in findings), findings)
-
-    def test_a_bakeoff_or_probe_needs_no_ticket(self):
-        # Not every run serves a requirement; the rule must be scoped or it
-        # becomes noise everyone learns to ignore.
+    def test_the_ticket_rule_fires_on_product_work_and_nowhere_else(self):
+        """Positive and negatives together, so the negatives mean something."""
+        self.assertTrue(self._fires(task_type="code-fix"),
+                        "the rule did not fire on product work with no ticket")
+        self.assertFalse(self._fires(task_type="code-fix", ticket="work#666"),
+                         "the rule fired despite a ticket being set")
         for tt in ("research", "probe", "code-review", "bakeoff"):
-            findings = ringer.lint_manifest(self._m(task_type=tt))
-            self.assertFalse(any("names no ticket" in f for f in findings), f"{tt}: {findings}")
+            self.assertFalse(self._fires(task_type=tt),
+                             f"the rule fired on {tt}, which serves no requirement")
 
 
 class UncostedEngineTests(unittest.TestCase):
@@ -266,3 +261,68 @@ class PortabilityTests(unittest.TestCase):
             'ticketed_task_types = "code-fix"\n', encoding="utf-8")
         with self.assertRaises(ValueError):
             ringer.AppConfig.load(cfgdir / "config.toml")
+
+
+class BudgetExposureTests(unittest.TestCase):
+    """A budget must weigh what an engine cannot report, or it is no budget."""
+
+    class _Stub:
+        """Minimal stand-in: run_exposure_usd needs only a lock and runtimes."""
+        def __init__(self, runtimes):
+            import threading
+            self.lock = threading.Lock()
+            self.runtimes = runtimes
+        # Resolved lazily: bound at class-definition time, a missing method
+        # aborts the whole module import and every test in the file reports the
+        # same opaque error instead of its own.
+        def run_exposure_usd(self):
+            return ringer.RingerRunner.run_exposure_usd(self)
+
+        def run_cost_usd(self):
+            return ringer.RingerRunner.run_cost_usd(self)
+
+    def _rt(self, measured=None, estimated=None):
+        rt = ringer.TaskRuntime(task=ringer.TaskSpec(key="k", spec="s", check="c"),
+                                taskdir=Path("/tmp"), log_path=Path("/tmp/x.log"))
+        rt.cost_usd = measured
+        rt.cost_estimated_usd = estimated
+        return rt
+
+    def test_exposure_adds_the_estimate_that_reporting_keeps_apart(self):
+        s = self._Stub([self._rt(measured=1.0), self._rt(estimated=2.0)])
+        measured, estimated = s.run_exposure_usd()
+        self.assertAlmostEqual(measured, 1.0)
+        self.assertAlmostEqual(estimated, 2.0)
+        # reporting stays measured-only, so a guess is never shown as a fact
+        self.assertAlmostEqual(s.run_cost_usd(), 1.0)
+
+    def test_a_measured_task_does_not_also_count_its_estimate(self):
+        # Both fields set: only the measurement counts, or the same spend is
+        # weighed twice and the budget trips early.
+        s = self._Stub([self._rt(measured=5.0, estimated=99.0)])
+        measured, estimated = s.run_exposure_usd()
+        self.assertAlmostEqual(measured, 5.0)
+        self.assertAlmostEqual(estimated, 0.0)
+
+    def test_an_engine_that_reports_nothing_still_reaches_the_budget(self):
+        # The case the whole thing exists for: a plan-billed worker whose spend
+        # is real but invisible to the provider total.
+        s = self._Stub([self._rt(estimated=7.0)])
+        measured, estimated = s.run_exposure_usd()
+        self.assertAlmostEqual(measured + estimated, 7.0)
+        self.assertGreaterEqual(measured + estimated, 6.0)  # would trip a $6 budget
+
+
+class FailureCountingTests(unittest.TestCase):
+    """Counting attempts made one task trip a limit meant for several."""
+
+    def test_note_failure_is_called_once_a_task_is_finished_not_per_attempt(self):
+        src = Path(ringer.__file__).read_text(encoding="utf-8")
+        loop = src[src.index("    async def _run_task"):src.index("    def _harvest_deliverables_on_pass")]
+        note = loop.index("await self._note_failure")
+        retry = loop.index('if attempt < max_attempts and verdict in {"FAIL", "TIMEOUT"}:')
+        self.assertGreater(
+            note, retry,
+            "._note_failure must sit AFTER the retry branch, or a single task's "
+            "repeated attempts count as repeated task failures",
+        )

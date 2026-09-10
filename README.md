@@ -183,16 +183,35 @@ Two manifest keys stop a run that is going wrong:
 }
 ```
 
-- **`budget_usd`** — a hard ceiling. Cost is totted up the moment each worker
-  exits, before its check runs, so a slow verification cannot overshoot it. When
-  the ceiling is hit, in-flight workers are terminated and queued tasks are
-  marked `SKIPPED` with the reason.
-- **`abort_after_repeated_failures`** — stop once this many tasks in a row fail
-  with the *same* signature (check exit code plus the first line it printed). A
+- **`budget_usd`** — stops the run as soon as the spend is *visible*. Live costs
+  are re-read every few seconds and again the moment each worker exits; when the
+  figure crosses the budget, in-flight workers are terminated and queued tasks
+  are marked `SKIPPED` with the reason.
+
+  ⚠️ It is **not** a hard ceiling, and calling it one would be a lie with a
+  number attached. A task's price is not knowable before it runs — it exists
+  only in what the worker has already written to its log — so nothing can be
+  reserved in advance. Parallel workers can therefore overshoot by whatever they
+  spend between one poll and the next. Set it below the number that would
+  actually hurt, not at it.
+
+  The budget weighs **measured plus estimated** spend, even though the summary
+  reports them separately: an engine that reports no cost of its own still
+  spends real money, and a budget blind to it is no budget for precisely the
+  case it is most needed.
+- **`abort_after_repeated_failures`** — stop once this many **tasks** in a row
+  fail with the *same* signature (check exit code plus the first line it
+  printed). Counted per task, retries included, not per attempt: a single task
+  failing twice is one failure, not two. A
   manifest asking for something no worker can produce fails every task
   identically; without this the run pays for all of them, and pays twice because
   each failure is retried. Different failures do not trip it — that is an
   ordinary bad run, not an impossible manifest.
+
+  ⚠️ The signature is deliberately cheap, and cheap means blunt. Two unrelated
+  checks that both open with `FAIL` share a signature, and the counter is one
+  streak across parallel tasks rather than a per-family tally — so it reads
+  completion order, not causation. It is a circuit breaker, not a diagnosis.
 
 Both default to off, so existing manifests behave exactly as before.
 
