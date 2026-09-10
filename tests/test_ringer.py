@@ -92,6 +92,7 @@ class RingerCliTests(unittest.TestCase):
         config_path: Path | None = None,
         no_dashboard: bool = True,
         timeout: int = 30,
+        waive_baseline: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
         cmd = [
             sys.executable,
@@ -106,6 +107,11 @@ class RingerCliTests(unittest.TestCase):
         ]
         if no_dashboard:
             cmd.append("--no-dashboard")
+        if waive_baseline is not None:
+            # Deliberately per-call, not suite-wide: every other test here
+            # keeps the baseline gate ON, which is what proves the gate does
+            # not obstruct a well-formed manifest.
+            cmd.extend(["--no-baseline", waive_baseline])
         env = os.environ.copy()
         env["PYTHONDONTWRITEBYTECODE"] = "1"
         env["RINGER_NO_SELF_UPDATE"] = "1"
@@ -564,7 +570,13 @@ class RingerCliTests(unittest.TestCase):
             ),
         )
 
-        result = self.run_ringer(manifest)
+        # The baseline gate refuses this manifest earlier and for its own
+        # reason (the key escapes the baseline scratch root too), which would
+        # leave the RUNTIME workdir guard below unexercised. Waiving baseline
+        # is what keeps this test pointed at the guard it is named for; the
+        # gate's own refusal of the same key is pinned separately in
+        # tests/test_prove_before_buy.py.
+        result = self.run_ringer(manifest, waive_baseline="testing the runtime workdir guard")
 
         self.assertEqual(result.returncode, 2, result.stdout)
         self.assertIn("task key escapes workdir", result.stdout)
