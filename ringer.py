@@ -7,6 +7,7 @@ import base64
 import contextlib
 import hashlib
 import json
+import math
 import mimetypes
 import os
 import re
@@ -53,6 +54,10 @@ CONFIG_FILE_NAME = "config.toml"
 DEFAULT_ENGINE_NAME = "codex"
 DEFAULT_TIMEOUT_S = 900
 CHECK_TIMEOUT_S = 60
+# How often a run with a budget re-reads live worker costs. Short enough that a
+# parallel run cannot overshoot far, long enough not to re-read every log
+# constantly.
+BUDGET_POLL_INTERVAL_S = 10
 DEFAULT_DASHBOARD_PORT_BASE = 8787
 DEFAULT_HUD_PORT = 8700
 DEFAULT_CATALOG_SOURCE = "https://openrouter.ai/api/v1/models"
@@ -741,6 +746,16 @@ class EngineConfig:
     # its own "model" — this is what makes a harness engine (OpenCode) model
     # agnostic instead of hard-coding one model into the command line.
     model_default: str = ""
+    # Some harnesses report tokens in thousands rather than units. Codex does:
+    # measured over a sample of real tasks its "tokens used" runs 12-230 where OpenCode
+    # reports hundreds of thousands for comparable work. Summed naively a Codex
+    # loop reads a thousand times cheaper than it is.
+    token_scale: int = 1
+    # Optional $/million, for engines that report tokens but no cost of their
+    # own. Setting these produces an ESTIMATE, always labelled as one -- a
+    # number the provider never sent must never be presented as measured.
+    price_in_per_mtok: float | None = None
+    price_out_per_mtok: float | None = None
 
     @property
     def process_name(self) -> str:
@@ -1058,6 +1073,25 @@ def load_artifact_config(raw: Any, state_dir: Path) -> ArtifactConfig:
     )
 
 
+# Task types that change a product and therefore answer to a requirement. A
+# bakeoff, probe or research task legitimately serves none, so the finding is
+# scoped rather than universal.
+#
+# The default is only the canonical vocabulary this project documents. Estates
+# that coin their own product task types -- whatever
+# their stack is called -- extend it in config rather than here:
+#
+#   ticketed_task_types = ["code-fix", "code-feature"]
+#
+# Hard-coding one estate's stack into everyone's linter is how a shared tool
+# stops being shared.
+# Empty by default: OFF unless an estate opts in. Even "code-fix" and
+# "code-feature" are a policy -- shipping them enabled would hand every
+# installation a new lint failure it never asked for, and a shared tool does not
+# get to decide that its users track requirements the way its author does.
+DEFAULT_TICKETED_TASK_TYPES: frozenset[str] = frozenset()
+
+
 @dataclass(frozen=True)
 class AppConfig:
     path: Path | None
@@ -1072,6 +1106,9 @@ class AppConfig:
     artifact: ArtifactConfig
     steering: SteeringConfig = field(default_factory=SteeringConfig)
     update: UpdateConfig = field(default_factory=UpdateConfig)
+    # Which task types must name a ticket. Estate-specific by nature; see
+    # DEFAULT_TICKETED_TASK_TYPES.
+    ticketed_task_types: frozenset[str] = DEFAULT_TICKETED_TASK_TYPES
     engine_bin_diagnostics: tuple[EngineBinDiagnostic, ...] = ()
 
     @classmethod
@@ -1105,6 +1142,15 @@ class AppConfig:
         )
         artifact_config = load_artifact_config(data.get("artifact"), state_dir)
         update_config = load_update_config(data.get("update"))
+        raw_ticketed = data.get("ticketed_task_types")
+        if raw_ticketed is None:
+            ticketed_task_types = DEFAULT_TICKETED_TASK_TYPES
+        elif not isinstance(raw_ticketed, list):
+            raise ValueError("ticketed_task_types must be a list of task-type names")
+        else:
+            ticketed_task_types = frozenset(
+                str(item).strip() for item in raw_ticketed if str(item).strip()
+            )
         try:
             steering_config = load_steering_config(data.get("steering"))
         except Exception:
@@ -1124,6 +1170,7 @@ class AppConfig:
             artifact=artifact_config,
             steering=steering_config,
             update=update_config,
+            ticketed_task_types=ticketed_task_types,
             engine_bin_diagnostics=engine_bin_diagnostics,
         )
 
@@ -1698,9 +1745,32 @@ def load_engines(raw: Any) -> dict[str, EngineConfig]:
         model_default = str(
             section.get("model_default", base.model_default if base else "")
         ).strip()
+        token_scale = int(section.get("token_scale", base.token_scale if base else 1))
+        if token_scale <= 0:
+            raise ValueError(f"engines.{clean_name}.token_scale must be positive")
+
+        def _price(field: str) -> float | None:
+            raw = section.get(field, getattr(base, field) if base else None)
+            if raw is None:
+                return None
+            value = float(raw)
+            # Same reasoning as budget_usd: NaN compares false against
+            # everything and infinity is unreachable, so either would make the
+            # exposure it feeds meaningless.
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(
+                    f"engines.{clean_name}.{field} must be a finite, non-negative number"
+                )
+            return value
+
+        price_in = _price("price_in_per_mtok")
+        price_out = _price("price_out_per_mtok")
         engines[clean_name] = EngineConfig(
             name=clean_name,
             bin=bin_path,
+            token_scale=token_scale,
+            price_in_per_mtok=price_in,
+            price_out_per_mtok=price_out,
             args_template=args_template,
             full_access_args=full_access_args,
             sandbox_args=sandbox_args,
@@ -1734,6 +1804,12 @@ class TaskSpec:
     full_access: bool = False
     engine_args: tuple[str, ...] = ()
     verified: str = ""
+    # The requirement this task serves, e.g. a work-item id in whatever form your tracker uses. Optional -- plenty of
+    # runs are bakeoffs and probes that serve no ticket -- but without it a fix
+    # swarm's spend cannot be attributed to anything. Measured on a real estate:
+    # almost every product task was keyed by lane number rather than by work item, so the question
+    # "what did this requirement cost?" had no answer at all.
+    ticket: str = ""
     # Which model a harness engine should run for this task (fills the
     # engine's {model} placeholder); empty means the engine's model_default.
     model: str = ""
@@ -1802,6 +1878,7 @@ class TaskSpec:
             full_access=bool(obj.get("full_access", False)),
             engine_args=tuple(engine_args),
             verified=verified.strip(),
+            ticket=str(obj.get("ticket", "")).strip(),
             model=model.strip(),
             task_type=task_type.strip(),
         )
@@ -1816,6 +1893,14 @@ class Manifest:
     repo: Path | None
     tasks: tuple[TaskSpec, ...]
     source_path: Path | None = None
+    # Spend limit in USD. The run stops as soon as the spend is VISIBLE -- see
+    # _watch_budget for why this cannot be a hard ceiling. None means unlimited,
+    # which is the historical behaviour.
+    budget_usd: float | None = None
+    # Stop the run once this many tasks have failed in a row with the SAME
+    # failure signature. A manifest whose deliverable is impossible fails every
+    # task identically; without this the run pays for all of them, twice.
+    abort_after_repeated_failures: int | None = None
 
     @classmethod
     def from_path(cls, path: Path) -> "Manifest":
@@ -1831,6 +1916,8 @@ class Manifest:
             repo=manifest.repo,
             tasks=manifest.tasks,
             source_path=path,
+            budget_usd=manifest.budget_usd,
+            abort_after_repeated_failures=manifest.abort_after_repeated_failures,
         )
 
     @classmethod
@@ -1857,6 +1944,21 @@ class Manifest:
         duplicates = sorted({key for key in keys if keys.count(key) > 1})
         if duplicates:
             raise ValueError(f"duplicate task keys: {', '.join(duplicates)}")
+        budget_raw = obj.get("budget_usd")
+        budget_usd: float | None = None
+        if budget_raw is not None:
+            budget_usd = float(budget_raw)
+            # NaN is truthy and compares False against everything, so it would
+            # start the watcher and then stop the run immediately; infinity is a
+            # ceiling nothing can reach. Neither is a budget.
+            if not math.isfinite(budget_usd) or budget_usd <= 0:
+                raise ValueError("budget_usd must be a positive, finite number")
+        abort_raw = obj.get("abort_after_repeated_failures")
+        abort_after: int | None = None
+        if abort_raw is not None:
+            abort_after = int(abort_raw)
+            if abort_after <= 0:
+                raise ValueError("abort_after_repeated_failures must be positive")
         worktrees = bool(obj.get("worktrees", False))
         if worktrees:
             reserved_logs_dir = (workdir / "logs").resolve()
@@ -1877,6 +1979,8 @@ class Manifest:
             worktrees=worktrees,
             repo=repo,
             tasks=tasks,
+            budget_usd=budget_usd,
+            abort_after_repeated_failures=abort_after,
         )
 
     def with_max_parallel(self, value: int | None) -> "Manifest":
@@ -1892,10 +1996,51 @@ class Manifest:
             repo=self.repo,
             tasks=self.tasks,
             source_path=self.source_path,
+            budget_usd=self.budget_usd,
+            abort_after_repeated_failures=self.abort_after_repeated_failures,
         )
 
 
 FILE_TEST_OPS = {"-e", "-f", "-s", "-d", "-r", "-w", "-x", "-L"}
+
+
+
+
+def worker_unwritable_paths(task: TaskSpec, manifest: Manifest) -> list[str]:
+    """Absolute paths a spec orders the worker to write that its sandbox refuses.
+
+    A worker may write inside its own task directory. It also has a temp dir,
+    but that path is assigned at run time and is not knowable here, so this
+    check deliberately reasons about the task directory alone: a spec that names
+    an absolute path outside it -- and lists
+    it in expect_files, so the file is genuinely expected from the worker rather
+    than merely mentioned -- describes an impossible task. Every attempt fails,
+    and every attempt is retried.
+
+    The distinction that matters: an absolute expect_files entry is perfectly
+    normal when the CHECK produces it (the fix-swarm pattern exports a patch out
+    of the worktree that way). It is only wrong when the SPEC hands that path to
+    the worker. So the spec text is what decides.
+
+    Found the hard way: a scout worker located its answer in four tool calls and
+    then spent about forty more trying `write`, `cat >`, `dd`, `cp`, python and
+    `xattr` against a path it was never allowed to touch.
+    """
+    if not task.expect_files:
+        return []
+    taskdir = (manifest.workdir / task.key).resolve()
+    offenders: list[str] = []
+    for raw in task.expect_files:
+        path = str(raw)
+        if not os.path.isabs(path):
+            continue
+        resolved = Path(path).resolve()
+        if resolved == taskdir or taskdir in resolved.parents:
+            continue
+        if path not in task.spec:
+            continue
+        offenders.append(path)
+    return offenders
 
 
 def lint_manifest(
@@ -1907,6 +2052,7 @@ def lint_manifest(
     allow_noncanonical_route: bool = False,
 ) -> list[str]:
     findings: list[str] = []
+    ticketed_types = config.ticketed_task_types if config else DEFAULT_TICKETED_TASK_TYPES
     if manifest.run_name == MODEL_SCOREBOARD_RUN_NAME:
         findings.append("manifest: run_name model-scoreboard is reserved for the scoreboard page.")
 
@@ -1916,6 +2062,17 @@ def lint_manifest(
         if check_may_fail_silently(task.check):
             findings.append(
                 f"{task.key}: check may fail without printing why; retry prompt and eval log depend on failure output."
+            )
+        if task.task_type in ticketed_types and not task.ticket:
+            findings.append(
+                f"{task.key}: {task.task_type} names no ticket, so its cost and outcome "
+                f"cannot be attributed to a requirement. Set \"ticket\"."
+            )
+        for unreachable in worker_unwritable_paths(task, manifest):
+            findings.append(
+                f"{task.key}: the spec tells the worker to write {unreachable}, which its "
+                f"sandbox forbids -- a worker may only write inside its own task directory. "
+                f"Have the worker write a relative path and export it in the check."
             )
         if manifest.worktrees and any(is_relative_expect_file(path) for path in task.expect_files):
             findings.append(
@@ -2180,6 +2337,15 @@ class TaskRuntime:
     ended_at_monotonic: float | None = None
     worker_pid: int | None = None
     tokens: int | None = None
+    # What the provider actually charged for this task, summed across every
+    # model step in its log, and how many steps that took. `tokens` above is a
+    # single step and cannot be used for money -- see parse_step_costs.
+    cost_usd: float | None = None
+    # Set only when the engine reports no cost of its own and the config supplies
+    # prices. Kept in a SEPARATE field so a measured total and a guess can never
+    # be added together by accident.
+    cost_estimated_usd: float | None = None
+    model_steps: int = 0
     final_verdict: str | None = None
     last_check_returncode: int | None = None
     last_check_timed_out: bool = False
@@ -8810,6 +8976,17 @@ class RingerRunner:
         self.verifier = Verifier()
         self.semaphore = asyncio.Semaphore(manifest.max_parallel)
         self.active_processes: dict[int, asyncio.subprocess.Process] = {}
+        # Set once when the run must stop early: budget spent, or the same
+        # failure repeating. Tasks that have not started check it and skip.
+        self.stop_reason: str | None = None
+        # Counted PER SIGNATURE rather than as one streak. With workers finishing
+        # in arbitrary order a single streak counter mixes unrelated families:
+        # A,B,A,B never reaches 2 as a streak, yet A has failed twice the same
+        # way, and two unrelated failures can look consecutive purely because of
+        # completion order. A per-signature tally answers the question actually
+        # being asked -- has THIS failure now happened N times.
+        self.failure_counts: dict[str, int] = {}
+        self.failure_tasks: dict[str, list[str]] = {}
 
     async def run(self) -> int:
         self.manifest.workdir.mkdir(parents=True, exist_ok=True)
@@ -8818,8 +8995,27 @@ class RingerRunner:
             self.state_writer.start()
             if self.dashboard is not None:
                 self.state_writer.set_port(self.dashboard.start())
-            await asyncio.gather(*(self._run_task(runtime) for runtime in self.runtimes))
+            watcher = (
+                asyncio.ensure_future(self._watch_budget())
+                if self.manifest.budget_usd
+                else None
+            )
+            try:
+                await asyncio.gather(*(self._run_task(runtime) for runtime in self.runtimes))
+            finally:
+                if watcher is not None:
+                    watcher.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await watcher
             final_state = True
+            with self.lock:
+                stopped = self.stop_reason
+            if stopped is not None:
+                # A run that was cut short did not do what the manifest asked,
+                # even if every task that finished happened to pass. Reporting
+                # success here would let a budget stop pass a CI gate silently.
+                print(f"\nrun did not complete: {stopped}", flush=True)
+                return 1
             return 0 if all(runtime.status == "pass" for runtime in self.runtimes) else 1
         except asyncio.CancelledError:
             await self.kill_all_workers()
@@ -8860,8 +9056,151 @@ class RingerRunner:
             if proc.returncode is None:
                 kill_process_group(proc)
 
+    def run_cost_usd(self) -> float:
+        """Measured spend: what providers actually reported. For REPORTING."""
+        with self.lock:
+            return sum(r.cost_usd or 0.0 for r in self.runtimes)
+
+    def run_exposure_usd(self) -> tuple[float, float]:
+        """(measured, estimated) — what a budget must weigh. For ENFORCEMENT.
+
+        Reporting keeps these apart, because presenting a guess as a measurement
+        is how a number stops being trustworthy. Enforcement must add them: an
+        engine that reports no cost of its own still spends real money, and a
+        budget that ignores it is no budget at all for exactly the case it is
+        most needed -- a plan-billed or separately-billed worker, which on one
+        estate was the large majority of tasks.
+        """
+        with self.lock:
+            measured = sum(r.cost_usd or 0.0 for r in self.runtimes)
+            estimated = sum(
+                r.cost_estimated_usd or 0.0
+                for r in self.runtimes
+                if r.cost_usd is None
+            )
+        return measured, estimated
+
+    def _refresh_cost(self, runtime: TaskRuntime) -> None:
+        """Re-read the task's log; it accumulates across attempts, so this is total."""
+        cost, steps = parse_step_costs(runtime.log_path)
+        engine = self.config.engines.get(runtime.task.engine)
+        with self.lock:
+            if cost is not None:
+                runtime.cost_usd = cost
+            runtime.model_steps = steps
+            if cost is None and engine is not None:
+                # Prefer the streamed total: summing every step is right by
+                # construction. Harnesses that stream nothing (Codex prints only
+                # a "tokens used" line) leave this at 0, and the engine's own
+                # reported figure is the only number available.
+                #
+                # Whether that figure is a running total or a single step is a
+                # property of the harness, not something knowable here -- which
+                # is what `token_scale` exists to correct per engine. Measured on
+                # Codex: across every log on one estate, zero step_finish
+                # events, and a "tokens used"
+                # value whose median (47, i.e. 47k) sits in the same range as
+                # OpenCode's fresh input for comparable work, so it reads as a
+                # task total rather than one step. Confirm before trusting it for
+                # a new engine.
+                streamed = parse_step_tokens(runtime.log_path)
+                billable = streamed or (runtime.tokens or 0)
+                if billable:
+                    runtime.cost_estimated_usd = estimate_cost_from_tokens(engine, billable)
+
+    async def _note_failure(self, runtime: TaskRuntime, verify: Any) -> None:
+        """Track identical consecutive failures so an impossible manifest stops early.
+
+        The signature is the check's exit code plus the first meaningful line it
+        printed. A manifest that asks for something no worker can produce fails
+        every task the same way; that is the shape worth stopping on, and it is
+        distinguishable from a run where several different things went wrong.
+        """
+        limit = self.manifest.abort_after_repeated_failures
+        if not limit:
+            return
+        first_line = ""
+        for line in (getattr(verify, "raw_output_excerpt", "") or "").splitlines():
+            stripped = line.strip()
+            if stripped:
+                first_line = stripped[:200]
+                break
+        signature = f"rc={getattr(verify, 'check_returncode', None)}|{first_line}"
+        with self.lock:
+            seen = self.failure_counts.get(signature, 0) + 1
+            self.failure_counts[signature] = seen
+            self.failure_tasks.setdefault(signature, []).append(runtime.task.key)
+            tripped = seen >= limit and self.stop_reason is None
+            if tripped:
+                # Name the tasks. The signature is deliberately coarse, so a stop
+                # can be a genuine repeated failure or an unlucky collision
+                # between checks that open with the same line -- and the reader
+                # can only tell which by seeing which tasks were counted.
+                which = ", ".join(self.failure_tasks[signature])
+                self.stop_reason = (
+                    f"{seen} tasks failed the same way ({first_line or 'no output'}) "
+                    f"-- {which} -- stopping rather than paying for the rest of the "
+                    f"manifest"
+                )
+        if tripped:
+            print(f"\n*** RUN STOPPED: {self.stop_reason} ***", flush=True)
+            await self.kill_all_workers()
+
+    async def _watch_budget(self) -> None:
+        """Re-read live costs on a timer, so a budget is not merely a post-mortem.
+
+        A task's price is not knowable before it runs -- it exists only in what
+        the worker has already written to its log -- so no reservation is
+        possible. Checking only when a worker EXITS therefore lets N parallel
+        workers each spend the whole budget before any of them reports: with
+        max_parallel=4 a $6 budget can reach $24 without one check firing.
+
+        Polling closes most of that gap. The residual is bounded by this
+        interval and by how fast a worker can spend inside it, which is why the
+        documentation says the run stops as soon as the spend is VISIBLE rather
+        than promising a ceiling that cannot be exceeded. A hard guarantee here
+        would be a lie with a number attached to it.
+        """
+        while True:
+            await asyncio.sleep(BUDGET_POLL_INTERVAL_S)
+            with self.lock:
+                if self.stop_reason is not None:
+                    return
+                live = [r for r in self.runtimes
+                        if r.status in {"running", "retrying", "verifying"}]
+            for runtime in live:
+                self._refresh_cost(runtime)
+            await self._check_budget()
+
+    async def _check_budget(self) -> None:
+        budget = self.manifest.budget_usd
+        if not budget:
+            return
+        measured, estimated = self.run_exposure_usd()
+        spent = measured + estimated
+        if spent < budget:
+            return
+        detail = f"${measured:.2f} measured"
+        if estimated:
+            detail += f" + ~${estimated:.2f} estimated"
+        with self.lock:
+            if self.stop_reason is not None:
+                return
+            self.stop_reason = f"budget of ${budget:.2f} reached ({detail})"
+        print(f"\n*** RUN STOPPED: {self.stop_reason} ***", flush=True)
+        await self.kill_all_workers()
+
     async def _run_task(self, runtime: TaskRuntime) -> None:
         async with self.semaphore:
+            with self.lock:
+                stopped = self.stop_reason
+            if stopped is not None:
+                with self.lock:
+                    runtime.status = "fail"
+                    runtime.final_verdict = "SKIPPED"
+                    runtime.setup_error = f"not started: {stopped}"
+                    runtime.ended_at_monotonic = time.monotonic()
+                return
             with self.lock:
                 runtime.started_at_monotonic = time.monotonic()
             prepared, prepare_error = await self._prepare_taskdir(runtime)
@@ -8882,6 +9221,10 @@ class RingerRunner:
                     runtime.status = "verifying"
                     if worker.tokens is not None:
                         runtime.tokens = (runtime.tokens or 0) + worker.tokens
+                # Money is counted the moment the worker stops, before the check
+                # runs, so a budget cannot be overshot by a slow verification.
+                self._refresh_cost(runtime)
+                await self._check_budget()
                 verify = await self.verifier.verify(runtime.task, runtime.taskdir)
                 verdict = verdict_for(worker, verify)
                 with self.lock:
@@ -8898,6 +9241,14 @@ class RingerRunner:
                         runtime.ended_at_monotonic = time.monotonic()
                     await self._cleanup_worktree_on_pass(runtime)
                     return
+                with self.lock:
+                    stopped = self.stop_reason
+                if stopped is not None and verdict != "PASS":
+                    with self.lock:
+                        runtime.status = "fail"
+                        runtime.final_verdict = verdict
+                        runtime.ended_at_monotonic = time.monotonic()
+                    return
                 if attempt < max_attempts and verdict in {"FAIL", "TIMEOUT"}:
                     failure_context = build_failure_context(runtime.log_path, verify.raw_output_excerpt)
                     current_spec = (
@@ -8909,6 +9260,12 @@ class RingerRunner:
                     runtime.status = "fail"
                     runtime.final_verdict = verdict
                     runtime.ended_at_monotonic = time.monotonic()
+                # Counted once the TASK has failed, retries included -- not once
+                # per attempt. Counting attempts made a single task with two
+                # identical failures reach a limit of 2 on its own, which is not
+                # "tasks in a row" by any reading of the name.
+                if verdict in {"FAIL", "TIMEOUT"}:
+                    await self._note_failure(runtime, verify)
                 return
 
     def _harvest_deliverables_on_pass(self, runtime: TaskRuntime) -> None:
@@ -9330,6 +9687,11 @@ class RingerRunner:
                 "expected_model": expected_model,
                 "reasoning_effort": reasoning_effort,
                 "task_type": runtime.task.task_type,
+                # What this cost was FOR. Without it the log records what was
+                # spent and never what it bought.
+                "ticket": runtime.task.ticket,
+                "cost_usd": runtime.cost_usd,
+                "model_steps": runtime.model_steps,
                 "retry": retrying,
             }
         )
@@ -9523,6 +9885,128 @@ def parse_env_file(path: Path) -> dict[str, str]:
             value = value[1:-1]
         values[key.strip()] = value
     return values
+
+
+def estimate_cost_from_tokens(engine: "EngineConfig", tokens: int) -> float | None:
+    """A priced GUESS for engines that report tokens but never a cost.
+
+    Codex is the case this exists for: it bills on another account entirely, so
+    its work is invisible in any provider-reported total. On one estate 797 of
+    most tasks -- every code review among them -- carried no cost at all, which
+    made review look free when it was the expensive half.
+
+    Two things make this honest rather than misleading. The engine's
+    `token_scale` is applied first, because a harness reporting thousands
+    otherwise reads a thousand times cheap. And the result is stored apart from
+    measured cost and always labelled an estimate; a number the provider never
+    sent is never presented as fact.
+
+    Returns None when the engine has no prices configured -- an unknown cost
+    must stay unknown rather than default to zero.
+    """
+    if engine.price_in_per_mtok is None and engine.price_out_per_mtok is None:
+        return None
+    scaled = tokens * engine.token_scale
+    # These engines report one figure, not a split. Agent traffic is
+    # overwhelmingly prompt tokens -- measured ~99/1 on real runs -- so pricing
+    # it all at the input rate is closer than a 50/50 blend, and it errs low
+    # rather than inventing headroom.
+    rate = engine.price_in_per_mtok
+    if rate is None:
+        rate = engine.price_out_per_mtok
+    return scaled * float(rate) / 1_000_000
+
+
+def parse_step_tokens(log_path: Path) -> int:
+    """Total tokens across every step in a worker log.
+
+    `TaskRuntime.tokens` holds ONE step -- that is the defect this whole module
+    exists to correct -- so estimating a price from it reproduces the same
+    19x-40x undercount in the estimate, for exactly the engines that have no
+    measured cost to fall back on. Sum the stream instead.
+
+    Returns 0 when the log carries no per-step token counts, which is the honest
+    answer for a harness that streams nothing.
+    """
+    total = 0
+    try:
+        handle = log_path.open("r", encoding="utf-8", errors="replace")
+    except OSError:
+        return 0
+    with handle:
+        for line in handle:
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(event, dict) or event.get("type") != "step_finish":
+                continue
+            part = event.get("part")
+            if not isinstance(part, dict):
+                continue
+            tokens = part.get("tokens")
+            if isinstance(tokens, dict):
+                for field in ("input", "output"):
+                    value = tokens.get(field)
+                    if isinstance(value, (int, float)) and not isinstance(value, bool):
+                        total += int(value)
+    return total
+
+
+def parse_step_costs(log_path: Path) -> tuple[float | None, int]:
+    """Sum what the provider says each model call cost, from the worker's own log.
+
+    Engines that stream JSON events report a per-step `cost` alongside the token
+    counts. Summing those is exact: it needs no price catalog, no assumption
+    about the prompt/completion split, and it stays right when a provider
+    discounts or caches.
+
+    This exists because `worker_tokens` records ONE step, not the sum -- the
+    token regex reads a single figure out of the tail of the stream. Measured on
+    real tasks the gap is 19x to 40x, which is how a swarm can report a small
+    fraction of its real cost and be restarted many times by an operator who has
+    no way to see otherwise.
+
+    Returns (usd, steps). usd is None when the log carries no cost data at all
+    (a plan-billed or non-JSON engine), which is different from a run that
+    genuinely cost nothing.
+    """
+    total = 0.0
+    steps = 0
+    saw_cost = False
+    try:
+        handle = log_path.open("r", encoding="utf-8", errors="replace")
+    except OSError:
+        return None, 0
+    with handle:
+        for line in handle:
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(event, dict) or event.get("type") != "step_finish":
+                continue
+            steps += 1
+            part = event.get("part")
+            if not isinstance(part, dict):
+                continue
+            cost = part.get("cost")
+            if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+                value = float(cost)
+                # A worker log is untrusted input. NaN compares false against
+                # everything, so one would make `spent < budget` false forever
+                # and disable the stop; a negative would refund exposure the run
+                # has actually spent. Skip both rather than poison the total.
+                if math.isfinite(value) and value >= 0:
+                    total += value
+                    saw_cost = True
+    return (total if saw_cost else None), steps
 
 
 def parse_token_count(text: str, token_regex: str | None = DEFAULT_TOKEN_REGEX) -> int | None:
@@ -10174,17 +10658,38 @@ def print_lint_findings(findings: list[str]) -> None:
 def print_summary(run_id: str, runtimes: list[TaskRuntime]) -> None:
     print("\nSummary")
     print(f"run_id: {run_id}")
-    header = f"{'task':<24} {'status':<8} {'verdict':<8} {'attempts':>8} {'tokens':>10} {'elapsed_s':>10}"
+    header = (
+        f"{'task':<24} {'status':<8} {'verdict':<8} {'attempts':>8} "
+        f"{'steps':>6} {'USD':>8} {'elapsed_s':>10}"
+    )
     print(header)
     print("-" * len(header))
     now = time.monotonic()
     for runtime in runtimes:
-        tokens = "" if runtime.tokens is None else str(runtime.tokens)
+        usd = "" if runtime.cost_usd is None else f"{runtime.cost_usd:.3f}"
         print(
             f"{runtime.task.key:<24} {runtime.status:<8} "
             f"{(runtime.final_verdict or ''):<8} {runtime.attempts:>8} "
-            f"{tokens:>10} {runtime.elapsed_s(now):>10.1f}"
+            f"{runtime.model_steps:>6} {usd:>8} {runtime.elapsed_s(now):>10.1f}"
         )
+    priced = [r for r in runtimes if r.cost_usd is not None]
+    estimated = [r for r in runtimes if r.cost_usd is None and r.cost_estimated_usd is not None]
+    steps = sum(r.model_steps for r in runtimes)
+    if priced:
+        total = sum(r.cost_usd or 0.0 for r in priced)
+        print(f"\nrun cost: ${total:.2f} over {steps} model steps, as reported by the provider")
+    if estimated:
+        est = sum(r.cost_estimated_usd or 0.0 for r in estimated)
+        print(f"  + ~${est:.2f} ESTIMATED for {len(estimated)} task(s) on engines that report "
+              f"no cost (billed separately; priced from configured rates, not measured)")
+    silent = [r.task.key for r in runtimes
+              if r.cost_usd is None and r.cost_estimated_usd is None and r.model_steps]
+    if silent:
+        print(f"  ⚠ {len(silent)} task(s) carry NO cost of any kind — the engine reports none and "
+              f"no price is configured for it: {', '.join(silent[:6])}"
+              + (" ..." if len(silent) > 6 else ""))
+        print("    Their spend is real and lands on another bill. Set price_in_per_mtok "
+              "on that engine to see it.")
     setup_failures = [r for r in runtimes if r.setup_error]
     if setup_failures:
         print("\nsetup failures (no worker was spawned):")
@@ -10862,7 +11367,6 @@ def run_persistent_hud(config: AppConfig, *, port: int | None, open_viewer: bool
         server.stop()
 
 
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ringer.py",
@@ -11226,7 +11730,6 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         print(f"ringer.py: error: {exc}", file=sys.stderr)
         return 2
-
 
 
 if __name__ == "__main__":
