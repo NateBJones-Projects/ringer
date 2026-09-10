@@ -1060,7 +1060,11 @@ def load_artifact_config(raw: Any, state_dir: Path) -> ArtifactConfig:
 #
 # Hard-coding one estate's stack into everyone's linter is how a shared tool
 # stops being shared.
-DEFAULT_TICKETED_TASK_TYPES = frozenset({"code-fix", "code-feature"})
+# Empty by default: OFF unless an estate opts in. Even "code-fix" and
+# "code-feature" are a policy -- shipping them enabled would hand every
+# installation a new lint failure it never asked for, and a shared tool does not
+# get to decide that its users track requirements the way its author does.
+DEFAULT_TICKETED_TASK_TYPES: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -1787,8 +1791,9 @@ class Manifest:
     repo: Path | None
     tasks: tuple[TaskSpec, ...]
     source_path: Path | None = None
-    # Hard ceiling on what this run may spend, in USD, enforced while it runs.
-    # None means unlimited, which is the historical behaviour.
+    # Spend limit in USD. The run stops as soon as the spend is VISIBLE -- see
+    # _watch_budget for why this cannot be a hard ceiling. None means unlimited,
+    # which is the historical behaviour.
     budget_usd: float | None = None
     # Stop the run once this many tasks have failed in a row with the SAME
     # failure signature. A manifest whose deliverable is impossible fails every
@@ -1899,8 +1904,10 @@ FILE_TEST_OPS = {"-e", "-f", "-s", "-d", "-r", "-w", "-x", "-L"}
 def worker_unwritable_paths(task: TaskSpec, manifest: Manifest) -> list[str]:
     """Absolute paths a spec orders the worker to write that its sandbox refuses.
 
-    A worker may write inside its own task directory and its assigned temp dir,
-    and nowhere else. A spec naming an absolute path outside that -- and listing
+    A worker may write inside its own task directory. It also has a temp dir,
+    but that path is assigned at run time and is not knowable here, so this
+    check deliberately reasons about the task directory alone: a spec that names
+    an absolute path outside it -- and lists
     it in expect_files, so the file is genuinely expected from the worker rather
     than merely mentioned -- describes an impossible task. Every attempt fails,
     and every attempt is retried.
@@ -8890,6 +8897,14 @@ class RingerRunner:
                     with contextlib.suppress(asyncio.CancelledError):
                         await watcher
             final_state = True
+            with self.lock:
+                stopped = self.stop_reason
+            if stopped is not None:
+                # A run that was cut short did not do what the manifest asked,
+                # even if every task that finished happened to pass. Reporting
+                # success here would let a budget stop pass a CI gate silently.
+                print(f"\nrun did not complete: {stopped}", flush=True)
+                return 1
             return 0 if all(runtime.status == "pass" for runtime in self.runtimes) else 1
         except asyncio.CancelledError:
             await self.kill_all_workers()

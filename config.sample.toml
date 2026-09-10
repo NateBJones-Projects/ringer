@@ -211,8 +211,9 @@ index_out = "~/.ringer/artifacts/index.html"
 # spend you cannot steer -- on one estate 175 of 178 product tasks were keyed
 # `fix-L13` and similar, and what a requirement cost was simply unanswerable.
 #
-# The default is this project's own documented vocabulary. Estates that coin
-# their own product task types list theirs here rather than patching the source;
-# a bakeoff, probe or research task serves no requirement and is never flagged.
+# OFF by default -- this is a policy, and a shared tool does not get to decide
+# that its users track requirements the way its author does. Name the task types
+# it should apply to and it switches on; a bakeoff, probe or research task serves
+# no requirement and is never flagged.
 #
 # ticketed_task_types = ["code-fix", "code-feature", "dotnet-fix"]

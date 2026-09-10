@@ -215,6 +215,18 @@ Two manifest keys stop a run that is going wrong:
 
 Both default to off, so existing manifests behave exactly as before.
 
+`lint` can also require that product work names the requirement it serves. This
+is **off by default** — upstream ships no opinion about how you track work — and
+turns on by naming the task types it applies to:
+
+```toml
+ticketed_task_types = ["code-fix", "code-feature"]
+```
+
+Spend you cannot attribute to a requirement is spend you cannot steer: on one
+estate 175 of 178 product tasks were keyed `fix-L13` and similar, so "what did
+this requirement cost?" had no answer.
+
 `lint` also refuses a manifest whose **spec** tells the worker to write an
 absolute path outside its own task directory. A worker may only write inside its
 task directory and its assigned temp dir. An absolute path in `expect_files` is

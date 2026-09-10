@@ -148,6 +148,8 @@ class UnwritableDeliverableLintTests(unittest.TestCase):
         self.assertFalse(quiet, f"the rule fired on a check-exported deliverable: {quiet}")
 
     def test_a_path_inside_the_task_directory_is_fine(self):
+        # Paired below with the positive, for the same reason as the others: a
+        # negative alone passes against a linter that has no rule at all.
         workdir = tempfile.mkdtemp()
         inside = str(Path(workdir) / "scout1" / "report.json")
         m = ringer.Manifest.from_obj({
@@ -164,8 +166,11 @@ class UnwritableDeliverableLintTests(unittest.TestCase):
                 "expect_files": [inside],
             }],
         })
-        findings = ringer.lint_manifest(m)
-        self.assertFalse(any("sandbox forbids" in f for f in findings), findings)
+        inside_findings = [f for f in ringer.lint_manifest(m) if "sandbox forbids" in f]
+        self.assertFalse(inside_findings, f"a path inside the task dir was flagged: {inside_findings}")
+        outside, _ = self._manifest("Write /tmp/elsewhere/r.json", "/tmp/elsewhere/r.json")
+        self.assertTrue([f for f in ringer.lint_manifest(outside) if "sandbox forbids" in f],
+                        "the rule is not active, so the negative above proves nothing")
 
 
 if __name__ == "__main__":
@@ -183,17 +188,32 @@ class TicketAttributionTests(unittest.TestCase):
             "run_name": "ticket-tests", "workdir": tempfile.mkdtemp(),
             "max_parallel": 1, "tasks": [task]})
 
-    def _fires(self, **kw):
-        return [f for f in ringer.lint_manifest(self._m(**kw)) if "names no ticket" in f]
+    def _cfg(self, types):
+        cfgdir = Path(tempfile.mkdtemp())
+        listed = ", ".join(f'"{t}"' for t in types)
+        (cfgdir / "config.toml").write_text(f"ticketed_task_types = [{listed}]\n", encoding="utf-8")
+        return ringer.AppConfig.load(cfgdir / "config.toml")
+
+    def _fires(self, config=None, **kw):
+        return [f for f in ringer.lint_manifest(self._m(**kw), config=config)
+                if "names no ticket" in f]
+
+    def test_the_rule_is_off_until_an_estate_opts_in(self):
+        # Upstream ships no policy: a shared tool does not hand every install a
+        # lint failure it never asked for.
+        self.assertEqual(ringer.DEFAULT_TICKETED_TASK_TYPES, frozenset())
+        self.assertFalse(self._fires(task_type="code-fix"),
+                         "the rule fired with no configuration — that is a default policy")
 
     def test_the_ticket_rule_fires_on_product_work_and_nowhere_else(self):
         """Positive and negatives together, so the negatives mean something."""
-        self.assertTrue(self._fires(task_type="code-fix"),
+        cfg = self._cfg(["code-fix", "code-feature"])
+        self.assertTrue(self._fires(config=cfg, task_type="code-fix"),
                         "the rule did not fire on product work with no ticket")
-        self.assertFalse(self._fires(task_type="code-fix", ticket="work#666"),
+        self.assertFalse(self._fires(config=cfg, task_type="code-fix", ticket="work#666"),
                          "the rule fired despite a ticket being set")
         for tt in ("research", "probe", "code-review", "bakeoff"):
-            self.assertFalse(self._fires(task_type=tt),
+            self.assertFalse(self._fires(config=cfg, task_type=tt),
                              f"the rule fired on {tt}, which serves no requirement")
 
 
@@ -235,9 +255,11 @@ class PortabilityTests(unittest.TestCase):
             "tasks": [{"key": "t1", "spec": "s", "check": "echo c; test -f out",
                        "verified": "v", "task_type": task_type}]})
 
-    def test_default_covers_only_the_documented_vocabulary(self):
-        self.assertEqual(ringer.DEFAULT_TICKETED_TASK_TYPES,
-                         frozenset({"code-fix", "code-feature"}))
+    def test_upstream_ships_no_default_policy(self):
+        # Superseded the earlier assertion that the default was code-fix +
+        # code-feature: even that is one estate's idea of product work, and a
+        # shared tool imposing it is the portability defect in miniature.
+        self.assertEqual(ringer.DEFAULT_TICKETED_TASK_TYPES, frozenset())
 
     def test_an_estate_can_add_its_own_task_types(self):
         # Through the real config path, because that is what another factory
