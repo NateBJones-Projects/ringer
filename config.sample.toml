@@ -184,3 +184,24 @@ enabled = true
 out = "~/.ringer/artifacts/{run_id}.html"
 report_out = "~/.ringer/artifacts/{run_id}-report.html"
 index_out = "~/.ringer/artifacts/index.html"
+
+# ── Cost visibility for engines that bill on another account ──────────────
+# Codex reports tokens but never a cost, so its work shows as free in every
+# provider-reported total. On one estate that hid 797 of 922 tasks -- every
+# code review among them -- which made review look free when it was the
+# expensive half.
+#
+# token_scale: some harnesses report THOUSANDS of tokens, not units. Codex
+# does: measured over 40 real tasks its "tokens used" runs 12-230 where
+# OpenCode reports hundreds of thousands for comparable work. Without this a
+# Codex loop reads a thousand times cheaper than it is.
+#
+# Setting prices produces an ESTIMATE, always labelled as one and kept apart
+# from measured cost. Leave them unset and the run says plainly that those
+# tasks carry no cost at all, which is the honest answer -- an unknown cost
+# must never default to zero.
+#
+# [engines.codex]
+# token_scale = 1000
+# price_in_per_mtok = 1.25
+# price_out_per_mtok = 10.00

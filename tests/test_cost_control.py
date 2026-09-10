@@ -173,3 +173,59 @@ class UnwritableDeliverableLintTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TicketAttributionTests(unittest.TestCase):
+    """Cost you cannot attribute to a requirement cannot be steered."""
+
+    def _m(self, **task_extra):
+        task = {"key": "t1", "spec": "do it", "check": "echo checking; test -f out",
+                "verified": "out exists"}
+        task.update(task_extra)
+        return ringer.Manifest.from_obj({
+            "run_name": "ticket-tests", "workdir": tempfile.mkdtemp(),
+            "max_parallel": 1, "tasks": [task]})
+
+    def test_product_work_without_a_ticket_is_flagged(self):
+        findings = ringer.lint_manifest(self._m(task_type="code-fix"))
+        self.assertTrue(any("names no ticket" in f for f in findings), findings)
+
+    def test_product_work_with_a_ticket_is_not_flagged(self):
+        findings = ringer.lint_manifest(self._m(task_type="code-fix", ticket="work#666"))
+        self.assertFalse(any("names no ticket" in f for f in findings), findings)
+
+    def test_a_bakeoff_or_probe_needs_no_ticket(self):
+        # Not every run serves a requirement; the rule must be scoped or it
+        # becomes noise everyone learns to ignore.
+        for tt in ("research", "probe", "code-review", "bakeoff"):
+            findings = ringer.lint_manifest(self._m(task_type=tt))
+            self.assertFalse(any("names no ticket" in f for f in findings), f"{tt}: {findings}")
+
+
+class UncostedEngineTests(unittest.TestCase):
+    """Codex bills elsewhere. Its work must not read as free."""
+
+    def _engine(self, **kw):
+        base = dict(name="codex", bin="/bin/true", args_template=("x",),
+                    full_access_args=(), sandbox_args=())
+        base.update(kw)
+        return ringer.EngineConfig(**base)
+
+    def test_no_prices_means_unknown_not_zero(self):
+        self.assertIsNone(ringer.estimate_cost_from_tokens(self._engine(), 50))
+
+    def test_token_scale_is_applied(self):
+        # Codex reports thousands: 50 means 50,000 tokens. At $1/Mtok that is
+        # $0.05, not $0.00005 -- the thousand-fold error this guards.
+        e = self._engine(token_scale=1000, price_in_per_mtok=1.0)
+        self.assertAlmostEqual(ringer.estimate_cost_from_tokens(e, 50), 0.05)
+
+    def test_unscaled_engine_is_priced_per_token(self):
+        e = self._engine(token_scale=1, price_in_per_mtok=1.0)
+        self.assertAlmostEqual(ringer.estimate_cost_from_tokens(e, 1_000_000), 1.0)
+
+    def test_estimate_never_lands_in_the_measured_field(self):
+        rt = ringer.TaskRuntime(task=ringer.TaskSpec(key="k", spec="s", check="c"),
+                                taskdir=Path("/tmp"), log_path=Path("/tmp/none.log"))
+        self.assertIsNone(rt.cost_usd)
+        self.assertIsNone(rt.cost_estimated_usd)

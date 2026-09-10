@@ -741,6 +741,16 @@ class EngineConfig:
     # its own "model" — this is what makes a harness engine (OpenCode) model
     # agnostic instead of hard-coding one model into the command line.
     model_default: str = ""
+    # Some harnesses report tokens in thousands rather than units. Codex does:
+    # measured over 40 real tasks its "tokens used" runs 12-230 where OpenCode
+    # reports hundreds of thousands for comparable work. Summed naively a Codex
+    # loop reads a thousand times cheaper than it is.
+    token_scale: int = 1
+    # Optional $/million, for engines that report tokens but no cost of their
+    # own. Setting these produces an ESTIMATE, always labelled as one -- a
+    # number the provider never sent must never be presented as measured.
+    price_in_per_mtok: float | None = None
+    price_out_per_mtok: float | None = None
 
     @property
     def process_name(self) -> str:
@@ -1602,9 +1612,27 @@ def load_engines(raw: Any) -> dict[str, EngineConfig]:
         model_default = str(
             section.get("model_default", base.model_default if base else "")
         ).strip()
+        token_scale = int(section.get("token_scale", base.token_scale if base else 1))
+        if token_scale <= 0:
+            raise ValueError(f"engines.{clean_name}.token_scale must be positive")
+
+        def _price(field: str) -> float | None:
+            raw = section.get(field, getattr(base, field) if base else None)
+            if raw is None:
+                return None
+            value = float(raw)
+            if value < 0:
+                raise ValueError(f"engines.{clean_name}.{field} must not be negative")
+            return value
+
+        price_in = _price("price_in_per_mtok")
+        price_out = _price("price_out_per_mtok")
         engines[clean_name] = EngineConfig(
             name=clean_name,
             bin=bin_path,
+            token_scale=token_scale,
+            price_in_per_mtok=price_in,
+            price_out_per_mtok=price_out,
             args_template=args_template,
             full_access_args=full_access_args,
             sandbox_args=sandbox_args,
@@ -1638,6 +1666,12 @@ class TaskSpec:
     full_access: bool = False
     engine_args: tuple[str, ...] = ()
     verified: str = ""
+    # The requirement this task serves, e.g. "work#666". Optional -- plenty of
+    # runs are bakeoffs and probes that serve no ticket -- but without it a fix
+    # swarm's spend cannot be attributed to anything. Measured on a real estate:
+    # 175 of 178 product tasks were keyed `fix-L13` and similar, so the question
+    # "what did this requirement cost?" had no answer at all.
+    ticket: str = ""
     # Which model a harness engine should run for this task (fills the
     # engine's {model} placeholder); empty means the engine's model_default.
     model: str = ""
@@ -1706,6 +1740,7 @@ class TaskSpec:
             full_access=bool(obj.get("full_access", False)),
             engine_args=tuple(engine_args),
             verified=verified.strip(),
+            ticket=str(obj.get("ticket", "")).strip(),
             model=model.strip(),
             task_type=task_type.strip(),
         )
@@ -1827,6 +1862,12 @@ class Manifest:
 FILE_TEST_OPS = {"-e", "-f", "-s", "-d", "-r", "-w", "-x", "-L"}
 
 
+# Task types that change a product and therefore answer to a requirement. A
+# bakeoff, probe or research task legitimately serves none, so the lint finding
+# is scoped rather than universal.
+TICKETED_TASK_TYPES = frozenset({"code-fix", "code-feature", "dotnet-fix", "dotnet-feature"})
+
+
 def worker_unwritable_paths(task: TaskSpec, manifest: Manifest) -> list[str]:
     """Absolute paths a spec orders the worker to write that its sandbox refuses.
 
@@ -1880,6 +1921,11 @@ def lint_manifest(
         if check_may_fail_silently(task.check):
             findings.append(
                 f"{task.key}: check may fail without printing why; retry prompt and eval log depend on failure output."
+            )
+        if task.task_type in TICKETED_TASK_TYPES and not task.ticket:
+            findings.append(
+                f"{task.key}: {task.task_type} names no ticket, so its cost and outcome "
+                f"cannot be attributed to a requirement. Set \"ticket\"."
             )
         for unreachable in worker_unwritable_paths(task, manifest):
             findings.append(
@@ -2154,6 +2200,10 @@ class TaskRuntime:
     # model step in its log, and how many steps that took. `tokens` above is a
     # single step and cannot be used for money -- see parse_step_costs.
     cost_usd: float | None = None
+    # Set only when the engine reports no cost of its own and the config supplies
+    # prices. Kept in a SEPARATE field so a measured total and a guess can never
+    # be added together by accident.
+    cost_estimated_usd: float | None = None
     model_steps: int = 0
     final_verdict: str | None = None
     last_check_returncode: int | None = None
@@ -8848,10 +8898,13 @@ class RingerRunner:
     def _refresh_cost(self, runtime: TaskRuntime) -> None:
         """Re-read the task's log; it accumulates across attempts, so this is total."""
         cost, steps = parse_step_costs(runtime.log_path)
+        engine = self.config.engines.get(runtime.task.engine)
         with self.lock:
             if cost is not None:
                 runtime.cost_usd = cost
             runtime.model_steps = steps
+            if cost is None and engine is not None and runtime.tokens:
+                runtime.cost_estimated_usd = estimate_cost_from_tokens(engine, runtime.tokens)
 
     async def _note_failure(self, runtime: TaskRuntime, verify: Any) -> None:
         """Track identical consecutive failures so an impossible manifest stops early.
@@ -9395,6 +9448,11 @@ class RingerRunner:
                 "expected_model": expected_model,
                 "reasoning_effort": reasoning_effort,
                 "task_type": runtime.task.task_type,
+                # What this cost was FOR. Without it the log records what was
+                # spent and never what it bought.
+                "ticket": runtime.task.ticket,
+                "cost_usd": runtime.cost_usd,
+                "model_steps": runtime.model_steps,
                 "retry": retrying,
             }
         )
@@ -9588,6 +9646,36 @@ def parse_env_file(path: Path) -> dict[str, str]:
             value = value[1:-1]
         values[key.strip()] = value
     return values
+
+
+def estimate_cost_from_tokens(engine: "EngineConfig", tokens: int) -> float | None:
+    """A priced GUESS for engines that report tokens but never a cost.
+
+    Codex is the case this exists for: it bills on another account entirely, so
+    its work is invisible in any provider-reported total. On one estate 797 of
+    922 tasks -- every code review among them -- carried no cost at all, which
+    made review look free when it was the expensive half.
+
+    Two things make this honest rather than misleading. The engine's
+    `token_scale` is applied first, because a harness reporting thousands
+    otherwise reads a thousand times cheap. And the result is stored apart from
+    measured cost and always labelled an estimate; a number the provider never
+    sent is never presented as fact.
+
+    Returns None when the engine has no prices configured -- an unknown cost
+    must stay unknown rather than default to zero.
+    """
+    if engine.price_in_per_mtok is None and engine.price_out_per_mtok is None:
+        return None
+    scaled = tokens * engine.token_scale
+    # These engines report one figure, not a split. Agent traffic is
+    # overwhelmingly prompt tokens -- measured ~99/1 on real runs -- so pricing
+    # it all at the input rate is closer than a 50/50 blend, and it errs low
+    # rather than inventing headroom.
+    rate = engine.price_in_per_mtok
+    if rate is None:
+        rate = engine.price_out_per_mtok
+    return scaled * float(rate) / 1_000_000
 
 
 def parse_step_costs(log_path: Path) -> tuple[float | None, int]:
@@ -10301,13 +10389,23 @@ def print_summary(run_id: str, runtimes: list[TaskRuntime]) -> None:
             f"{runtime.model_steps:>6} {usd:>8} {runtime.elapsed_s(now):>10.1f}"
         )
     priced = [r for r in runtimes if r.cost_usd is not None]
+    estimated = [r for r in runtimes if r.cost_usd is None and r.cost_estimated_usd is not None]
+    steps = sum(r.model_steps for r in runtimes)
     if priced:
         total = sum(r.cost_usd or 0.0 for r in priced)
-        steps = sum(r.model_steps for r in runtimes)
         print(f"\nrun cost: ${total:.2f} over {steps} model steps, as reported by the provider")
-        unpriced = [r.task.key for r in runtimes if r.cost_usd is None and r.model_steps]
-        if unpriced:
-            print(f"  (not included, engine reports no per-step cost: {', '.join(unpriced)})")
+    if estimated:
+        est = sum(r.cost_estimated_usd or 0.0 for r in estimated)
+        print(f"  + ~${est:.2f} ESTIMATED for {len(estimated)} task(s) on engines that report "
+              f"no cost (billed separately; priced from configured rates, not measured)")
+    silent = [r.task.key for r in runtimes
+              if r.cost_usd is None and r.cost_estimated_usd is None and r.model_steps]
+    if silent:
+        print(f"  ⚠ {len(silent)} task(s) carry NO cost of any kind — the engine reports none and "
+              f"no price is configured for it: {', '.join(silent[:6])}"
+              + (" ..." if len(silent) > 6 else ""))
+        print("    Their spend is real and lands on another bill. Set price_in_per_mtok "
+              "on that engine to see it.")
     setup_failures = [r for r in runtimes if r.setup_error]
     if setup_failures:
         print("\nsetup failures (no worker was spawned):")
