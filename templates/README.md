@@ -15,6 +15,7 @@ A kit is a reusable Ringer starter: a manifest skeleton, check skeletons, and a 
 | `asset-swarm` | Runs media production lanes with render-as-check animations, idempotent image batches, diagrams, and captures. | You need many visual or media assets produced with executable validation. | Proven in a recorded run, 2026-07-06 |
 | `adversarial-review` | Sends the same artifact to N different models, collects structured findings, then synthesizes. | You want model diversity on one artifact before deciding what is real. | Proven in a recorded run |
 | `repo-feature` | Lets sandboxed workers edit a real repo through `writable_roots`, then runs a build check and git-porcelain allowlist. | You know what to build and need a delivery lane into an actual repo. | Proven in a recorded run, 2026-07-06 |
+| `split-decision` | Fans one decision question to N provider-isolated workers that each write one validated independent position. | You need genuinely independent positions on a contested decision before a human arbitrates. | Proven in a recorded run, 2026-07-04 |
 | `migration-swarm` | Splits mechanical codebase transforms across worktrees and exports patches. | You have repetitive edits that can be partitioned safely. | Blueprint |
 | `doc-swarm` | Assigns documentation by module with executed examples and no-invented-API checks. | You need docs that prove the APIs and commands they describe. | Blueprint |
 | `test-hardening` | Adds tests by module with count-increase and assertion-density checks while keeping `src/` off-limits. | You need stronger tests without letting workers change production code. | Blueprint |
@@ -32,6 +33,7 @@ Standard kit files are `manifest.json`, `README.md`, and usually one or more exe
 - `launch-kit` round 2 is `focus-group` specialized: use the same isolated persona pattern anywhere a draft needs reaction.
 - `asset-swarm` lanes drop into any kit that needs media: images, animations, diagrams, and captures can be validated as task outputs.
 - `probe` is the pre-flight for any new engine or model: prove the harness path once before giving it a real batch.
+- `split-decision` is `adversarial-review`'s sibling one row up the stack: reviewers inspect an artifact; panelists argue a decision. Both get their diversity from the per-task `model`/`engine` fields.
 - `repo-feature` is the delivery lane after research kits decide what to build: keep discovery separate from repo mutation.
 
 ## Craft Floor
