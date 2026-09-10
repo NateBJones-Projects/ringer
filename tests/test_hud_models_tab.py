@@ -12,7 +12,7 @@ from urllib.request import urlopen
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from ringer import PersistentHudServer  # noqa: E402
+from ringer import MODEL_SCOREBOARD_COLUMNS, PersistentHudServer  # noqa: E402
 
 
 def write_jsonl(path: Path, rows: list[dict[str, object]]) -> None:
@@ -94,14 +94,15 @@ class HudModelsTabTests(unittest.TestCase):
         groups_by_type = {group["task_type"]: group for group in payload["groups"]}
         self.assertEqual({"code-feature", "research"}, set(groups_by_type))
         self.assertEqual(2, groups_by_type["code-feature"]["tasks"])
-        self.assertEqual("openrouter/acme/small", groups_by_type["code-feature"]["model_display"])
+        self.assertEqual(list(MODEL_SCOREBOARD_COLUMNS), payload["columns"])
+        self.assertEqual("Small", groups_by_type["code-feature"]["model_display"])
         self.assertEqual("OpenCode", groups_by_type["code-feature"]["harness"])
         self.assertEqual("OpenRouter API", groups_by_type["code-feature"]["access"])
 
         self.assertEqual(1, len(payload["rollup"]))
         rollup = payload["rollup"][0]
         self.assertEqual("openrouter/acme/small", rollup["model"])
-        self.assertEqual("openrouter/acme/small", rollup["model_display"])
+        self.assertEqual("Small", rollup["model_display"])
         self.assertEqual("proven", rollup["tier"])
         self.assertEqual(3, rollup["tasks"])
         self.assertEqual(4, rollup["attempts"])
@@ -157,6 +158,8 @@ class HudModelsTabTests(unittest.TestCase):
             page = response.read().decode("utf-8")
         self.assertIn('id="models-tab"', page)
         self.assertIn("/api/models", page)
+        for column in MODEL_SCOREBOARD_COLUMNS:
+            self.assertIn(f">{column}<", page)
         with urlopen(f"http://127.0.0.1:{port}/api/models", timeout=5) as response:
             self.assertEqual(200, response.status)
 

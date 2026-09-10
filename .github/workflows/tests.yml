@@ -1,0 +1,46 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  suite:
+    name: full suite (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # test_contributors.py audits full git history
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run test suite
+        env:
+          RINGER_NO_SELF_UPDATE: "1"
+        run: python3 -m unittest discover -s tests -v
+
+  windows:
+    # Non-blocking harness for native-Windows contributions (see PR #17).
+    # The suite is POSIX-only today; the job exists so Windows PRs carry
+    # executed proof on windows-latest. Flip to required once it's green.
+    name: windows harness (non-blocking)
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile
+        run: python -m py_compile ringer.py
+      - name: Attempt test suite
+        env:
+          RINGER_NO_SELF_UPDATE: "1"
+        run: python -m unittest discover -s tests -v

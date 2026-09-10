@@ -105,6 +105,27 @@
       border-bottom: 1px solid var(--hairline);
       gap: 10px;
     }
+    .update-banner {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 32px;
+      padding: 5px clamp(12px, 2vw, 22px);
+      border-bottom: 1px solid var(--hairline);
+      background: var(--quote-bg);
+      color: var(--ink);
+      font-size: 12px;
+    }
+    .update-banner span { flex: 1 1 auto; }
+    .update-banner button {
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      padding: 1px 5px;
+      font-size: 16px;
+      line-height: 1;
+    }
+    .update-banner button:hover { color: var(--ink); }
     .running-now {
       display: flex;
       gap: 7px;
@@ -565,6 +586,10 @@
 </head>
 <body>
   <div class="page">
+    <aside id="update-banner" class="update-banner" role="status" hidden>
+      <span id="update-message"></span>
+      <button id="dismiss-update" type="button" aria-label="Dismiss update notice">×</button>
+    </aside>
     <header class="corner topbar">
       <span id="top-dot" class="live-dot" aria-hidden="true"></span>
       <div class="topbar-main">
@@ -604,6 +629,7 @@
     const state = {
       runs: [],
       active: {},
+      update: null,
       artifacts: [],
       runError: null,
       libraryError: null,
@@ -627,6 +653,9 @@
       reconnect: document.getElementById("reconnect"),
       clock: document.getElementById("clock"),
       runningNow: document.getElementById("running-now"),
+      updateBanner: document.getElementById("update-banner"),
+      updateMessage: document.getElementById("update-message"),
+      dismissUpdate: document.getElementById("dismiss-update"),
       runs: document.getElementById("runs"),
       artifactPicker: document.getElementById("artifact-picker"),
       artifactStatus: document.getElementById("artifact-status"),
@@ -637,6 +666,28 @@
     function normalizeTab(value) {
       return value === "live" || value === "artifacts" ? value : "";
     }
+
+    function updateKey(update) {
+      return update ? `${Number(update.behind) || 0}:${String(update.reason || "")}` : "";
+    }
+
+    function renderUpdateBanner() {
+      const behind = Number(state.update?.behind) || 0;
+      const reason = String(state.update?.reason || "").trim();
+      const key = updateKey(state.update);
+      const dismissed = sessionStorage.getItem("ringside-dismissed-update") === key;
+      if (behind <= 0 || !reason || dismissed) {
+        els.updateBanner.hidden = true;
+        return;
+      }
+      els.updateMessage.textContent = `Ringer update available: ${behind} commit(s) behind — ${reason}`;
+      els.updateBanner.hidden = false;
+    }
+
+    els.dismissUpdate.addEventListener("click", () => {
+      sessionStorage.setItem("ringside-dismissed-update", updateKey(state.update));
+      renderUpdateBanner();
+    });
 
     function tickClock() {
       els.clock.textContent = new Date().toLocaleTimeString([], {
@@ -1608,11 +1659,13 @@
         const payload = await response.json();
         state.runs = normalizeRuns(payload);
         state.active = payload?.active || {};
+        state.update = payload?.update || null;
         state.runError = null;
       } catch (error) {
         state.runError = error?.message || "runs unavailable";
       }
       renderTop();
+      renderUpdateBanner();
       renderRunningNow();
       renderLive();
     }
