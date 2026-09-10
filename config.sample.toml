@@ -205,3 +205,14 @@ index_out = "~/.ringer/artifacts/index.html"
 # token_scale = 1000
 # price_in_per_mtok = 1.25
 # price_out_per_mtok = 10.00
+
+# Which task types must name the requirement they serve. Lint flags a product
+# task with no "ticket", because spend you cannot attribute to a requirement is
+# spend you cannot steer -- on one estate 175 of 178 product tasks were keyed
+# `fix-L13` and similar, and what a requirement cost was simply unanswerable.
+#
+# The default is this project's own documented vocabulary. Estates that coin
+# their own product task types list theirs here rather than patching the source;
+# a bakeoff, probe or research task serves no requirement and is never flagged.
+#
+# ticketed_task_types = ["code-fix", "code-feature", "dotnet-fix"]

@@ -229,3 +229,40 @@ class UncostedEngineTests(unittest.TestCase):
                                 taskdir=Path("/tmp"), log_path=Path("/tmp/none.log"))
         self.assertIsNone(rt.cost_usd)
         self.assertIsNone(rt.cost_estimated_usd)
+
+
+class PortabilityTests(unittest.TestCase):
+    """One estate's stack must not be hard-coded into everyone's linter."""
+
+    def _m(self, task_type):
+        return ringer.Manifest.from_obj({
+            "run_name": "portable", "workdir": tempfile.mkdtemp(), "max_parallel": 1,
+            "tasks": [{"key": "t1", "spec": "s", "check": "echo c; test -f out",
+                       "verified": "v", "task_type": task_type}]})
+
+    def test_default_covers_only_the_documented_vocabulary(self):
+        self.assertEqual(ringer.DEFAULT_TICKETED_TASK_TYPES,
+                         frozenset({"code-fix", "code-feature"}))
+
+    def test_an_estate_can_add_its_own_task_types(self):
+        # Through the real config path, because that is what another factory
+        # would actually do -- a hand-built AppConfig would prove nothing about
+        # whether the setting is reachable.
+        cfgdir = Path(tempfile.mkdtemp())
+        (cfgdir / "config.toml").write_text(
+            'ticketed_task_types = ["dotnet-fix"]\n', encoding="utf-8")
+        cfg = ringer.AppConfig.load(cfgdir / "config.toml")
+        self.assertEqual(cfg.ticketed_task_types, frozenset({"dotnet-fix"}))
+        # their type is enforced ...
+        self.assertTrue(any("names no ticket" in f
+                            for f in ringer.lint_manifest(self._m("dotnet-fix"), config=cfg)))
+        # ... and the built-in default is not, because they said what theirs are
+        self.assertFalse(any("names no ticket" in f
+                             for f in ringer.lint_manifest(self._m("code-fix"), config=cfg)))
+
+    def test_a_bad_setting_is_refused_rather_than_ignored(self):
+        cfgdir = Path(tempfile.mkdtemp())
+        (cfgdir / "config.toml").write_text(
+            'ticketed_task_types = "code-fix"\n', encoding="utf-8")
+        with self.assertRaises(ValueError):
+            ringer.AppConfig.load(cfgdir / "config.toml")
