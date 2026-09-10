@@ -1729,6 +1729,7 @@ class TaskSpec:
     engine: str = DEFAULT_ENGINE_NAME
     expect_files: tuple[str, ...] = ()
     timeout_s: int = DEFAULT_TIMEOUT_S
+    check_timeout_s: int = CHECK_TIMEOUT_S
     max_attempts: int = 2
     redact_spec: bool = False
     full_access: bool = False
@@ -1766,6 +1767,17 @@ class TaskSpec:
         timeout_s = int(obj.get("timeout_s", DEFAULT_TIMEOUT_S))
         if timeout_s <= 0:
             raise ValueError(f"task {key}: timeout_s must be positive")
+        # Separate from timeout_s (the worker's budget): this bounds the
+        # check subprocess itself. Defaults to CHECK_TIMEOUT_S so existing
+        # manifests keep today's behavior; a check that boots a framework
+        # (Rails, Django, ...) before it can even run a test needs an
+        # explicit override, or the Verifier kills it before it can produce
+        # a real pass/fail (2026-09-10: a Rails boot-heavy rspec check was
+        # SIGTERM'd every attempt, burning both retries on a timeout that
+        # had nothing to do with the worker's code).
+        check_timeout_s = int(obj.get("check_timeout_s", CHECK_TIMEOUT_S))
+        if check_timeout_s <= 0:
+            raise ValueError(f"task {key}: check_timeout_s must be positive")
         # Strict on the fields this release introduces: `1.5` silently
         # truncating to 1 would remove the retry without saying so, and a
         # string is never what the author meant.
@@ -1797,6 +1809,7 @@ class TaskSpec:
             engine=engine,
             expect_files=tuple(str(item) for item in expect_files),
             timeout_s=timeout_s,
+            check_timeout_s=check_timeout_s,
             max_attempts=max_attempts,
             redact_spec=require_bool(obj.get("redact_spec", False), key, "redact_spec"),
             full_access=bool(obj.get("full_access", False)),
@@ -1949,6 +1962,13 @@ def lint_manifest(
                 f"{task.key}: no task_type; the model log buckets this as (untyped) — "
                 "name one (e.g. code-feature, research, image-gen) so './ringer.py models' can guide routing."
             )
+        if task.check_timeout_s == CHECK_TIMEOUT_S and HEAVY_CHECK_COMMAND_RE.search(task.check):
+            findings.append(
+                f"{task.key}: check runs a framework boot/test command under the default "
+                f"check_timeout_s={CHECK_TIMEOUT_S}s; boot time alone (Rails, JVM, ...) often exceeds "
+                "that — set check_timeout_s explicitly or the check gets SIGTERM'd before it can "
+                "report a real pass/fail."
+            )
 
     if len(manifest.tasks) >= 3 and manifest.max_parallel == 1:
         findings.append("manifest: tasks will run serially; set max_parallel.")
@@ -1978,6 +1998,13 @@ def lint_manifest(
         )
 
     return findings
+
+
+HEAVY_CHECK_COMMAND_RE = re.compile(
+    r"\b(bundle exec (rspec|rails)|rails runner|pytest|cargo test|npm (test|run build)|"
+    r"yarn (test|build)|go test|mvn test|gradle test)\b",
+    re.IGNORECASE,
+)
 
 
 FILE_POINTER_SPEC_RE = re.compile(
@@ -8703,7 +8730,9 @@ def run_models_command(config: AppConfig, args: argparse.Namespace) -> int:
 
 class Verifier:
     async def verify(self, task: TaskSpec, taskdir: Path) -> VerifyResult:
-        check_returncode, check_timed_out, output = await self._run_check(task.check, taskdir)
+        check_returncode, check_timed_out, output = await self._run_check(
+            task.check, taskdir, task.check_timeout_s
+        )
         missing_files = tuple(
             rel for rel in task.expect_files if not self._is_nonempty_file(self._expect_file_path(taskdir, rel))
         )
@@ -8741,7 +8770,7 @@ class Verifier:
         return candidate if candidate.is_absolute() else taskdir / candidate
 
     @staticmethod
-    async def _run_check(command: str, cwd: Path) -> tuple[int | None, bool, str]:
+    async def _run_check(command: str, cwd: Path, timeout_s: int = CHECK_TIMEOUT_S) -> tuple[int | None, bool, str]:
         proc = await asyncio.create_subprocess_shell(
             command,
             cwd=str(cwd),
@@ -8752,7 +8781,7 @@ class Verifier:
         )
         timed_out = False
         try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=CHECK_TIMEOUT_S)
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
         except asyncio.TimeoutError:
             timed_out = True
             terminate_process_group(proc)
@@ -8763,7 +8792,7 @@ class Verifier:
                 stdout, _ = await proc.communicate()
         output = stdout.decode("utf-8", errors="replace") if stdout else ""
         if timed_out:
-            output += f"\n[ringer.py] check timed out after {CHECK_TIMEOUT_S}s\n"
+            output += f"\n[ringer.py] check timed out after {timeout_s}s\n"
         return proc.returncode, timed_out, output
 
 
@@ -10151,6 +10180,7 @@ def dry_run(
         print(f"    engine: {task.engine}")
         print(f"    dir: {taskdir}")
         print(f"    timeout_s: {task.timeout_s}")
+        print(f"    check_timeout_s: {task.check_timeout_s}")
         print(f"    max_attempts: {task.max_attempts}")
         if task.full_access:
             print(f"    full_access: true allowed={full_access_allowed}")
