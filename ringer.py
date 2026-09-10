@@ -12242,13 +12242,6 @@ def main(argv: list[str] | None = None) -> int:
             )
             canary_enabled = False
             canary_skip_reason = canary_waiver
-        elif args.command == "demo":
-            # The demo exists to show parallel fan-out on Ringside; holding two
-            # of its three workers behind the first would hide the thing it
-            # demonstrates. Recorded in the run record rather than silent —
-            # silence here is indistinguishable from the gate being off.
-            canary_enabled = False
-            canary_skip_reason = "demo manifest: the parallel fan-out IS the demonstration"
 
         preflight = Preflight(
             baseline=baseline_result,
