@@ -21,6 +21,8 @@ Pinned here, each provoked on purpose:
   * both escapes exist, demand a REASON, and announce themselves
   * the baseline verdict lands in the run record, so "was this checked?" is
     answerable later rather than remembered
+  * the canary RESEMBLES the batch it gates -- it is not merely the first
+    task -- and the run record says which task it was and what it spoke for
 """
 from __future__ import annotations
 
@@ -68,6 +70,43 @@ class ProveBeforeBuyTests(unittest.TestCase):
                     f"bin = {toml_string(sys.executable)}",
                     "args_template = [",
                     f"  {toml_string(MOCK_WORKER)},",
+                    '  "{spec}",',
+                    "]",
+                    "sandbox_args = []",
+                    "full_access_args = []",
+                    "",
+                    # A second, identically-behaving engine. Identical on
+                    # purpose: these tests are about which task is CHOSEN as
+                    # the canary, so the two must differ only in name.
+                    "[engines.other]",
+                    f"bin = {toml_string(sys.executable)}",
+                    "args_template = [",
+                    f"  {toml_string(MOCK_WORKER)},",
+                    '  "{spec}",',
+                    "]",
+                    "sandbox_args = []",
+                    "full_access_args = []",
+                    "",
+                    "[engines.third]",
+                    f"bin = {toml_string(sys.executable)}",
+                    "args_template = [",
+                    f"  {toml_string(MOCK_WORKER)},",
+                    '  "{spec}",',
+                    "]",
+                    "sandbox_args = []",
+                    "full_access_args = []",
+                    "",
+                    # An engine that genuinely takes a model, so tasks can
+                    # differ by MODEL on one engine -- the shape of the real
+                    # incident (one harness, two models, the weaker one first).
+                    # {model} precedes {spec} because the mock worker reads
+                    # argv[-1] as the spec, so the model arg is inert to it.
+                    "[engines.mockm]",
+                    f"bin = {toml_string(sys.executable)}",
+                    'model_default = "base-model"',
+                    "args_template = [",
+                    f"  {toml_string(MOCK_WORKER)},",
+                    '  "{model}",',
                     '  "{spec}",',
                     "]",
                     "sandbox_args = []",
@@ -358,6 +397,193 @@ class ProveBeforeBuyTests(unittest.TestCase):
 
         self.assertEqual(0, result.returncode, output)
         self.assertIn("Canary: skipped — a single-task run is its own canary", output)
+
+    # ---- the canary must resemble the batch it gates --------------------
+
+    def test_a_minority_first_task_does_not_gate_the_batch(self) -> None:
+        # The measured incident (work#1044): a 32-task scout ran 31 tasks on
+        # one model and task 1 on a weaker one left over from an audition. It
+        # failed, 31 tasks were skipped, and the model they would have used had
+        # passed the identical check first try minutes earlier.
+        #
+        # Here task 1 is the only task on `other`, and it is a task whose
+        # worker fails. If it were still chosen, the batch would be held.
+        manifest = self.write_manifest(
+            [
+                {**self.writes_nothing("odd-one-out", "never.txt"), "engine": "other"},
+                self.writes("first", "first.txt"),
+                self.writes("second", "second.txt"),
+                self.writes("third", "third.txt"),
+            ]
+        )
+
+        result = self.run_ringer(manifest)
+        output = result.stdout + result.stderr
+
+        # The canary moved off the minority task, and said so.
+        self.assertIn("not odd-one-out", output)
+        self.assertIn("Canary: first passed", output)
+
+        record = self.read_run_record()
+        sel = record["preflight"]["canary"]["selection"]
+        self.assertEqual("first", sel["task"])
+        self.assertEqual("mock", sel["engine"])
+        self.assertEqual(3, sel["covers"])
+        self.assertEqual(4, sel["of"])
+        self.assertTrue(sel["representative"])
+        self.assertEqual("odd-one-out", sel["moved_from"])
+
+        # And the batch really was released: the minority task ran anyway,
+        # and failed on its own merits rather than gating anything.
+        by_key = {t["key"]: t for t in record["tasks"]}
+        for released in ("second", "third"):
+            self.assertEqual("pass", by_key[released]["status"], record)
+        self.assertEqual("fail", by_key["odd-one-out"]["status"], record)
+
+    def test_a_minority_MODEL_on_one_engine_does_not_gate_the_batch(self) -> None:
+        # This is the measured incident's exact shape, and the half the
+        # engine-based tests above cannot reach: ONE engine, two models, the
+        # weaker one declared first. In the real run that weak task failed and
+        # took 31 healthy tasks with it.
+        #
+        # Pairing on engine alone would pick the failing task here and hold
+        # the batch, because all four tasks share an engine.
+        manifest = self.write_manifest(
+            [
+                {
+                    **self.writes_nothing("weak", "never.txt"),
+                    "engine": "mockm",
+                    "model": "weak-model",
+                },
+                {**self.writes("s1", "s1.txt"), "engine": "mockm", "model": "strong-model"},
+                {**self.writes("s2", "s2.txt"), "engine": "mockm", "model": "strong-model"},
+                {**self.writes("s3", "s3.txt"), "engine": "mockm", "model": "strong-model"},
+            ]
+        )
+
+        result = self.run_ringer(manifest)
+        output = result.stdout + result.stderr
+
+        self.assertIn("not weak", output)
+        self.assertIn("Canary: s1 passed", output)
+
+        sel = self.read_run_record()["preflight"]["canary"]["selection"]
+        self.assertEqual("s1", sel["task"])
+        self.assertEqual("mockm", sel["engine"])
+        self.assertEqual("strong-model", sel["model"])
+        self.assertEqual(3, sel["covers"])
+        self.assertEqual("weak", sel["moved_from"])
+        self.assertTrue(sel["representative"])
+
+        by_key = {t["key"]: t for t in self.read_run_record()["tasks"]}
+        for released in ("s2", "s3"):
+            self.assertEqual("pass", by_key[released]["status"])
+        self.assertEqual("fail", by_key["weak"]["status"])
+
+    def test_a_uniform_batch_keeps_the_first_task_as_canary(self) -> None:
+        # The complement. When every task shares an engine/model there is
+        # nothing to move to, and manifest order must be preserved — a
+        # selection rule that reorders a uniform batch would be churn.
+        manifest = self.write_manifest(
+            [
+                self.writes("alpha", "alpha.txt"),
+                self.writes("beta", "beta.txt"),
+                self.writes("gamma", "gamma.txt"),
+            ]
+        )
+
+        result = self.run_ringer(manifest)
+        output = result.stdout + result.stderr
+
+        self.assertEqual(0, result.returncode, output)
+        self.assertNotIn("not alpha", output)
+        sel = self.read_run_record()["preflight"]["canary"]["selection"]
+        self.assertEqual("alpha", sel["task"])
+        self.assertEqual(3, sel["covers"])
+        self.assertIsNone(sel["moved_from"])
+        self.assertTrue(sel["representative"])
+
+    def test_a_batch_with_no_majority_says_the_canary_is_a_weak_probe(self) -> None:
+        # Two engines, two tasks each: whichever is picked speaks for half.
+        # The gate still runs — one task's spend is cheap — but its verdict
+        # must not be read as a statement about the batch, and the run says so
+        # rather than leaving the operator to infer it.
+        manifest = self.write_manifest(
+            [
+                self.writes("a1", "a1.txt"),
+                {**self.writes("b1", "b1.txt"), "engine": "other"},
+                self.writes("a2", "a2.txt"),
+                {**self.writes("b2", "b2.txt"), "engine": "other"},
+            ]
+        )
+
+        result = self.run_ringer(manifest)
+        output = result.stdout + result.stderr
+
+        self.assertEqual(0, result.returncode, output)
+        self.assertIn("speaks for 2 of 4", output)
+        sel = self.read_run_record()["preflight"]["canary"]["selection"]
+        self.assertEqual(2, sel["covers"])
+        self.assertEqual(4, sel["of"])
+        # 2 of 4 is exactly half, which still counts as representative --
+        # pinned so the boundary is a decision rather than an accident.
+        self.assertTrue(sel["representative"])
+
+    def test_the_dominant_pair_wins_even_when_it_is_not_first(self) -> None:
+        # Majority rules over manifest order: `other` holds 3 of 5, so the
+        # canary moves off the first task even though that task is perfectly
+        # healthy. Nothing is wrong with a1 — it simply is not what most of
+        # this batch will run as.
+        manifest = self.write_manifest(
+            [
+                self.writes("a1", "a1.txt"),
+                self.writes("a2", "a2.txt"),
+                {**self.writes("b1", "b1.txt"), "engine": "other"},
+                {**self.writes("b2", "b2.txt"), "engine": "other"},
+                {**self.writes("b3", "b3.txt"), "engine": "other"},
+            ],
+            max_parallel=2,
+        )
+
+        result = self.run_ringer(manifest)
+
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        sel = self.read_run_record()["preflight"]["canary"]["selection"]
+        self.assertEqual("other", sel["engine"])
+        self.assertEqual("b1", sel["task"])
+        self.assertEqual(3, sel["covers"])
+        self.assertTrue(sel["representative"])
+        self.assertEqual("a1", sel["moved_from"])
+
+    def test_a_canary_speaking_for_a_minority_warns(self) -> None:
+        # A genuinely fragmented batch: three distinct engine/model pairs at
+        # 2 / 2 / 1, so whichever is chosen speaks for 2 of 5 — under half.
+        #
+        # The gate still runs, because one task's spend is cheap. What it must
+        # NOT do is let that verdict read as a statement about the batch.
+        manifest = self.write_manifest(
+            [
+                self.writes("a1", "a1.txt"),
+                self.writes("a2", "a2.txt"),
+                {**self.writes("b1", "b1.txt"), "engine": "other"},
+                {**self.writes("b2", "b2.txt"), "engine": "other"},
+                {**self.writes("c1", "c1.txt"), "engine": "third"},
+            ],
+            max_parallel=2,
+        )
+
+        result = self.run_ringer(manifest)
+        output = result.stdout + result.stderr
+
+        self.assertEqual(0, result.returncode, output)
+        self.assertIn("speaks for 2 of 5", output)
+        self.assertIn("no majority engine/model", output)
+        self.assertIn("not 'the batch is broken'", output)
+
+        sel = self.read_run_record()["preflight"]["canary"]["selection"]
+        self.assertEqual(2, sel["covers"])
+        self.assertEqual(5, sel["of"])
+        self.assertFalse(sel["representative"])
 
     # ---- the escapes ---------------------------------------------------
 
