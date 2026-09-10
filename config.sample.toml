@@ -201,3 +201,37 @@ enabled = true
 out = "~/.ringer/artifacts/{run_id}.html"
 report_out = "~/.ringer/artifacts/{run_id}-report.html"
 index_out = "~/.ringer/artifacts/index.html"
+
+# ── Cost visibility for engines that bill on another account ──────────────
+# Codex reports tokens but never a cost, so its work shows as free in every
+# provider-reported total. On one estate that hid the large majority of tasks -- every
+# code review among them -- which made review look free when it was the
+# expensive half.
+#
+# token_scale: some harnesses report THOUSANDS of tokens, not units. Codex
+# does: measured over a sample of real tasks its "tokens used" runs 12-230 where
+# OpenCode reports hundreds of thousands for comparable work. Without this a
+# Codex loop reads a thousand times cheaper than it is.
+#
+# Setting prices produces an ESTIMATE, always labelled as one and kept apart
+# from measured cost. Leave them unset and the run says plainly that those
+# tasks carry no cost at all, which is the honest answer -- an unknown cost
+# must never default to zero.
+#
+# [engines.codex]
+# token_scale = 1000
+# price_in_per_mtok = 1.25
+# price_out_per_mtok = 10.00
+
+# Which task types must name the requirement they serve. Lint flags a product
+# task with no "ticket", because spend you cannot attribute to a requirement is
+# spend you cannot steer -- on one estate almost every product task was keyed
+# by lane number rather than by work item, and what a requirement cost was
+# simply unanswerable.
+#
+# OFF by default -- this is a policy, and a shared tool does not get to decide
+# that its users track requirements the way its author does. Name the task types
+# it should apply to and it switches on; a bakeoff, probe or research task serves
+# no requirement and is never flagged.
+#
+# ticketed_task_types = ["code-fix", "code-feature"]

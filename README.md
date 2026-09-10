@@ -163,6 +163,81 @@ lint: clean (1 tasks)
 
 A check that cannot fail is trusting the worker with extra steps.
 
+### Budget: stop a run before it empties the key
+
+A run's real cost lives in the worker's own log: engines that stream JSON report
+what the provider charged for every model call. Ringer sums that and prints it,
+per task and per run.
+
+This is not the same number as `tokens` in the scoreboard. `worker_tokens`
+records a *single* step, so it cannot be used for money — measured on real work
+it ran 19x to 40x below the truth, which is how a swarm can report a small
+fraction of its real cost and be restarted many times by an operator with no
+way to see otherwise.
+
+Two manifest keys stop a run that is going wrong:
+
+```json
+{
+  "budget_usd": 6.00,
+  "abort_after_repeated_failures": 3
+}
+```
+
+- **`budget_usd`** — stops the run as soon as the spend is *visible*. Live costs
+  are re-read every few seconds and again the moment each worker exits; when the
+  figure crosses the budget, in-flight workers are terminated and queued tasks
+  are marked `SKIPPED` with the reason.
+
+  ⚠️ It is **not** a hard ceiling, and calling it one would be a lie with a
+  number attached. A task's price is not knowable before it runs — it exists
+  only in what the worker has already written to its log — so nothing can be
+  reserved in advance. Parallel workers can therefore overshoot by whatever they
+  spend between one poll and the next. Set it below the number that would
+  actually hurt, not at it.
+
+  The budget weighs **measured plus estimated** spend, even though the summary
+  reports them separately: an engine that reports no cost of its own still
+  spends real money, and a budget blind to it is no budget for precisely the
+  case it is most needed.
+- **`abort_after_repeated_failures`** — stop once this many **tasks** have
+  failed the *same* way (check exit code plus the first line it printed).
+  Counted per task, retries included, not per attempt: a single task failing
+  twice is one failure, not two. Not a consecutive streak — a tally per
+  signature, so A, B, A still counts two A failures. Workers finish in arbitrary
+  order, and a streak would miss exactly the repetition worth stopping on. A
+  manifest asking for something no worker can produce fails every task
+  identically; without this the run pays for all of them, and pays twice because
+  each failure is retried. Different failures do not trip it — that is an
+  ordinary bad run, not an impossible manifest.
+
+  ⚠️ The signature is deliberately cheap, and cheap means blunt. Two unrelated
+  checks that both open with `FAIL` share a signature, and the counter is one
+  streak across parallel tasks rather than a per-family tally — so it reads
+  completion order, not causation. It is a circuit breaker, not a diagnosis.
+
+Both default to off, so existing manifests behave exactly as before.
+
+`lint` can also require that product work names the requirement it serves. This
+is **off by default** — upstream ships no opinion about how you track work — and
+turns on by naming the task types it applies to:
+
+```toml
+ticketed_task_types = ["code-fix", "code-feature"]
+```
+
+Spend you cannot attribute to a requirement is spend you cannot steer: on one
+estate almost every product task was keyed by lane number rather than by the
+work item it served, so "what did this requirement cost?" had no answer.
+
+`lint` also refuses a manifest whose **spec** tells the worker to write an
+absolute path outside its own task directory. A worker may only write inside its
+own task directory as far as this check can reason: it also has a temp dir, but
+that path is assigned at run time and is not knowable when linting. An absolute path in `expect_files` is
+perfectly normal when the *check* produces it — the fix-swarm pattern exports a
+patch out of the worktree that way — so only the spec naming the path is
+flagged.
+
 ### Baseline: prove your checks before spending tokens
 
 Lint reads the manifest; `--baseline` executes it — every task's `check` runs against the unmodified tree, spawning no workers and writing no eval rows:
@@ -396,7 +471,8 @@ Every community PR that lands in main is credited here — that's a project rule
 - [@oceanonline](https://github.com/oceanonline) — portable `python3` in template checks + lint quickstart path fix (#24)
 - [@davekopecek](https://github.com/davekopecek) (Dave Kopecek) — committed the design-reference fixture so the design-token guard runs on every machine (#30)
 - [@snapsynapse](https://github.com/snapsynapse) (Sam Rogers) — graceful shutdown on SIGINT/SIGTERM with worker-tree cleanup and finished state, plus the 14-test end-to-end CLI regression suite (#4)
-- [@mlava](https://github.com/mlava) (Mark Lavercombe) — named setup failures across every diagnostic surface (#37), `run --baseline`, the no-workers check preflight (#38), and guidance on check-writing failure modes (#57)
+- [@mlava](https://github.com/mlava) (Mark Lavercombe) — named setup failures across every diagnostic surface (#37), `run --baseline`, the no-workers check preflight (#38), guidance on check-writing failure modes (#57), and early warnings for missing worker commands (#59)
+- [@bryfa](https://github.com/bryfa) (Barry Faassen) — cost accounting from provider-reported per-step cost, a budget that stops a run, abort on repeated identical failures, and lint for deliverables a sandboxed worker cannot write (#129)
 
 Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the philosophy and what gets a PR merged fast. The short version: small and scoped, rebased on current main, every claim backed by an executed test. Authorship is always preserved — where a maintainer pushes a mechanical fix to your branch, you remain the commit author.
 
