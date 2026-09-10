@@ -96,6 +96,22 @@ class ProveBeforeBuyTests(unittest.TestCase):
                     "sandbox_args = []",
                     "full_access_args = []",
                     "",
+                    # An engine that genuinely takes a model, so tasks can
+                    # differ by MODEL on one engine -- the shape of the real
+                    # incident (one harness, two models, the weaker one first).
+                    # {model} precedes {spec} because the mock worker reads
+                    # argv[-1] as the spec, so the model arg is inert to it.
+                    "[engines.mockm]",
+                    f"bin = {toml_string(sys.executable)}",
+                    'model_default = "base-model"',
+                    "args_template = [",
+                    f"  {toml_string(MOCK_WORKER)},",
+                    '  "{model}",',
+                    '  "{spec}",',
+                    "]",
+                    "sandbox_args = []",
+                    "full_access_args = []",
+                    "",
                 ]
             ),
             encoding="utf-8",
@@ -423,6 +439,46 @@ class ProveBeforeBuyTests(unittest.TestCase):
         for released in ("second", "third"):
             self.assertEqual("pass", by_key[released]["status"], record)
         self.assertEqual("fail", by_key["odd-one-out"]["status"], record)
+
+    def test_a_minority_MODEL_on_one_engine_does_not_gate_the_batch(self) -> None:
+        # This is the measured incident's exact shape, and the half the
+        # engine-based tests above cannot reach: ONE engine, two models, the
+        # weaker one declared first. In the real run that weak task failed and
+        # took 31 healthy tasks with it.
+        #
+        # Pairing on engine alone would pick the failing task here and hold
+        # the batch, because all four tasks share an engine.
+        manifest = self.write_manifest(
+            [
+                {
+                    **self.writes_nothing("weak", "never.txt"),
+                    "engine": "mockm",
+                    "model": "weak-model",
+                },
+                {**self.writes("s1", "s1.txt"), "engine": "mockm", "model": "strong-model"},
+                {**self.writes("s2", "s2.txt"), "engine": "mockm", "model": "strong-model"},
+                {**self.writes("s3", "s3.txt"), "engine": "mockm", "model": "strong-model"},
+            ]
+        )
+
+        result = self.run_ringer(manifest)
+        output = result.stdout + result.stderr
+
+        self.assertIn("not weak", output)
+        self.assertIn("Canary: s1 passed", output)
+
+        sel = self.read_run_record()["preflight"]["canary"]["selection"]
+        self.assertEqual("s1", sel["task"])
+        self.assertEqual("mockm", sel["engine"])
+        self.assertEqual("strong-model", sel["model"])
+        self.assertEqual(3, sel["covers"])
+        self.assertEqual("weak", sel["moved_from"])
+        self.assertTrue(sel["representative"])
+
+        by_key = {t["key"]: t for t in self.read_run_record()["tasks"]}
+        for released in ("s2", "s3"):
+            self.assertEqual("pass", by_key[released]["status"])
+        self.assertEqual("fail", by_key["weak"]["status"])
 
     def test_a_uniform_batch_keeps_the_first_task_as_canary(self) -> None:
         # The complement. When every task shares an engine/model there is
