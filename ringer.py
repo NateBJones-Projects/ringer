@@ -10781,16 +10781,40 @@ class BaselineResult:
 
 
 def unwritable_deliverables(task: TaskSpec) -> list[str]:
-    """Declared deliverables no worker will be able to write.
+    """Declared deliverables the FILESYSTEM will refuse, seen from here.
 
-    Only ABSOLUTE paths are checked, and that is the whole point: a relative
-    `expect_files` entry lands inside the task's own scratch dir, which the
-    harness creates and which is therefore always writable. An absolute one
-    escapes to somewhere nobody has verified — the fix-swarm patch export is
-    the legitimate version of this, and "every worker writes its deliverable
-    to a path the sandbox forbids" is the expensive one. That was one run,
-    restarted sixteen times, 31 of 36 tasks failing identically, $19.43 on
-    the worst restart alone.
+    ⚠️ This is not a sandbox check and cannot be one. It probes the path as
+    the dispatcher sees it; a worker runs under the engine's sandbox, which
+    can deny a path that `os.access` here calls writable. So a clean result
+    means "no filesystem-level reason this cannot be written", never "the
+    worker will be able to write it".
+
+    Proving the latter requires running a worker, which is the one thing this
+    phase must not do -- spawning nothing is what makes it free and what lets
+    it run before every dispatch.
+
+    Three layers cover the ground between them, and it is worth knowing which
+    is which:
+
+      lint      `worker_unwritable_paths` -- the SPEC hands the worker an
+                absolute path outside its own task directory. Sandbox SCOPE,
+                reasoned about statically. This is the shape of the measured
+                incident: one run restarted sixteen times, 31 of 36 tasks
+                failing identically, $19.43 on the worst restart alone.
+      baseline  here -- the path is refused by the filesystem itself, so no
+                process could write it whoever asked.
+      canary    whatever neither of those could know statically, bought once
+                instead of once per task.
+
+    So this function is the narrowest of the three, and the least clever. It
+    exists because it is also the only one of them that is certain.
+
+    What this does catch is the cheaper, dumber half: a path that no process
+    could write, whoever asked. Only ABSOLUTE paths are examined, and that is
+    deliberate -- a relative `expect_files` entry lands inside the task's own
+    scratch dir, which the harness creates, so probing those would refuse
+    nearly every honest manifest. An absolute one escapes to somewhere nobody
+    has verified; the fix-swarm patch export is the legitimate version of it.
 
     A directory that does not exist is not automatically a fault -- the check
     may create it -- so the nearest EXISTING ancestor is what gets probed. If
@@ -10848,7 +10872,9 @@ async def execute_baseline(manifest: Manifest) -> BaselineResult:
             unwritable = unwritable_deliverables(task)
             if unwritable:
                 # No point running the check: its subject cannot be produced.
-                detail = "declared deliverable is unwritable: " + "; ".join(unwritable)
+                detail = (
+                    "the filesystem refuses a declared deliverable: " + "; ".join(unwritable)
+                )
                 results.append(BaselineTaskResult(key=task.key, outcome="error", detail=detail))
                 print(f"{task.key:<24} baseline: ERROR ({detail})")
                 continue

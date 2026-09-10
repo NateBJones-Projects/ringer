@@ -258,6 +258,8 @@ A run is **refused** — before a single worker spawns, exit 2 — when the base
 
 It was a flag before, and a flag you have to remember is a flag that gets forgotten on the run that most needed it. The measured version of that: one run restarted sixteen times, whose worst restart failed 31 of 36 tasks for $19.43, because the manifest told every worker to write to a path the sandbox forbids.
 
+⚠️ **Baseline does not prove a worker can write your deliverables**, and no phase that spawns nothing could. It probes declared *absolute* `expect_files` as the dispatcher sees them, so it catches paths the filesystem itself refuses; a sandbox can still deny a path that looks writable from here. Three layers divide that work: **lint** reasons about sandbox *scope* (a spec handing the worker an absolute path outside its own task directory — the shape of the $19.43 incident), **baseline** catches what no process could write at all, and the **canary** buys the rest once instead of once per task.
+
 ### Canary: buy one task before you buy the batch
 
 A multi-task run releases its **first task alone**, judges it by its own executed check, and only then releases the rest. A bad verdict stops the run, and every remaining task is marked `SKIPPED` without spawning — so a manifest-wide fault costs one task instead of all of them.
