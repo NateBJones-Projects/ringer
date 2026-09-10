@@ -38,23 +38,29 @@ import re
 import sys
 from pathlib import Path
 
-# Comment syntaxes by extension. ERB first: an <%# %> block is the exact shape
-# that failed on 2026-09-09, since a worker documenting "max-w-xs -> max-w-lg"
-# plants the banned string in prose the brief demanded.
+# Comment syntaxes by extension, as (pattern, spans_newlines) pairs.
+#
+# The flag is load-bearing and was a real bug on first write: applying DOTALL to
+# every pattern let the LINE-comment form `^\s*#.*$` swallow the entire file from
+# its first comment onward (a 5979-byte controller stripped to 175 bytes, so every
+# --contains after it reported a false absence). Block comments need `.` to cross
+# newlines; line comments must not. ERB's <%# %> is listed first because it is the
+# exact shape that failed on 2026-09-09.
 COMMENT_PATTERNS = {
-    ".erb": [r"<%#.*?%>"],
-    ".html": [r"<!--.*?-->"],
-    ".rb": [r"(?m)^\s*#.*$"],
-    ".py": [r"(?m)^\s*#.*$"],
-    ".js": [r"/\*.*?\*/", r"(?m)//.*$"],
-    ".css": [r"/\*.*?\*/"],
-    ".md": [r"<!--.*?-->"],
+    ".erb": [(r"<%#.*?%>", True)],
+    ".html": [(r"<!--.*?-->", True)],
+    ".rb": [(r"^[ \t]*#.*$", False)],
+    ".py": [(r"^[ \t]*#.*$", False)],
+    ".js": [(r"/\*.*?\*/", True), (r"^[ \t]*//.*$", False)],
+    ".css": [(r"/\*.*?\*/", True)],
+    ".md": [(r"<!--.*?-->", True)],
 }
 
 
 def strip_comments(text, suffix):
-    for pat in COMMENT_PATTERNS.get(suffix, []):
-        text = re.sub(pat, "", text, flags=re.DOTALL)
+    for pat, spans_newlines in COMMENT_PATTERNS.get(suffix, []):
+        flags = re.MULTILINE | (re.DOTALL if spans_newlines else 0)
+        text = re.sub(pat, "", text, flags=flags)
     return text
 
 
