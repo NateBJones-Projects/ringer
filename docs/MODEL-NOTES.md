@@ -313,9 +313,66 @@ checks and raw logs support — no vibes, no worker self-reports.
 ## opencode / z-ai glm-5.2 (via openrouter)
 - 2026-07-09 (aicred-invoice-downloads, 4 code-fix tasks + 1 follow-up, worktrees+npm ci checks): systematic attempt-1 NO-OP — all 4 parallel workers produced zero edits and no summary on first attempt, then completed cleanly on attempt 2 after retry-prompt injection (34k-69k tokens each). Follow-up single task passed attempt 1. Suspect first-invocation session warm-up in opencode-sandboxed under parallel spawn; budget for 2 attempts on parallel GLM batches. Output quality on Next.js/Stripe route+test work: solid, spec-faithful, one boss-caught design gap (used user-scoped supabase client where RLS demanded service role — spec didn't say explicitly; say it explicitly).
 
+- 2026-08-03 (pet-foundation, compose stack, code-feature): FAIL x2 but ENVIRONMENTAL — the OpenRouter key hit its weekly credit limit (HTTP 402 loop); the worker produced no deliverable. The scoreboard FAIL row does not measure the model. Audition remains inconclusive; re-run now that the key has credits.
+
 ## opencode (harness note, any model)
 - 2026-07-28 (code-review, pr82-token-saver-review): GLM 5.2 produced a complete, high-quality 218-line report but could NOT write it to an output directory created by the parent Claude Code process — every write returned EPERM. It then spent ~3000s burning retries on ctypes/`openat`/AppleScript/`sandbox-exec` workarounds until it timed out, and the task logged as FAIL despite the deliverable existing in its taskdir. Codex workers in the same run were unaffected. Lesson: point opencode workers' output INSIDE their own taskdir and harvest via `expect_files`; never hand them a shared output dir another process created. This is an orchestrator spec bug, not a model failure — do not read the FAIL as evidence against GLM.
 
 ## Process lessons (2026-07-28, PR #82 review)
 - **Ideas worth keeping from a rejected PR.** PR #82's pre-call gateway was dropped (needs your own API key, so it converts flat-rate OAuth plans into metered API billing; incompatible with Claude Code; and it saves tokens by stripping the tool list, which is the thing that makes the CLI worth using). One idea inside it is worth remembering if the problem ever comes back: an *explicitly blessed* answer cache — key a reviewed answer to the exact request plus the exact selected source packet, and replay it with zero upstream calls, never auto-accepting a model answer. It only fires on byte-identical repeats, which is why it didn't justify 2,000 lines here.
 - **Doc-stated support floors need a CI job or they are fiction.** README promised Python 3.11+ while CI only ever ran 3.12; a 3.12-only f-string reached review with a fully green suite. Either test the floor or move it.
+
+## codex (continued)
+
+- 2026-08-03 — code-feature (pet-foundation): Django shell (FND-003, ~1700
+  LOC + tests): PASS attempt 1, 195k tok — high-quality, bible-conformant
+  (fail-closed config, CI-unique email constraint, RFC 9457 handler).
+  Compose stack (FND-002 rerun): PASS attempt 1, 65k tok; one real defect
+  found in orchestrator boot test (postgres:18 volume mount path — image
+  convention newer than training data; check couldn't catch without docker
+  runtime). React shell (FND-004): recorded FAIL x2 but ENVIRONMENTAL —
+  codex sandbox had no npmjs registry (ENOTFOUND), so deps couldn't
+  install; worker hand-maintained pnpm-lock.yaml offline and it PASSED
+  frozen-lockfile validation once the orchestrator reran the identical
+  check with network (only mechanical fixes needed: prettier, one eslint
+  autofix, one 'override' modifier). Lesson: JS tasks needing NEW deps
+  must either get network or a pre-warmed store; checks that need the
+  registry should run orchestrator-side.
+
+## GLM 5.2 / codex — pet-foundation continued (2026-08-03, later runs)
+
+- GLM 5.2, code-feature (FND-006 observability: Celery signal correlation +
+  capture adapter, ~500 LOC + 12 tests): PASS attempt 1, 64k tok, 257s.
+  First fair audition pass after the credit-limit incident; output quality
+  high (excluded tracebacks/task-args from capture as un-redactable —
+  unprompted). Promote toward moderate backend lanes.
+- codex, code-feature (IDN-001 backend, ~2500-line auth slice): PASS
+  attempt 2, 266k tok. (IDN-001 frontend, ~2400 lines): PASS attempt 1,
+  224k tok. Orchestrator integration found two real cross-cutting defects
+  neither check could see: SessionProvider blanked the whole app when the
+  session check failed (fixed to degrade-to-anonymous), and an FND-003-era
+  EMAIL_URL mapping forced STARTTLS on plain smtp:// (surfaced only by a
+  live Mailpit send). Lesson: checks validate lanes; only a live-stack
+  journey validates seams — always run one before merging a user-facing
+  slice.
+
+## codex — pet identity epic (2026-08-04): the check-design experiment
+
+- IDN-003 (households, 2 lanes): both FAIL x2 on finish-line issues (one mypy
+  line; an unrun prettier pass), orchestrator completed in the worktrees. The
+  serious finding was orchestrator-side: the backend worker shipped ZERO
+  integration tests, and the fail-fast check meant every retry prompt only
+  named the FIRST failing gate (mypy) — the missing-test gap was never
+  surfaced to the worker. A scoped test-hardening follow-up (codex, PASS
+  attempt 2, 183k tok) wrote a 40-case cross-tenant matrix that executed 100%
+  green against PostgreSQL on first run.
+- IDN-004 (invitations, 2 lanes, same models, same shape of work): specs
+  declared tests a primary deliverable, checks reported ALL failures at once
+  with test-presence gates FIRST, and prior workers' environment lessons
+  (uv-cache workaround, run-prettier-yourself) were quoted in the specs.
+  Result: both lanes PASS attempt 1, zero orchestrator fixes, 25 new
+  integration tests green on first PostgreSQL execution (91 total).
+- Judgment: the IDN-003→IDN-004 delta is check/spec design, not model
+  variance. Fail-fast checks actively hide scope gaps from retries; report
+  everything, gate the primary deliverable first, and feed environment
+  lessons forward in the spec.
