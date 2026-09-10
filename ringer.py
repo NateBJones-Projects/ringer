@@ -7,6 +7,7 @@ import base64
 import contextlib
 import hashlib
 import json
+import math
 import mimetypes
 import os
 import re
@@ -52,7 +53,22 @@ CONFIG_DIR_NAME = TOOL_NAME
 CONFIG_FILE_NAME = "config.toml"
 DEFAULT_ENGINE_NAME = "codex"
 DEFAULT_TIMEOUT_S = 900
-CHECK_TIMEOUT_S = 60
+# Default wall-clock budget for a task's `check` command. Kept at 60s so manifests
+# that do not opt in behave exactly as before. A check that legitimately takes longer
+# (a real `dotnet build && dotnet test`, a container start, a browser suite) must say
+# so explicitly via the task's `check_timeout_s`, or raise the floor for a whole
+# install via `check_timeout_s` in config.toml.
+DEFAULT_CHECK_TIMEOUT_S = 60
+# Hard ceiling on any resolved check timeout. The gate must always terminate: a check
+# is the thing that decides PASS, so an unbounded check is an unbounded run.
+MAX_CHECK_TIMEOUT_S = 3600
+# Backwards-compatible alias. Prefer resolve_check_timeout(); this name is retained
+# because it was the public constant before check timeouts became configurable.
+CHECK_TIMEOUT_S = DEFAULT_CHECK_TIMEOUT_S
+# How often a run with a budget re-reads live worker costs. Short enough that a
+# parallel run cannot overshoot far, long enough not to re-read every log
+# constantly.
+BUDGET_POLL_INTERVAL_S = 10
 DEFAULT_DASHBOARD_PORT_BASE = 8787
 DEFAULT_HUD_PORT = 8700
 DEFAULT_CATALOG_SOURCE = "https://openrouter.ai/api/v1/models"
@@ -741,6 +757,16 @@ class EngineConfig:
     # its own "model" — this is what makes a harness engine (OpenCode) model
     # agnostic instead of hard-coding one model into the command line.
     model_default: str = ""
+    # Some harnesses report tokens in thousands rather than units. Codex does:
+    # measured over a sample of real tasks its "tokens used" runs 12-230 where OpenCode
+    # reports hundreds of thousands for comparable work. Summed naively a Codex
+    # loop reads a thousand times cheaper than it is.
+    token_scale: int = 1
+    # Optional $/million, for engines that report tokens but no cost of their
+    # own. Setting these produces an ESTIMATE, always labelled as one -- a
+    # number the provider never sent must never be presented as measured.
+    price_in_per_mtok: float | None = None
+    price_out_per_mtok: float | None = None
 
     @property
     def process_name(self) -> str:
@@ -1058,6 +1084,25 @@ def load_artifact_config(raw: Any, state_dir: Path) -> ArtifactConfig:
     )
 
 
+# Task types that change a product and therefore answer to a requirement. A
+# bakeoff, probe or research task legitimately serves none, so the finding is
+# scoped rather than universal.
+#
+# The default is only the canonical vocabulary this project documents. Estates
+# that coin their own product task types -- whatever
+# their stack is called -- extend it in config rather than here:
+#
+#   ticketed_task_types = ["code-fix", "code-feature"]
+#
+# Hard-coding one estate's stack into everyone's linter is how a shared tool
+# stops being shared.
+# Empty by default: OFF unless an estate opts in. Even "code-fix" and
+# "code-feature" are a policy -- shipping them enabled would hand every
+# installation a new lint failure it never asked for, and a shared tool does not
+# get to decide that its users track requirements the way its author does.
+DEFAULT_TICKETED_TASK_TYPES: frozenset[str] = frozenset()
+
+
 @dataclass(frozen=True)
 class AppConfig:
     path: Path | None
@@ -1071,7 +1116,13 @@ class AppConfig:
     engines: dict[str, EngineConfig]
     artifact: ArtifactConfig
     steering: SteeringConfig = field(default_factory=SteeringConfig)
+    # Install-wide default budget for check commands; a task's own
+    # `check_timeout_s` still wins. See resolve_check_timeout().
+    check_timeout_s: int = DEFAULT_CHECK_TIMEOUT_S
     update: UpdateConfig = field(default_factory=UpdateConfig)
+    # Which task types must name a ticket. Estate-specific by nature; see
+    # DEFAULT_TICKETED_TASK_TYPES.
+    ticketed_task_types: frozenset[str] = DEFAULT_TICKETED_TASK_TYPES
     engine_bin_diagnostics: tuple[EngineBinDiagnostic, ...] = ()
 
     @classmethod
@@ -1093,6 +1144,11 @@ class AppConfig:
         if dashboard_port_base <= 0:
             raise ValueError("dashboard_port_base must be positive")
         hud_port = load_hud_port(data.get("hud"))
+        check_timeout_s = int(data.get("check_timeout_s", DEFAULT_CHECK_TIMEOUT_S))
+        if check_timeout_s <= 0:
+            raise ValueError("check_timeout_s must be positive")
+        if check_timeout_s > MAX_CHECK_TIMEOUT_S:
+            raise ValueError(f"check_timeout_s must be <= {MAX_CHECK_TIMEOUT_S}")
         identity_default = optional_string(data.get("identity_default"))
         hud_app_path = optional_path(data.get("hud_app_path"))
         allow_full_access = bool(data.get("allow_full_access", False))
@@ -1105,6 +1161,15 @@ class AppConfig:
         )
         artifact_config = load_artifact_config(data.get("artifact"), state_dir)
         update_config = load_update_config(data.get("update"))
+        raw_ticketed = data.get("ticketed_task_types")
+        if raw_ticketed is None:
+            ticketed_task_types = DEFAULT_TICKETED_TASK_TYPES
+        elif not isinstance(raw_ticketed, list):
+            raise ValueError("ticketed_task_types must be a list of task-type names")
+        else:
+            ticketed_task_types = frozenset(
+                str(item).strip() for item in raw_ticketed if str(item).strip()
+            )
         try:
             steering_config = load_steering_config(data.get("steering"))
         except Exception:
@@ -1123,7 +1188,9 @@ class AppConfig:
             engines=engines,
             artifact=artifact_config,
             steering=steering_config,
+            check_timeout_s=check_timeout_s,
             update=update_config,
+            ticketed_task_types=ticketed_task_types,
             engine_bin_diagnostics=engine_bin_diagnostics,
         )
 
@@ -1698,9 +1765,32 @@ def load_engines(raw: Any) -> dict[str, EngineConfig]:
         model_default = str(
             section.get("model_default", base.model_default if base else "")
         ).strip()
+        token_scale = int(section.get("token_scale", base.token_scale if base else 1))
+        if token_scale <= 0:
+            raise ValueError(f"engines.{clean_name}.token_scale must be positive")
+
+        def _price(field: str) -> float | None:
+            raw = section.get(field, getattr(base, field) if base else None)
+            if raw is None:
+                return None
+            value = float(raw)
+            # Same reasoning as budget_usd: NaN compares false against
+            # everything and infinity is unreachable, so either would make the
+            # exposure it feeds meaningless.
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(
+                    f"engines.{clean_name}.{field} must be a finite, non-negative number"
+                )
+            return value
+
+        price_in = _price("price_in_per_mtok")
+        price_out = _price("price_out_per_mtok")
         engines[clean_name] = EngineConfig(
             name=clean_name,
             bin=bin_path,
+            token_scale=token_scale,
+            price_in_per_mtok=price_in,
+            price_out_per_mtok=price_out,
             args_template=args_template,
             full_access_args=full_access_args,
             sandbox_args=sandbox_args,
@@ -1729,11 +1819,20 @@ class TaskSpec:
     engine: str = DEFAULT_ENGINE_NAME
     expect_files: tuple[str, ...] = ()
     timeout_s: int = DEFAULT_TIMEOUT_S
+    # Wall-clock budget for this task's `check` command. None means "not specified" —
+    # the config default applies, and failing that DEFAULT_CHECK_TIMEOUT_S.
+    check_timeout_s: int | None = None
     max_attempts: int = 2
     redact_spec: bool = False
     full_access: bool = False
     engine_args: tuple[str, ...] = ()
     verified: str = ""
+    # The requirement this task serves, e.g. a work-item id in whatever form your tracker uses. Optional -- plenty of
+    # runs are bakeoffs and probes that serve no ticket -- but without it a fix
+    # swarm's spend cannot be attributed to anything. Measured on a real estate:
+    # almost every product task was keyed by lane number rather than by work item, so the question
+    # "what did this requirement cost?" had no answer at all.
+    ticket: str = ""
     # Which model a harness engine should run for this task (fills the
     # engine's {model} placeholder); empty means the engine's model_default.
     model: str = ""
@@ -1766,6 +1865,19 @@ class TaskSpec:
         timeout_s = int(obj.get("timeout_s", DEFAULT_TIMEOUT_S))
         if timeout_s <= 0:
             raise ValueError(f"task {key}: timeout_s must be positive")
+        check_timeout_raw = obj.get("check_timeout_s")
+        check_timeout_s: int | None
+        if check_timeout_raw is None:
+            check_timeout_s = None
+        else:
+            check_timeout_s = int(check_timeout_raw)
+            if check_timeout_s <= 0:
+                raise ValueError(f"task {key}: check_timeout_s must be positive")
+            if check_timeout_s > MAX_CHECK_TIMEOUT_S:
+                raise ValueError(
+                    f"task {key}: check_timeout_s must be <= {MAX_CHECK_TIMEOUT_S} "
+                    "(a check is the gate; it must always terminate)"
+                )
         # Strict on the fields this release introduces: `1.5` silently
         # truncating to 1 would remove the retry without saying so, and a
         # string is never what the author meant.
@@ -1797,11 +1909,13 @@ class TaskSpec:
             engine=engine,
             expect_files=tuple(str(item) for item in expect_files),
             timeout_s=timeout_s,
+            check_timeout_s=check_timeout_s,
             max_attempts=max_attempts,
             redact_spec=require_bool(obj.get("redact_spec", False), key, "redact_spec"),
             full_access=bool(obj.get("full_access", False)),
             engine_args=tuple(engine_args),
             verified=verified.strip(),
+            ticket=str(obj.get("ticket", "")).strip(),
             model=model.strip(),
             task_type=task_type.strip(),
         )
@@ -1816,6 +1930,14 @@ class Manifest:
     repo: Path | None
     tasks: tuple[TaskSpec, ...]
     source_path: Path | None = None
+    # Spend limit in USD. The run stops as soon as the spend is VISIBLE -- see
+    # _watch_budget for why this cannot be a hard ceiling. None means unlimited,
+    # which is the historical behaviour.
+    budget_usd: float | None = None
+    # Stop the run once this many tasks have failed in a row with the SAME
+    # failure signature. A manifest whose deliverable is impossible fails every
+    # task identically; without this the run pays for all of them, twice.
+    abort_after_repeated_failures: int | None = None
 
     @classmethod
     def from_path(cls, path: Path) -> "Manifest":
@@ -1831,6 +1953,8 @@ class Manifest:
             repo=manifest.repo,
             tasks=manifest.tasks,
             source_path=path,
+            budget_usd=manifest.budget_usd,
+            abort_after_repeated_failures=manifest.abort_after_repeated_failures,
         )
 
     @classmethod
@@ -1857,6 +1981,21 @@ class Manifest:
         duplicates = sorted({key for key in keys if keys.count(key) > 1})
         if duplicates:
             raise ValueError(f"duplicate task keys: {', '.join(duplicates)}")
+        budget_raw = obj.get("budget_usd")
+        budget_usd: float | None = None
+        if budget_raw is not None:
+            budget_usd = float(budget_raw)
+            # NaN is truthy and compares False against everything, so it would
+            # start the watcher and then stop the run immediately; infinity is a
+            # ceiling nothing can reach. Neither is a budget.
+            if not math.isfinite(budget_usd) or budget_usd <= 0:
+                raise ValueError("budget_usd must be a positive, finite number")
+        abort_raw = obj.get("abort_after_repeated_failures")
+        abort_after: int | None = None
+        if abort_raw is not None:
+            abort_after = int(abort_raw)
+            if abort_after <= 0:
+                raise ValueError("abort_after_repeated_failures must be positive")
         worktrees = bool(obj.get("worktrees", False))
         if worktrees:
             reserved_logs_dir = (workdir / "logs").resolve()
@@ -1877,6 +2016,8 @@ class Manifest:
             worktrees=worktrees,
             repo=repo,
             tasks=tasks,
+            budget_usd=budget_usd,
+            abort_after_repeated_failures=abort_after,
         )
 
     def with_max_parallel(self, value: int | None) -> "Manifest":
@@ -1892,10 +2033,51 @@ class Manifest:
             repo=self.repo,
             tasks=self.tasks,
             source_path=self.source_path,
+            budget_usd=self.budget_usd,
+            abort_after_repeated_failures=self.abort_after_repeated_failures,
         )
 
 
 FILE_TEST_OPS = {"-e", "-f", "-s", "-d", "-r", "-w", "-x", "-L"}
+
+
+
+
+def worker_unwritable_paths(task: TaskSpec, manifest: Manifest) -> list[str]:
+    """Absolute paths a spec orders the worker to write that its sandbox refuses.
+
+    A worker may write inside its own task directory. It also has a temp dir,
+    but that path is assigned at run time and is not knowable here, so this
+    check deliberately reasons about the task directory alone: a spec that names
+    an absolute path outside it -- and lists
+    it in expect_files, so the file is genuinely expected from the worker rather
+    than merely mentioned -- describes an impossible task. Every attempt fails,
+    and every attempt is retried.
+
+    The distinction that matters: an absolute expect_files entry is perfectly
+    normal when the CHECK produces it (the fix-swarm pattern exports a patch out
+    of the worktree that way). It is only wrong when the SPEC hands that path to
+    the worker. So the spec text is what decides.
+
+    Found the hard way: a scout worker located its answer in four tool calls and
+    then spent about forty more trying `write`, `cat >`, `dd`, `cp`, python and
+    `xattr` against a path it was never allowed to touch.
+    """
+    if not task.expect_files:
+        return []
+    taskdir = (manifest.workdir / task.key).resolve()
+    offenders: list[str] = []
+    for raw in task.expect_files:
+        path = str(raw)
+        if not os.path.isabs(path):
+            continue
+        resolved = Path(path).resolve()
+        if resolved == taskdir or taskdir in resolved.parents:
+            continue
+        if path not in task.spec:
+            continue
+        offenders.append(path)
+    return offenders
 
 
 def lint_manifest(
@@ -1907,6 +2089,7 @@ def lint_manifest(
     allow_noncanonical_route: bool = False,
 ) -> list[str]:
     findings: list[str] = []
+    ticketed_types = config.ticketed_task_types if config else DEFAULT_TICKETED_TASK_TYPES
     if manifest.run_name == MODEL_SCOREBOARD_RUN_NAME:
         findings.append("manifest: run_name model-scoreboard is reserved for the scoreboard page.")
 
@@ -1916,6 +2099,17 @@ def lint_manifest(
         if check_may_fail_silently(task.check):
             findings.append(
                 f"{task.key}: check may fail without printing why; retry prompt and eval log depend on failure output."
+            )
+        if task.task_type in ticketed_types and not task.ticket:
+            findings.append(
+                f"{task.key}: {task.task_type} names no ticket, so its cost and outcome "
+                f"cannot be attributed to a requirement. Set \"ticket\"."
+            )
+        for unreachable in worker_unwritable_paths(task, manifest):
+            findings.append(
+                f"{task.key}: the spec tells the worker to write {unreachable}, which its "
+                f"sandbox forbids -- a worker may only write inside its own task directory. "
+                f"Have the worker write a relative path and export it in the check."
             )
         if manifest.worktrees and any(is_relative_expect_file(path) for path in task.expect_files):
             findings.append(
@@ -2180,6 +2374,15 @@ class TaskRuntime:
     ended_at_monotonic: float | None = None
     worker_pid: int | None = None
     tokens: int | None = None
+    # What the provider actually charged for this task, summed across every
+    # model step in its log, and how many steps that took. `tokens` above is a
+    # single step and cannot be used for money -- see parse_step_costs.
+    cost_usd: float | None = None
+    # Set only when the engine reports no cost of its own and the config supplies
+    # prices. Kept in a SEPARATE field so a measured total and a guess can never
+    # be added together by accident.
+    cost_estimated_usd: float | None = None
+    model_steps: int = 0
     final_verdict: str | None = None
     last_check_returncode: int | None = None
     last_check_timed_out: bool = False
@@ -2269,6 +2472,37 @@ class ProcessTree:
         return count
 
 
+@dataclass(frozen=True)
+class Preflight:
+    """What was proved before this run was allowed to spend anything.
+
+    It is carried into the run record on purpose. "Was this checked?" has to
+    be answerable from the record months later, by someone who was not there
+    — otherwise the honest answer is "somebody probably remembered to", which
+    is the same answer a run that skipped the gate would give.
+    """
+
+    baseline: BaselineResult | None = None
+    canary_enabled: bool = True
+    canary_skip_reason: str | None = None
+    canary_confirm: bool = False
+
+    def to_record(self) -> dict[str, Any]:
+        baseline = (
+            self.baseline.to_record()
+            if self.baseline is not None
+            else {"ran": False, "skipped_reason": "not requested"}
+        )
+        return {
+            "baseline": baseline,
+            "canary": {
+                "enabled": self.canary_enabled,
+                "skipped_reason": self.canary_skip_reason,
+                "human_confirm": self.canary_confirm,
+            },
+        }
+
+
 class StateWriter:
     def __init__(
         self,
@@ -2283,7 +2517,16 @@ class StateWriter:
         max_parallel: int = 1,
         artifact: ArtifactConfig | None = None,
         path: Path | None = None,
+        preflight: Preflight | None = None,
     ) -> None:
+        self.preflight = preflight or Preflight()
+        # Set during the run, not before it: whether the canary was judged and
+        # what the judgment was. Preflight itself stays frozen and describes
+        # only what was decided BEFORE dispatch.
+        self.canary_verdict: dict[str, Any] | None = None
+        # WHICH task was the canary and why that one. Separate from the
+        # verdict: the verdict says what it found, this says what it spoke for.
+        self.canary_selection: dict[str, Any] | None = None
         self.run_id = run_id
         self.run_name = run_name
         self.identity = identity
@@ -2449,7 +2692,20 @@ class StateWriter:
                 "live_path": str(self.live_path) if self.artifact.enabled else None,
                 "report_path": str(self.report_path) if self.artifact.enabled else None,
                 "report_ready": self.report_written,
+                "preflight": self._preflight_record(),
             }
+
+    def _preflight_record(self) -> dict[str, Any]:
+        """The pre-dispatch decisions, plus how the canary actually turned out.
+
+        Without the verdict the record answers "was a canary configured?" and
+        not "was it judged, and what did it say?" -- and only the second
+        question tells you whether the batch was released on evidence.
+        """
+        record = self.preflight.to_record()
+        record["canary"]["verdict"] = self.canary_verdict
+        record["canary"]["selection"] = self.canary_selection
+        return record
 
     def build_summary(self) -> dict[str, int]:
         with self.lock:
@@ -8701,9 +8957,29 @@ def run_models_command(config: AppConfig, args: argparse.Namespace) -> int:
     return 0
 
 
+def resolve_check_timeout(
+    task: TaskSpec,
+    default_check_timeout_s: int = DEFAULT_CHECK_TIMEOUT_S,
+) -> int:
+    """Wall-clock budget for one task's check command.
+
+    Precedence: the task's explicit `check_timeout_s` > the install-wide default
+    (config.toml `check_timeout_s`) > DEFAULT_CHECK_TIMEOUT_S. Always clamped to
+    MAX_CHECK_TIMEOUT_S so the gate is guaranteed to terminate.
+    """
+    resolved = task.check_timeout_s or default_check_timeout_s or DEFAULT_CHECK_TIMEOUT_S
+    return max(1, min(int(resolved), MAX_CHECK_TIMEOUT_S))
+
+
 class Verifier:
+    def __init__(self, default_check_timeout_s: int = DEFAULT_CHECK_TIMEOUT_S) -> None:
+        self.default_check_timeout_s = default_check_timeout_s
+
     async def verify(self, task: TaskSpec, taskdir: Path) -> VerifyResult:
-        check_returncode, check_timed_out, output = await self._run_check(task.check, taskdir)
+        check_timeout_s = resolve_check_timeout(task, self.default_check_timeout_s)
+        check_returncode, check_timed_out, output = await self._run_check(
+            task.check, taskdir, check_timeout_s
+        )
         missing_files = tuple(
             rel for rel in task.expect_files if not self._is_nonempty_file(self._expect_file_path(taskdir, rel))
         )
@@ -8741,7 +9017,18 @@ class Verifier:
         return candidate if candidate.is_absolute() else taskdir / candidate
 
     @staticmethod
-    async def _run_check(command: str, cwd: Path) -> tuple[int | None, bool, str]:
+    async def _run_check(
+        command: str,
+        cwd: Path,
+        timeout_s: int | None = None,
+    ) -> tuple[int | None, bool, str]:
+        # Resolved at CALL time, not at import time. A default argument bound to
+        # the constant freezes whatever it held when the module loaded, so any
+        # later change to CHECK_TIMEOUT_S -- config, or a test -- is silently
+        # ignored. The caller still passes an explicit value for a task's own
+        # check_timeout_s; None means "whatever the install-wide setting is now".
+        if timeout_s is None:
+            timeout_s = CHECK_TIMEOUT_S
         proc = await asyncio.create_subprocess_shell(
             command,
             cwd=str(cwd),
@@ -8752,7 +9039,7 @@ class Verifier:
         )
         timed_out = False
         try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=CHECK_TIMEOUT_S)
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
         except asyncio.TimeoutError:
             timed_out = True
             terminate_process_group(proc)
@@ -8763,7 +9050,7 @@ class Verifier:
                 stdout, _ = await proc.communicate()
         output = stdout.decode("utf-8", errors="replace") if stdout else ""
         if timed_out:
-            output += f"\n[ringer.py] check timed out after {CHECK_TIMEOUT_S}s\n"
+            output += f"\n[ringer.py] check timed out after {timeout_s}s\n"
         return proc.returncode, timed_out, output
 
 
@@ -8775,11 +9062,13 @@ class RingerRunner:
         identity: str,
         dashboard_enabled: bool = True,
         force_browser: bool = False,
+        preflight: Preflight | None = None,
     ) -> None:
         self.manifest = manifest
         self.config = config
         self.identity = identity
         self.dashboard_enabled = dashboard_enabled
+        self.preflight = preflight or Preflight()
         self.run_id = build_run_id(manifest.run_name)
         self.started_at = datetime.now(timezone.utc)
         self.lock = threading.RLock()
@@ -8795,6 +9084,7 @@ class RingerRunner:
             self.lock,
             max_parallel=manifest.max_parallel,
             artifact=config.artifact,
+            preflight=self.preflight,
         )
         self.dashboard = (
             Dashboard(
@@ -8807,9 +9097,20 @@ class RingerRunner:
             else None
         )
         self.logger = EvalLogger(config.eval)
-        self.verifier = Verifier()
+        self.verifier = Verifier(default_check_timeout_s=config.check_timeout_s)
         self.semaphore = asyncio.Semaphore(manifest.max_parallel)
         self.active_processes: dict[int, asyncio.subprocess.Process] = {}
+        # Set once when the run must stop early: budget spent, or the same
+        # failure repeating. Tasks that have not started check it and skip.
+        self.stop_reason: str | None = None
+        # Counted PER SIGNATURE rather than as one streak. With workers finishing
+        # in arbitrary order a single streak counter mixes unrelated families:
+        # A,B,A,B never reaches 2 as a streak, yet A has failed twice the same
+        # way, and two unrelated failures can look consecutive purely because of
+        # completion order. A per-signature tally answers the question actually
+        # being asked -- has THIS failure now happened N times.
+        self.failure_counts: dict[str, int] = {}
+        self.failure_tasks: dict[str, list[str]] = {}
 
     async def run(self) -> int:
         self.manifest.workdir.mkdir(parents=True, exist_ok=True)
@@ -8818,8 +9119,27 @@ class RingerRunner:
             self.state_writer.start()
             if self.dashboard is not None:
                 self.state_writer.set_port(self.dashboard.start())
-            await asyncio.gather(*(self._run_task(runtime) for runtime in self.runtimes))
+            watcher = (
+                asyncio.ensure_future(self._watch_budget())
+                if self.manifest.budget_usd
+                else None
+            )
+            try:
+                await self._dispatch()
+            finally:
+                if watcher is not None:
+                    watcher.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await watcher
             final_state = True
+            with self.lock:
+                stopped = self.stop_reason
+            if stopped is not None:
+                # A run that was cut short did not do what the manifest asked,
+                # even if every task that finished happened to pass. Reporting
+                # success here would let a budget stop pass a CI gate silently.
+                print(f"\nrun did not complete: {stopped}", flush=True)
+                return 1
             return 0 if all(runtime.status == "pass" for runtime in self.runtimes) else 1
         except asyncio.CancelledError:
             await self.kill_all_workers()
@@ -8849,6 +9169,240 @@ class RingerRunner:
                     print(f"\nYour results: {results_page}")
                     print("Open it in a browser, or run './ringer.py hud' for the full Ringside view (http://127.0.0.1:8700).")
 
+    def _split_canary(self) -> tuple[TaskRuntime | None, list[TaskRuntime]]:
+        """The canary task, and the batch held behind it.
+
+        A run of one task needs no canary: that task IS the whole exposure,
+        and stopping "the rest" after it would stop nothing. Announcing the
+        auto-skip matters more than it looks — silence here is
+        indistinguishable from the gate being off.
+        """
+        if not self.preflight.canary_enabled:
+            self.state_writer.canary_verdict = {
+                "task": None,
+                "outcome": "waived",
+                "reason": self.preflight.canary_skip_reason,
+            }
+            return None, list(self.runtimes)
+        if len(self.runtimes) < 2:
+            if self.runtimes:
+                print(
+                    "Canary: skipped — a single-task run is its own canary, "
+                    "so there is no batch to hold back.",
+                    flush=True,
+                )
+                self.state_writer.canary_verdict = {
+                    "task": None,
+                    "outcome": "skipped",
+                    "reason": "single-task run is its own canary",
+                }
+            return None, list(self.runtimes)
+        canary = self._pick_canary()
+        rest = [r for r in self.runtimes if r is not canary]
+        return canary, rest
+
+    def _worker_pair(self, runtime: TaskRuntime) -> tuple[str, str]:
+        """What a task will actually be run BY. The unit of representativeness.
+
+        Engine and model together, because either alone can mislead: two tasks
+        on the same engine may run different models, and the same model under a
+        different engine is a different harness.
+        """
+        engine = self.config.engines.get(runtime.task.engine)
+        model = runtime.task.model or (engine.model_default if engine else "") or ""
+        return (runtime.task.engine, model)
+
+    def _pick_canary(self) -> TaskRuntime:
+        """The first task that RESEMBLES the batch, not simply the first task.
+
+        The canary is only evidence about the tasks it resembles. Taking
+        `runtimes[0]` blindly gets that wrong in both directions, and the two
+        directions cost very differently:
+
+          too weak  — a minority probe fails and holds a healthy batch. Free
+                      and reversible, but it is the wrong answer, and a hold
+                      nobody can explain is how a gate gets waived by reflex.
+          too strong— a minority probe passes and releases work that then fails
+                      once per task. This is the expensive direction, and it
+                      reaches it THROUGH the gate.
+
+        Measured 2026-09-10 (work#1044): a 32-task scout ran 31 tasks on one
+        model and task 1 on a different, weaker one left over from an earlier
+        audition. It failed, 31 tasks were skipped, and the model they would
+        have used had passed the identical check first try minutes before.
+
+        Ties are broken by manifest order, so selection is deterministic: the
+        dominant pair is the most common one, and the earliest-declared of
+        equally common pairs wins.
+        """
+        counts: dict[tuple[str, str], int] = {}
+        for runtime in self.runtimes:
+            pair = self._worker_pair(runtime)
+            counts[pair] = counts.get(pair, 0) + 1
+        # max() keeps the first maximum it meets, and dicts preserve insertion
+        # order, so this is "most common, earliest declared" without a sort key
+        # that could reorder equal counts differently between runs.
+        dominant = max(counts, key=lambda pair: counts[pair])
+        for runtime in self.runtimes:
+            if self._worker_pair(runtime) == dominant:
+                return runtime
+        return self.runtimes[0]  # unreachable: dominant came from this list
+
+    def _canary_selection(self, canary: TaskRuntime) -> dict[str, Any]:
+        """Why this task, and how much of the batch it actually speaks for."""
+        pair = self._worker_pair(canary)
+        same = sum(1 for r in self.runtimes if self._worker_pair(r) == pair)
+        total = len(self.runtimes)
+        first_pair = self._worker_pair(self.runtimes[0])
+        engine, model = pair
+        return {
+            "task": canary.task.key,
+            "engine": engine,
+            "model": model,
+            "covers": same,
+            "of": total,
+            # A canary speaking for less than half the batch is a weak probe
+            # whatever it says. Naming that is the difference between "the
+            # batch is broken" and "the canary was the wrong instrument".
+            "representative": same * 2 >= total,
+            "moved_from": self.runtimes[0].task.key if pair != first_pair else None,
+        }
+
+    async def _dispatch(self) -> None:
+        """Release the canary, judge it, then release the rest.
+
+        The batch is not a smaller batch — it is a STOP. Every remaining task
+        checks `stop_reason` before it spawns, so a bad canary verdict costs
+        exactly one task's spend instead of the manifest's.
+        """
+        canary, rest = self._split_canary()
+        if canary is None:
+            await asyncio.gather(*(self._run_task(runtime) for runtime in rest))
+            return
+        selection = self._canary_selection(canary)
+        self.state_writer.canary_selection = selection
+        print(
+            f"\nCanary: running 1 of {len(self.runtimes)} tasks "
+            f"({canary.task.key}) before releasing the other {len(rest)}.",
+            flush=True,
+        )
+        if selection["moved_from"]:
+            # Silence here would be the defect: a canary quietly moved is
+            # indistinguishable from a canary that was always first.
+            print(
+                f"    not {selection['moved_from']}, which is the only task on "
+                f"{selection['engine']}/{selection['model'] or '(engine default)'}"
+                if selection["covers"] == 1
+                else f"    not {selection['moved_from']} — a minority "
+                f"engine/model for this batch",
+                flush=True,
+            )
+        print(
+            f"    speaks for {selection['covers']} of {selection['of']} task(s) "
+            f"({selection['engine']}/{selection['model'] or 'engine default'})",
+            flush=True,
+        )
+        if not selection["representative"]:
+            # A weak probe is still worth running -- it is one task's spend --
+            # but its verdict must not be read as a statement about the batch.
+            print(
+                "    ⚠️  this batch has no majority engine/model, so the canary "
+                "speaks for less than half of it. Read a FAIL as 'this task "
+                "failed', not 'the batch is broken'.",
+                flush=True,
+            )
+        await self._run_task(canary)
+        await self._judge_canary(canary, held_back=len(rest))
+        await asyncio.gather(*(self._run_task(runtime) for runtime in rest))
+
+    async def _judge_canary(self, runtime: TaskRuntime, *, held_back: int) -> None:
+        """Decide whether the batch is released, and say why if it is not."""
+        with self.lock:
+            if self.stop_reason is not None:
+                # Something else already stopped the run (budget, a signal).
+                # Do not overwrite a reason that is already true.
+                return
+            status = runtime.status
+            detail = runtime.setup_error or shorten(runtime.last_check_output, 300)
+        if status != "pass":
+            reason = (
+                f"canary task {runtime.task.key!r} did not pass its own check, "
+                f"so the remaining {held_back} task(s) were not dispatched"
+            )
+            with self.lock:
+                self.stop_reason = reason
+            self.state_writer.canary_verdict = {
+                "task": runtime.task.key,
+                "outcome": "held",
+                "reason": reason,
+                "held_back": held_back,
+            }
+            print(f"\n*** RUN STOPPED: {reason} ***", flush=True)
+            if detail:
+                for line in detail.splitlines()[:6]:
+                    print(f"    {line}", flush=True)
+            print(
+                "The canary is the cheapest evidence you will get: whatever it hit, "
+                f"the other {held_back} task(s) would have hit too. Fix the manifest, "
+                "then re-run.",
+                flush=True,
+            )
+            return
+        print(f"Canary: {runtime.task.key} passed — releasing {held_back} task(s).", flush=True)
+        self.state_writer.canary_verdict = {
+            "task": runtime.task.key,
+            "outcome": "released",
+            "reason": "canary passed its own executed check",
+            "held_back": held_back,
+        }
+        if self.preflight.canary_confirm:
+            await self._confirm_canary(runtime, held_back=held_back)
+
+    async def _confirm_canary(self, runtime: TaskRuntime, *, held_back: int) -> None:
+        """Ask a human before the batch goes out.
+
+        Deliberately NOT the default. A pause a human meets on every run
+        becomes a keypress they learn to hit, which buys the appearance of a
+        gate and none of the substance — the executed check above is the
+        verdict that always runs.
+        """
+        if not sys.stdin.isatty():
+            reason = (
+                "--canary-confirm asked for a human verdict, but stdin is not a "
+                "terminal, so nobody can give one"
+            )
+            with self.lock:
+                if self.stop_reason is None:
+                    self.stop_reason = reason
+            self.state_writer.canary_verdict = {
+                "task": runtime.task.key,
+                "outcome": "held",
+                "reason": reason,
+                "held_back": held_back,
+            }
+            print(f"\n*** RUN STOPPED: {reason} ***", flush=True)
+            return
+        prompt = (
+            f"\nCanary {runtime.task.key} passed. Read its output, then release "
+            f"the remaining {held_back} task(s)? [y/N] "
+        )
+        try:
+            answer = await asyncio.to_thread(input, prompt)
+        except (EOFError, KeyboardInterrupt):
+            answer = ""
+        if answer.strip().lower() not in {"y", "yes"}:
+            reason = f"canary {runtime.task.key!r} was not released by the operator"
+            with self.lock:
+                if self.stop_reason is None:
+                    self.stop_reason = reason
+            self.state_writer.canary_verdict = {
+                "task": runtime.task.key,
+                "outcome": "held",
+                "reason": reason,
+                "held_back": held_back,
+            }
+            print(f"\n*** RUN STOPPED: {reason} ***", flush=True)
+
     async def kill_all_workers(self) -> None:
         procs = list(self.active_processes.values())
         for proc in procs:
@@ -8860,8 +9414,151 @@ class RingerRunner:
             if proc.returncode is None:
                 kill_process_group(proc)
 
+    def run_cost_usd(self) -> float:
+        """Measured spend: what providers actually reported. For REPORTING."""
+        with self.lock:
+            return sum(r.cost_usd or 0.0 for r in self.runtimes)
+
+    def run_exposure_usd(self) -> tuple[float, float]:
+        """(measured, estimated) — what a budget must weigh. For ENFORCEMENT.
+
+        Reporting keeps these apart, because presenting a guess as a measurement
+        is how a number stops being trustworthy. Enforcement must add them: an
+        engine that reports no cost of its own still spends real money, and a
+        budget that ignores it is no budget at all for exactly the case it is
+        most needed -- a plan-billed or separately-billed worker, which on one
+        estate was the large majority of tasks.
+        """
+        with self.lock:
+            measured = sum(r.cost_usd or 0.0 for r in self.runtimes)
+            estimated = sum(
+                r.cost_estimated_usd or 0.0
+                for r in self.runtimes
+                if r.cost_usd is None
+            )
+        return measured, estimated
+
+    def _refresh_cost(self, runtime: TaskRuntime) -> None:
+        """Re-read the task's log; it accumulates across attempts, so this is total."""
+        cost, steps = parse_step_costs(runtime.log_path)
+        engine = self.config.engines.get(runtime.task.engine)
+        with self.lock:
+            if cost is not None:
+                runtime.cost_usd = cost
+            runtime.model_steps = steps
+            if cost is None and engine is not None:
+                # Prefer the streamed total: summing every step is right by
+                # construction. Harnesses that stream nothing (Codex prints only
+                # a "tokens used" line) leave this at 0, and the engine's own
+                # reported figure is the only number available.
+                #
+                # Whether that figure is a running total or a single step is a
+                # property of the harness, not something knowable here -- which
+                # is what `token_scale` exists to correct per engine. Measured on
+                # Codex: across every log on one estate, zero step_finish
+                # events, and a "tokens used"
+                # value whose median (47, i.e. 47k) sits in the same range as
+                # OpenCode's fresh input for comparable work, so it reads as a
+                # task total rather than one step. Confirm before trusting it for
+                # a new engine.
+                streamed = parse_step_tokens(runtime.log_path)
+                billable = streamed or (runtime.tokens or 0)
+                if billable:
+                    runtime.cost_estimated_usd = estimate_cost_from_tokens(engine, billable)
+
+    async def _note_failure(self, runtime: TaskRuntime, verify: Any) -> None:
+        """Track identical consecutive failures so an impossible manifest stops early.
+
+        The signature is the check's exit code plus the first meaningful line it
+        printed. A manifest that asks for something no worker can produce fails
+        every task the same way; that is the shape worth stopping on, and it is
+        distinguishable from a run where several different things went wrong.
+        """
+        limit = self.manifest.abort_after_repeated_failures
+        if not limit:
+            return
+        first_line = ""
+        for line in (getattr(verify, "raw_output_excerpt", "") or "").splitlines():
+            stripped = line.strip()
+            if stripped:
+                first_line = stripped[:200]
+                break
+        signature = f"rc={getattr(verify, 'check_returncode', None)}|{first_line}"
+        with self.lock:
+            seen = self.failure_counts.get(signature, 0) + 1
+            self.failure_counts[signature] = seen
+            self.failure_tasks.setdefault(signature, []).append(runtime.task.key)
+            tripped = seen >= limit and self.stop_reason is None
+            if tripped:
+                # Name the tasks. The signature is deliberately coarse, so a stop
+                # can be a genuine repeated failure or an unlucky collision
+                # between checks that open with the same line -- and the reader
+                # can only tell which by seeing which tasks were counted.
+                which = ", ".join(self.failure_tasks[signature])
+                self.stop_reason = (
+                    f"{seen} tasks failed the same way ({first_line or 'no output'}) "
+                    f"-- {which} -- stopping rather than paying for the rest of the "
+                    f"manifest"
+                )
+        if tripped:
+            print(f"\n*** RUN STOPPED: {self.stop_reason} ***", flush=True)
+            await self.kill_all_workers()
+
+    async def _watch_budget(self) -> None:
+        """Re-read live costs on a timer, so a budget is not merely a post-mortem.
+
+        A task's price is not knowable before it runs -- it exists only in what
+        the worker has already written to its log -- so no reservation is
+        possible. Checking only when a worker EXITS therefore lets N parallel
+        workers each spend the whole budget before any of them reports: with
+        max_parallel=4 a $6 budget can reach $24 without one check firing.
+
+        Polling closes most of that gap. The residual is bounded by this
+        interval and by how fast a worker can spend inside it, which is why the
+        documentation says the run stops as soon as the spend is VISIBLE rather
+        than promising a ceiling that cannot be exceeded. A hard guarantee here
+        would be a lie with a number attached to it.
+        """
+        while True:
+            await asyncio.sleep(BUDGET_POLL_INTERVAL_S)
+            with self.lock:
+                if self.stop_reason is not None:
+                    return
+                live = [r for r in self.runtimes
+                        if r.status in {"running", "retrying", "verifying"}]
+            for runtime in live:
+                self._refresh_cost(runtime)
+            await self._check_budget()
+
+    async def _check_budget(self) -> None:
+        budget = self.manifest.budget_usd
+        if not budget:
+            return
+        measured, estimated = self.run_exposure_usd()
+        spent = measured + estimated
+        if spent < budget:
+            return
+        detail = f"${measured:.2f} measured"
+        if estimated:
+            detail += f" + ~${estimated:.2f} estimated"
+        with self.lock:
+            if self.stop_reason is not None:
+                return
+            self.stop_reason = f"budget of ${budget:.2f} reached ({detail})"
+        print(f"\n*** RUN STOPPED: {self.stop_reason} ***", flush=True)
+        await self.kill_all_workers()
+
     async def _run_task(self, runtime: TaskRuntime) -> None:
         async with self.semaphore:
+            with self.lock:
+                stopped = self.stop_reason
+            if stopped is not None:
+                with self.lock:
+                    runtime.status = "fail"
+                    runtime.final_verdict = "SKIPPED"
+                    runtime.setup_error = f"not started: {stopped}"
+                    runtime.ended_at_monotonic = time.monotonic()
+                return
             with self.lock:
                 runtime.started_at_monotonic = time.monotonic()
             prepared, prepare_error = await self._prepare_taskdir(runtime)
@@ -8882,6 +9579,10 @@ class RingerRunner:
                     runtime.status = "verifying"
                     if worker.tokens is not None:
                         runtime.tokens = (runtime.tokens or 0) + worker.tokens
+                # Money is counted the moment the worker stops, before the check
+                # runs, so a budget cannot be overshot by a slow verification.
+                self._refresh_cost(runtime)
+                await self._check_budget()
                 verify = await self.verifier.verify(runtime.task, runtime.taskdir)
                 verdict = verdict_for(worker, verify)
                 with self.lock:
@@ -8898,6 +9599,14 @@ class RingerRunner:
                         runtime.ended_at_monotonic = time.monotonic()
                     await self._cleanup_worktree_on_pass(runtime)
                     return
+                with self.lock:
+                    stopped = self.stop_reason
+                if stopped is not None and verdict != "PASS":
+                    with self.lock:
+                        runtime.status = "fail"
+                        runtime.final_verdict = verdict
+                        runtime.ended_at_monotonic = time.monotonic()
+                    return
                 if attempt < max_attempts and verdict in {"FAIL", "TIMEOUT"}:
                     failure_context = build_failure_context(runtime.log_path, verify.raw_output_excerpt)
                     current_spec = (
@@ -8909,6 +9618,12 @@ class RingerRunner:
                     runtime.status = "fail"
                     runtime.final_verdict = verdict
                     runtime.ended_at_monotonic = time.monotonic()
+                # Counted once the TASK has failed, retries included -- not once
+                # per attempt. Counting attempts made a single task with two
+                # identical failures reach a limit of 2 on its own, which is not
+                # "tasks in a row" by any reading of the name.
+                if verdict in {"FAIL", "TIMEOUT"}:
+                    await self._note_failure(runtime, verify)
                 return
 
     def _harvest_deliverables_on_pass(self, runtime: TaskRuntime) -> None:
@@ -9330,6 +10045,11 @@ class RingerRunner:
                 "expected_model": expected_model,
                 "reasoning_effort": reasoning_effort,
                 "task_type": runtime.task.task_type,
+                # What this cost was FOR. Without it the log records what was
+                # spent and never what it bought.
+                "ticket": runtime.task.ticket,
+                "cost_usd": runtime.cost_usd,
+                "model_steps": runtime.model_steps,
                 "retry": retrying,
             }
         )
@@ -9523,6 +10243,128 @@ def parse_env_file(path: Path) -> dict[str, str]:
             value = value[1:-1]
         values[key.strip()] = value
     return values
+
+
+def estimate_cost_from_tokens(engine: "EngineConfig", tokens: int) -> float | None:
+    """A priced GUESS for engines that report tokens but never a cost.
+
+    Codex is the case this exists for: it bills on another account entirely, so
+    its work is invisible in any provider-reported total. On one estate 797 of
+    most tasks -- every code review among them -- carried no cost at all, which
+    made review look free when it was the expensive half.
+
+    Two things make this honest rather than misleading. The engine's
+    `token_scale` is applied first, because a harness reporting thousands
+    otherwise reads a thousand times cheap. And the result is stored apart from
+    measured cost and always labelled an estimate; a number the provider never
+    sent is never presented as fact.
+
+    Returns None when the engine has no prices configured -- an unknown cost
+    must stay unknown rather than default to zero.
+    """
+    if engine.price_in_per_mtok is None and engine.price_out_per_mtok is None:
+        return None
+    scaled = tokens * engine.token_scale
+    # These engines report one figure, not a split. Agent traffic is
+    # overwhelmingly prompt tokens -- measured ~99/1 on real runs -- so pricing
+    # it all at the input rate is closer than a 50/50 blend, and it errs low
+    # rather than inventing headroom.
+    rate = engine.price_in_per_mtok
+    if rate is None:
+        rate = engine.price_out_per_mtok
+    return scaled * float(rate) / 1_000_000
+
+
+def parse_step_tokens(log_path: Path) -> int:
+    """Total tokens across every step in a worker log.
+
+    `TaskRuntime.tokens` holds ONE step -- that is the defect this whole module
+    exists to correct -- so estimating a price from it reproduces the same
+    19x-40x undercount in the estimate, for exactly the engines that have no
+    measured cost to fall back on. Sum the stream instead.
+
+    Returns 0 when the log carries no per-step token counts, which is the honest
+    answer for a harness that streams nothing.
+    """
+    total = 0
+    try:
+        handle = log_path.open("r", encoding="utf-8", errors="replace")
+    except OSError:
+        return 0
+    with handle:
+        for line in handle:
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(event, dict) or event.get("type") != "step_finish":
+                continue
+            part = event.get("part")
+            if not isinstance(part, dict):
+                continue
+            tokens = part.get("tokens")
+            if isinstance(tokens, dict):
+                for field in ("input", "output"):
+                    value = tokens.get(field)
+                    if isinstance(value, (int, float)) and not isinstance(value, bool):
+                        total += int(value)
+    return total
+
+
+def parse_step_costs(log_path: Path) -> tuple[float | None, int]:
+    """Sum what the provider says each model call cost, from the worker's own log.
+
+    Engines that stream JSON events report a per-step `cost` alongside the token
+    counts. Summing those is exact: it needs no price catalog, no assumption
+    about the prompt/completion split, and it stays right when a provider
+    discounts or caches.
+
+    This exists because `worker_tokens` records ONE step, not the sum -- the
+    token regex reads a single figure out of the tail of the stream. Measured on
+    real tasks the gap is 19x to 40x, which is how a swarm can report a small
+    fraction of its real cost and be restarted many times by an operator who has
+    no way to see otherwise.
+
+    Returns (usd, steps). usd is None when the log carries no cost data at all
+    (a plan-billed or non-JSON engine), which is different from a run that
+    genuinely cost nothing.
+    """
+    total = 0.0
+    steps = 0
+    saw_cost = False
+    try:
+        handle = log_path.open("r", encoding="utf-8", errors="replace")
+    except OSError:
+        return None, 0
+    with handle:
+        for line in handle:
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(event, dict) or event.get("type") != "step_finish":
+                continue
+            steps += 1
+            part = event.get("part")
+            if not isinstance(part, dict):
+                continue
+            cost = part.get("cost")
+            if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+                value = float(cost)
+                # A worker log is untrusted input. NaN compares false against
+                # everything, so one would make `spent < budget` false forever
+                # and disable the stop; a negative would refund exposure the run
+                # has actually spent. Skip both rather than poison the total.
+                if math.isfinite(value) and value >= 0:
+                    total += value
+                    saw_cost = True
+    return (total if saw_cost else None), steps
 
 
 def parse_token_count(text: str, token_regex: str | None = DEFAULT_TOKEN_REGEX) -> int | None:
@@ -9955,8 +10797,155 @@ def shorten(value: str, limit: int) -> str:
     return clean[: max(0, limit - 3)] + "..."
 
 
-async def run_baseline(manifest: Manifest, *, config: AppConfig) -> int:
-    """Execute every task's CHECK against the unmodified tree. Spawn nothing.
+@dataclass(frozen=True)
+class BaselineTaskResult:
+    """One task's check, executed against the unmodified tree.
+
+    `outcome` is deliberately three-valued rather than a bool, because the
+    three cases mean opposite things. "fail" is the WANTED result: the check
+    demands behavior that does not exist yet, which is what a worker is being
+    bought to build. "pass" means the check is already satisfied, so passing
+    it again at the end proves nothing. "error" means the check could not be
+    executed at all.
+    """
+
+    key: str
+    outcome: str  # "fail" (wanted) | "pass" (proves nothing) | "error" (broken)
+    returncode: int | None = None
+    timed_out: bool = False
+    detail: str = ""
+
+
+@dataclass(frozen=True)
+class BaselineResult:
+    """The whole baseline phase, in a form a run record can carry."""
+
+    tasks: tuple[BaselineTaskResult, ...] = ()
+    leaked_worktrees: tuple[str, ...] = ()
+    skipped_reason: str | None = None
+
+    @property
+    def ran(self) -> bool:
+        return self.skipped_reason is None
+
+    def keys_with(self, outcome: str) -> tuple[str, ...]:
+        return tuple(task.key for task in self.tasks if task.outcome == outcome)
+
+    def objections(self) -> tuple[str, ...]:
+        """Why this manifest must not be dispatched. Empty means go.
+
+        Only two shapes block, and neither is "a check failed" — a failing
+        check is the whole point of a baseline. What blocks is a check that
+        cannot be executed, and a check that is already green.
+        """
+        objections: list[str] = []
+        errored = self.keys_with("error")
+        if errored:
+            objections.append(
+                f"{len(errored)} check(s) could not be executed at all "
+                f"({', '.join(errored)}). A worker cannot be verified by a "
+                "check that does not run, so its attempts would be bought blind."
+            )
+        already_green = self.keys_with("pass")
+        if already_green:
+            objections.append(
+                f"{len(already_green)} check(s) already pass against the "
+                f"unmodified tree ({', '.join(already_green)}). A check that is "
+                "green before any work starts is green after it too, so it "
+                "cannot tell you whether the work happened."
+            )
+        return tuple(objections)
+
+    def to_record(self) -> dict[str, Any]:
+        if not self.ran:
+            return {"ran": False, "skipped_reason": self.skipped_reason}
+        return {
+            "ran": True,
+            "skipped_reason": None,
+            "total": len(self.tasks),
+            "fail": len(self.keys_with("fail")),
+            "pass": len(self.keys_with("pass")),
+            "error": len(self.keys_with("error")),
+            "objections": list(self.objections()),
+            "tasks": [
+                {
+                    "key": task.key,
+                    "outcome": task.outcome,
+                    "check_returncode": task.returncode,
+                    "check_timed_out": task.timed_out,
+                    "detail": shorten(task.detail, 2000),
+                }
+                for task in self.tasks
+            ],
+        }
+
+
+def unwritable_deliverables(task: TaskSpec) -> list[str]:
+    """Declared deliverables the FILESYSTEM will refuse, seen from here.
+
+    ⚠️ This is not a sandbox check and cannot be one. It probes the path as
+    the dispatcher sees it; a worker runs under the engine's sandbox, which
+    can deny a path that `os.access` here calls writable. So a clean result
+    means "no filesystem-level reason this cannot be written", never "the
+    worker will be able to write it".
+
+    Proving the latter requires running a worker, which is the one thing this
+    phase must not do -- spawning nothing is what makes it free and what lets
+    it run before every dispatch.
+
+    Three layers cover the ground between them, and it is worth knowing which
+    is which:
+
+      lint      `worker_unwritable_paths` -- the SPEC hands the worker an
+                absolute path outside its own task directory. Sandbox SCOPE,
+                reasoned about statically. This is the shape of the measured
+                incident: one run restarted sixteen times, 31 of 36 tasks
+                failing identically, $19.43 on the worst restart alone.
+      baseline  here -- the path is refused by the filesystem itself, so no
+                process could write it whoever asked.
+      canary    whatever neither of those could know statically, bought once
+                instead of once per task.
+
+    So this function is the narrowest of the three, and the least clever. It
+    exists because it is also the only one of them that is certain.
+
+    What this does catch is the cheaper, dumber half: a path that no process
+    could write, whoever asked. Only ABSOLUTE paths are examined, and that is
+    deliberate -- a relative `expect_files` entry lands inside the task's own
+    scratch dir, which the harness creates, so probing those would refuse
+    nearly every honest manifest. An absolute one escapes to somewhere nobody
+    has verified; the fix-swarm patch export is the legitimate version of it.
+
+    A directory that does not exist is not automatically a fault -- the check
+    may create it -- so the nearest EXISTING ancestor is what gets probed. If
+    that ancestor is not a writable directory, nothing below it can be
+    created and every attempt is bought for nothing.
+    """
+    problems: list[str] = []
+    for declared in task.expect_files:
+        path = Path(declared)
+        if not path.is_absolute():
+            continue
+        ancestor = path.parent
+        while not ancestor.exists() and ancestor != ancestor.parent:
+            ancestor = ancestor.parent
+        if not ancestor.is_dir():
+            problems.append(f"{declared} (its parent {ancestor} is not a directory)")
+        elif not os.access(ancestor, os.W_OK):
+            problems.append(f"{declared} (no write permission on {ancestor})")
+    return problems
+
+
+async def execute_baseline(manifest: Manifest) -> BaselineResult:
+    """Execute every task's CHECK against the unmodified tree. Spawn no WORKERS.
+
+    ⚠️ Not "spawn nothing", which is what this said before and is not true:
+    the checks themselves are subprocesses, and the worktree path launches
+    `git` helpers. What the phase guarantees is that no worker -- no model,
+    no billable token -- is started. That is the guarantee worth having and
+    the one the refusal below depends on; stating a broader one invites a
+    maintainer to assume there are no side effects at all, when a check can
+    legitimately export files.
 
     The point: a check assertion that encodes NEW behavior is *expected* to
     fail here, but an assertion that encodes UNCHANGED behavior and fails
@@ -9971,14 +10960,12 @@ async def run_baseline(manifest: Manifest, *, config: AppConfig) -> int:
     scratch taskdir (a detached worktree when the manifest uses worktrees),
     removed afterwards, so no state leaks between checks or into a later run.
     """
-    del config  # engines are irrelevant: baseline spawns no workers
     verifier = Verifier()
     worktrees = manifest.worktrees and manifest.repo is not None
     baseline_root = Path(tempfile.mkdtemp(prefix="ringer-baseline-"))
     total = len(manifest.tasks)
     print(f"Baseline: executing {total} check(s) with no workers spawned.")
-    failures = 0
-    errors = 0
+    results: list[BaselineTaskResult] = []
     leaked_worktrees: list[str] = []
     try:
         for task in manifest.tasks:
@@ -9986,8 +10973,18 @@ async def run_baseline(manifest: Manifest, *, config: AppConfig) -> int:
             # Same containment rule as the real run path: a key must not
             # escape its scratch root.
             if not taskdir.is_relative_to(baseline_root.resolve()) or taskdir == baseline_root.resolve():
-                errors += 1
-                print(f"{task.key:<24} baseline: ERROR (task key escapes the baseline scratch root)")
+                detail = "task key escapes the baseline scratch root"
+                results.append(BaselineTaskResult(key=task.key, outcome="error", detail=detail))
+                print(f"{task.key:<24} baseline: ERROR ({detail})")
+                continue
+            unwritable = unwritable_deliverables(task)
+            if unwritable:
+                # No point running the check: its subject cannot be produced.
+                detail = (
+                    "the filesystem refuses a declared deliverable: " + "; ".join(unwritable)
+                )
+                results.append(BaselineTaskResult(key=task.key, outcome="error", detail=detail))
+                print(f"{task.key:<24} baseline: ERROR ({detail})")
                 continue
             if worktrees:
                 proc = await asyncio.create_subprocess_exec(
@@ -10005,9 +11002,16 @@ async def run_baseline(manifest: Manifest, *, config: AppConfig) -> int:
                 )
                 stdout, _ = await proc.communicate()
                 if proc.returncode != 0:
-                    errors += 1
-                    print(f"{task.key:<24} baseline: ERROR (git worktree add failed)")
                     message = stdout.decode("utf-8", errors="replace").strip()
+                    results.append(
+                        BaselineTaskResult(
+                            key=task.key,
+                            outcome="error",
+                            returncode=proc.returncode,
+                            detail=f"git worktree add failed: {message}",
+                        )
+                    )
+                    print(f"{task.key:<24} baseline: ERROR (git worktree add failed)")
                     for line in message.splitlines()[:4]:
                         print(f"    {line}")
                     continue
@@ -10021,9 +11025,17 @@ async def run_baseline(manifest: Manifest, *, config: AppConfig) -> int:
                     f"{task.key:<24} baseline: {status} "
                     f"(rc={verify.check_returncode}{timed_out})"
                 )
+                excerpt = verify.raw_output_excerpt.strip()
+                results.append(
+                    BaselineTaskResult(
+                        key=task.key,
+                        outcome="pass" if verify.ok else "fail",
+                        returncode=verify.check_returncode,
+                        timed_out=verify.check_timed_out,
+                        detail=excerpt,
+                    )
+                )
                 if not verify.ok:
-                    failures += 1
-                    excerpt = verify.raw_output_excerpt.strip()
                     for line in excerpt.splitlines()[:6]:
                         print(f"    {line}")
             finally:
@@ -10050,7 +11062,13 @@ async def run_baseline(manifest: Manifest, *, config: AppConfig) -> int:
                             print(f"    {line}")
     finally:
         shutil.rmtree(baseline_root, ignore_errors=True)
-    passed = total - failures - errors
+    result = BaselineResult(
+        tasks=tuple(results),
+        leaked_worktrees=tuple(leaked_worktrees),
+    )
+    failures = len(result.keys_with("fail"))
+    errors = len(result.keys_with("error"))
+    passed = len(result.keys_with("pass"))
     print(f"\nbaseline: {passed} pass, {failures} fail, {errors} error of {total} check(s).")
     if leaked_worktrees:
         print(
@@ -10064,7 +11082,40 @@ async def run_baseline(manifest: Manifest, *, config: AppConfig) -> int:
         "behavior means the check itself is broken and will burn worker attempts\n"
         "against something no model can satisfy — fix the check before spawning."
     )
+    return result
+
+
+async def run_baseline(manifest: Manifest, *, config: AppConfig) -> int:
+    """`run --baseline`: report the baseline and dispatch nothing."""
+    del config  # engines are irrelevant: baseline spawns no workers
+    await execute_baseline(manifest)
     return 0
+
+
+def require_reason(flag: str, value: str | None) -> str | None:
+    """A waiver flag is only a waiver if it says why.
+
+    The blank case is the one that matters. `--no-baseline ""` must not read
+    as "no waiver requested" — that would quietly run the gate the operator
+    believed they had turned off — nor as a waiver with nothing recorded
+    against it, which is a bypass that leaves no trace.
+    """
+    if value is None:
+        return None
+    reason = " ".join(value.split())
+    if not reason:
+        raise ValueError(
+            f"{flag} requires a reason explaining why the gate is being skipped"
+        )
+    return reason
+
+
+def announce_waiver(gate: str, reason: str, consequence: str) -> None:
+    """Print a bypass loudly enough that it cannot be mistaken for a pass."""
+    print(f"\n*** {gate} WAIVED (not proved, not verified) ***")
+    print(f"    reason: {reason}")
+    print(f"    {consequence}")
+    print("    The reason above is recorded in the run record.")
 
 
 def append_text(path: Path, text: str) -> None:
@@ -10174,17 +11225,38 @@ def print_lint_findings(findings: list[str]) -> None:
 def print_summary(run_id: str, runtimes: list[TaskRuntime]) -> None:
     print("\nSummary")
     print(f"run_id: {run_id}")
-    header = f"{'task':<24} {'status':<8} {'verdict':<8} {'attempts':>8} {'tokens':>10} {'elapsed_s':>10}"
+    header = (
+        f"{'task':<24} {'status':<8} {'verdict':<8} {'attempts':>8} "
+        f"{'steps':>6} {'USD':>8} {'elapsed_s':>10}"
+    )
     print(header)
     print("-" * len(header))
     now = time.monotonic()
     for runtime in runtimes:
-        tokens = "" if runtime.tokens is None else str(runtime.tokens)
+        usd = "" if runtime.cost_usd is None else f"{runtime.cost_usd:.3f}"
         print(
             f"{runtime.task.key:<24} {runtime.status:<8} "
             f"{(runtime.final_verdict or ''):<8} {runtime.attempts:>8} "
-            f"{tokens:>10} {runtime.elapsed_s(now):>10.1f}"
+            f"{runtime.model_steps:>6} {usd:>8} {runtime.elapsed_s(now):>10.1f}"
         )
+    priced = [r for r in runtimes if r.cost_usd is not None]
+    estimated = [r for r in runtimes if r.cost_usd is None and r.cost_estimated_usd is not None]
+    steps = sum(r.model_steps for r in runtimes)
+    if priced:
+        total = sum(r.cost_usd or 0.0 for r in priced)
+        print(f"\nrun cost: ${total:.2f} over {steps} model steps, as reported by the provider")
+    if estimated:
+        est = sum(r.cost_estimated_usd or 0.0 for r in estimated)
+        print(f"  + ~${est:.2f} ESTIMATED for {len(estimated)} task(s) on engines that report "
+              f"no cost (billed separately; priced from configured rates, not measured)")
+    silent = [r.task.key for r in runtimes
+              if r.cost_usd is None and r.cost_estimated_usd is None and r.model_steps]
+    if silent:
+        print(f"  ⚠ {len(silent)} task(s) carry NO cost of any kind — the engine reports none and "
+              f"no price is configured for it: {', '.join(silent[:6])}"
+              + (" ..." if len(silent) > 6 else ""))
+        print("    Their spend is real and lands on another bill. Set price_in_per_mtok "
+              "on that engine to see it.")
     setup_failures = [r for r in runtimes if r.setup_error]
     if setup_failures:
         print("\nsetup failures (no worker was spawned):")
@@ -10632,6 +11704,7 @@ async def run_manifest(
     identity: str,
     dashboard_enabled: bool,
     force_browser: bool,
+    preflight: Preflight | None = None,
 ) -> int:
     runner = RingerRunner(
         manifest,
@@ -10639,6 +11712,7 @@ async def run_manifest(
         identity=identity,
         dashboard_enabled=dashboard_enabled,
         force_browser=force_browser,
+        preflight=preflight,
     )
     register_active_run(
         runner.run_id,
@@ -10862,7 +11936,6 @@ def run_persistent_hud(config: AppConfig, *, port: int | None, open_viewer: bool
         server.stop()
 
 
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ringer.py",
@@ -10908,6 +11981,30 @@ def build_parser() -> argparse.ArgumentParser:
             "execute every task's CHECK against the unmodified tree and report, "
             "spawning no workers — assertions about unchanged behavior that fail "
             "baseline are bugs in the check, not work for a model"
+        ),
+    )
+    run_parser.add_argument(
+        "--no-baseline",
+        metavar="REASON",
+        help=(
+            "dispatch without proving the checks first. Takes a REASON, which is "
+            "printed as a waiver and recorded in the run record"
+        ),
+    )
+    run_parser.add_argument(
+        "--no-canary",
+        metavar="REASON",
+        help=(
+            "release the whole batch at once instead of holding it behind the "
+            "first task. Takes a REASON, which is printed and recorded"
+        ),
+    )
+    run_parser.add_argument(
+        "--canary-confirm",
+        action="store_true",
+        help=(
+            "after the canary passes its check, also require a human to release "
+            "the batch (the executed check is the default verdict)"
         ),
     )
     run_parser.add_argument(
@@ -11206,6 +12303,52 @@ def main(argv: list[str] | None = None) -> int:
             # Deliberately before preflight_engine_bins: baseline spawns no
             # workers, so a missing engine binary must not block it.
             return asyncio.run(run_baseline(manifest, config=config))
+
+        # Everything below this line costs money, so everything above it has to
+        # have been proved. Both escapes take a REASON rather than being bare
+        # flags: a gate nobody can bypass under pressure gets deleted rather
+        # than fixed, but a bypass that leaves no trace is the same as no gate.
+        baseline_waiver = require_reason("--no-baseline", getattr(args, "no_baseline", None))
+        if baseline_waiver is not None:
+            announce_waiver(
+                "BASELINE",
+                baseline_waiver,
+                "This run is buying work that nobody proved could succeed.",
+            )
+            baseline_result = BaselineResult(skipped_reason=baseline_waiver)
+        else:
+            baseline_result = asyncio.run(execute_baseline(manifest))
+            objections = baseline_result.objections()
+            if objections:
+                print("\n*** DISPATCH REFUSED: this manifest was not proved ***", file=sys.stderr)
+                for objection in objections:
+                    print(f"  - {objection}", file=sys.stderr)
+                print(
+                    "\nNo workers were spawned and nothing was spent. Fix the checks, "
+                    'or dispatch anyway with --no-baseline "<reason>".',
+                    file=sys.stderr,
+                )
+                return 2
+
+        canary_waiver = require_reason("--no-canary", getattr(args, "no_canary", None))
+        canary_enabled = True
+        canary_skip_reason: str | None = None
+        if canary_waiver is not None:
+            announce_waiver(
+                "CANARY",
+                canary_waiver,
+                "The whole batch goes out at once; a fault in the first task "
+                "will be paid for in every other task too.",
+            )
+            canary_enabled = False
+            canary_skip_reason = canary_waiver
+
+        preflight = Preflight(
+            baseline=baseline_result,
+            canary_enabled=canary_enabled,
+            canary_skip_reason=canary_skip_reason,
+            canary_confirm=bool(getattr(args, "canary_confirm", False)),
+        )
         preflight_engine_bins(manifest, config)
         if args.command == "run":
             start_catalog_auto_refresh()
@@ -11218,6 +12361,7 @@ def main(argv: list[str] | None = None) -> int:
                 identity=identity,
                 dashboard_enabled=dashboard_enabled,
                 force_browser=args.browser,
+                preflight=preflight,
             )
         )
     except KeyboardInterrupt:
@@ -11226,7 +12370,6 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         print(f"ringer.py: error: {exc}", file=sys.stderr)
         return 2
-
 
 
 if __name__ == "__main__":
