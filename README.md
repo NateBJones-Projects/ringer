@@ -229,7 +229,8 @@ this requirement cost?" had no answer.
 
 `lint` also refuses a manifest whose **spec** tells the worker to write an
 absolute path outside its own task directory. A worker may only write inside its
-task directory and its assigned temp dir. An absolute path in `expect_files` is
+own task directory as far as this check can reason: it also has a temp dir, but
+that path is assigned at run time and is not knowable when linting. An absolute path in `expect_files` is
 perfectly normal when the *check* produces it — the fix-swarm pattern exports a
 patch out of the worktree that way — so only the spec naming the path is
 flagged.

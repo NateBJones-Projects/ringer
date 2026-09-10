@@ -13,7 +13,7 @@
       "expect_files": [],
       "timeout_s": 1800,
       "verified": "the validator ran the requested build or test command, exported a non-empty patch, and confirmed the patch only changes declared owned files",
-      "ticket": "{{TICKET \u2014 the work item this fix serves, e.g. work#666}}"
+      "ticket": "{{TICKET \u2014 the work item this task serves, in whatever form your tracker uses}}"
     }
   ]
 }

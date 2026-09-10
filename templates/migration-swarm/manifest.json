@@ -13,7 +13,7 @@
       "expect_files": [],
       "timeout_s": 1800,
       "verified": "the worker left an uncommitted mechanical change whose exported patch is non-empty, scoped to owned files, and accompanied by explicit copies for any declared gitignored outputs",
-      "ticket": "{{TICKET \u2014 the work item this migration serves, e.g. work#204}}"
+      "ticket": "{{TICKET \u2014 the work item this task serves, in whatever form your tracker uses}}"
     }
   ]
 }

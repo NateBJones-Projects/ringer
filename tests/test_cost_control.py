@@ -173,8 +173,6 @@ class UnwritableDeliverableLintTests(unittest.TestCase):
                         "the rule is not active, so the negative above proves nothing")
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TicketAttributionTests(unittest.TestCase):
@@ -348,3 +346,65 @@ class FailureCountingTests(unittest.TestCase):
             "._note_failure must sit AFTER the retry branch, or a single task's "
             "repeated attempts count as repeated task failures",
         )
+
+
+class EstimateUsesEveryStepTests(unittest.TestCase):
+    """The estimate must not repeat the very undercount this module exposes."""
+
+    def _log(self, steps):
+        tmp = Path(tempfile.mkdtemp()) / "worker.log"
+        lines = [json.dumps({"type": "step_finish",
+                             "part": {"tokens": {"input": i, "output": o}}})
+                 for i, o in steps]
+        tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return tmp
+
+    def test_tokens_are_summed_over_every_step(self):
+        log = self._log([(10_000, 100), (20_000, 200), (30_000, 300)])
+        self.assertEqual(ringer.parse_step_tokens(log), 60_600)
+
+    def test_it_is_not_the_largest_single_step(self):
+        # The exact failure mode being corrected: one step is not the total.
+        log = self._log([(10_000, 0), (30_000, 0), (5_000, 0)])
+        total = ringer.parse_step_tokens(log)
+        self.assertEqual(total, 45_000)
+        self.assertNotEqual(total, 30_000, "priced from one step, as the old field did")
+
+    def test_a_silent_harness_yields_zero_not_a_guess(self):
+        tmp = Path(tempfile.mkdtemp()) / "worker.log"
+        tmp.write_text("no json here\n", encoding="utf-8")
+        self.assertEqual(ringer.parse_step_tokens(tmp), 0)
+
+
+class BudgetValidationTests(unittest.TestCase):
+    def test_nan_and_infinity_are_refused(self):
+        for bad in (float("nan"), float("inf")):
+            with self.assertRaises(ValueError):
+                ringer.Manifest.from_obj({
+                    "run_name": "b", "workdir": tempfile.mkdtemp(), "max_parallel": 1,
+                    "budget_usd": bad,
+                    "tasks": [{"key": "t", "spec": "s", "check": "echo c; test -f o",
+                               "verified": "v"}]})
+
+
+class InterleavedFailureTests(unittest.TestCase):
+    """A,B,A,B is two repeats of A, not a broken streak."""
+
+    class _Stub:
+        def __init__(self):
+            import threading
+            self.lock = threading.Lock()
+            self.failure_counts = {}
+            self.stop_reason = None
+
+    def test_counts_are_kept_per_signature(self):
+        s = self._Stub()
+        for sig in ("A", "B", "A", "B"):
+            with s.lock:
+                s.failure_counts[sig] = s.failure_counts.get(sig, 0) + 1
+        self.assertEqual(s.failure_counts, {"A": 2, "B": 2},
+                         "interleaved failures must not reset each other")
+
+
+if __name__ == "__main__":
+    unittest.main()

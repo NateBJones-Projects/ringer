@@ -7,6 +7,7 @@ import base64
 import contextlib
 import hashlib
 import json
+import math
 import mimetypes
 import os
 import re
@@ -1846,8 +1847,11 @@ class Manifest:
         budget_usd: float | None = None
         if budget_raw is not None:
             budget_usd = float(budget_raw)
-            if budget_usd <= 0:
-                raise ValueError("budget_usd must be positive")
+            # NaN is truthy and compares False against everything, so it would
+            # start the watcher and then stop the run immediately; infinity is a
+            # ceiling nothing can reach. Neither is a budget.
+            if not math.isfinite(budget_usd) or budget_usd <= 0:
+                raise ValueError("budget_usd must be a positive, finite number")
         abort_raw = obj.get("abort_after_repeated_failures")
         abort_after: int | None = None
         if abort_raw is not None:
@@ -8874,8 +8878,13 @@ class RingerRunner:
         # Set once when the run must stop early: budget spent, or the same
         # failure repeating. Tasks that have not started check it and skip.
         self.stop_reason: str | None = None
-        self.recent_failure_signature: str | None = None
-        self.repeated_failures: int = 0
+        # Counted PER SIGNATURE rather than as one streak. With workers finishing
+        # in arbitrary order a single streak counter mixes unrelated families:
+        # A,B,A,B never reaches 2 as a streak, yet A has failed twice the same
+        # way, and two unrelated failures can look consecutive purely because of
+        # completion order. A per-signature tally answers the question actually
+        # being asked -- has THIS failure now happened N times.
+        self.failure_counts: dict[str, int] = {}
 
     async def run(self) -> int:
         self.manifest.workdir.mkdir(parents=True, exist_ok=True)
@@ -8977,8 +8986,14 @@ class RingerRunner:
             if cost is not None:
                 runtime.cost_usd = cost
             runtime.model_steps = steps
-            if cost is None and engine is not None and runtime.tokens:
-                runtime.cost_estimated_usd = estimate_cost_from_tokens(engine, runtime.tokens)
+            if cost is None and engine is not None:
+                # All steps, never runtime.tokens -- that field is one step, and
+                # pricing from it underestimates by the very factor this module
+                # was written to expose.
+                streamed = parse_step_tokens(runtime.log_path)
+                billable = streamed or (runtime.tokens or 0)
+                if billable:
+                    runtime.cost_estimated_usd = estimate_cost_from_tokens(engine, billable)
 
     async def _note_failure(self, runtime: TaskRuntime, verify: Any) -> None:
         """Track identical consecutive failures so an impossible manifest stops early.
@@ -8999,17 +9014,13 @@ class RingerRunner:
                 break
         signature = f"rc={getattr(verify, 'check_returncode', None)}|{first_line}"
         with self.lock:
-            if signature == self.recent_failure_signature:
-                self.repeated_failures += 1
-            else:
-                self.recent_failure_signature = signature
-                self.repeated_failures = 1
-            tripped = self.repeated_failures >= limit and self.stop_reason is None
+            seen = self.failure_counts.get(signature, 0) + 1
+            self.failure_counts[signature] = seen
+            tripped = seen >= limit and self.stop_reason is None
             if tripped:
                 self.stop_reason = (
-                    f"{self.repeated_failures} tasks failed in a row with the same "
-                    f"failure ({first_line or 'no output'}) -- stopping rather than "
-                    f"paying for the rest of the manifest"
+                    f"{seen} tasks failed the same way ({first_line or 'no output'}) "
+                    f"-- stopping rather than paying for the rest of the manifest"
                 )
         if tripped:
             print(f"\n*** RUN STOPPED: {self.stop_reason} ***", flush=True)
@@ -9784,6 +9795,45 @@ def estimate_cost_from_tokens(engine: "EngineConfig", tokens: int) -> float | No
     if rate is None:
         rate = engine.price_out_per_mtok
     return scaled * float(rate) / 1_000_000
+
+
+def parse_step_tokens(log_path: Path) -> int:
+    """Total tokens across every step in a worker log.
+
+    `TaskRuntime.tokens` holds ONE step -- that is the defect this whole module
+    exists to correct -- so estimating a price from it reproduces the same
+    19x-40x undercount in the estimate, for exactly the engines that have no
+    measured cost to fall back on. Sum the stream instead.
+
+    Returns 0 when the log carries no per-step token counts, which is the honest
+    answer for a harness that streams nothing.
+    """
+    total = 0
+    try:
+        handle = log_path.open("r", encoding="utf-8", errors="replace")
+    except OSError:
+        return 0
+    with handle:
+        for line in handle:
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(event, dict) or event.get("type") != "step_finish":
+                continue
+            part = event.get("part")
+            if not isinstance(part, dict):
+                continue
+            tokens = part.get("tokens")
+            if isinstance(tokens, dict):
+                for field in ("input", "output"):
+                    value = tokens.get(field)
+                    if isinstance(value, (int, float)) and not isinstance(value, bool):
+                        total += int(value)
+    return total
 
 
 def parse_step_costs(log_path: Path) -> tuple[float | None, int]:
