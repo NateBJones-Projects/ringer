@@ -240,13 +240,46 @@ flagged.
 
 ### Baseline: prove your checks before spending tokens
 
-Lint reads the manifest; `--baseline` executes it — every task's `check` runs against the unmodified tree, spawning no workers and writing no eval rows:
+Lint reads the manifest; the baseline executes it — every task's `check` runs against the unmodified tree, spawning no workers and writing no eval rows. **Every `run` does this first, automatically.** To see the baseline and dispatch nothing:
 
 ```bash
 ./ringer.py run swarm.json --baseline
 ```
 
 Each check runs in a fresh scratch dir (a detached worktree when the manifest uses worktrees) through the same verifier as a real run. Reading the results: an assertion that demands the NEW behavior workers will build is *expected* to FAIL baseline; an assertion about UNCHANGED behavior that fails baseline is a bug in the check itself, and at run time it would burn a worker's attempts against something no model can satisfy. Fix the check before spawning.
+
+A run is **refused** — before a single worker spawns, exit 2 — when the baseline finds either of the two shapes that make a task unbuyable:
+
+| baseline says | meaning | dispatch |
+|---|---|---|
+| **FAIL** | the check demands behavior that does not exist yet | ✅ this is what you want |
+| **pass** | the check is already green, so it is green at the end too, and cannot tell you the work happened | ❌ refused |
+| **error** | the check could not be executed at all | ❌ refused |
+
+It was a flag before, and a flag you have to remember is a flag that gets forgotten on the run that most needed it. The measured version of that: one run restarted sixteen times, whose worst restart failed 31 of 36 tasks for $19.43, because the manifest told every worker to write to a path the sandbox forbids.
+
+### Canary: buy one task before you buy the batch
+
+A multi-task run releases its **first task alone**, judges it by its own executed check, and only then releases the rest. A bad verdict stops the run, and every remaining task is marked `SKIPPED` without spawning — so a manifest-wide fault costs one task instead of all of them.
+
+The canary is not a smaller batch; it is a **stop** between the first task and the rest. A single-task run skips it and says so — that task is already the whole exposure.
+
+```bash
+./ringer.py run swarm.json --canary-confirm    # also require a human to release the batch
+```
+
+`--canary-confirm` is deliberately not the default. A pause a human meets on every run becomes a keypress they learn to hit, which buys the appearance of a gate and none of the substance; the executed check is the verdict that always runs.
+
+### Both gates have an escape, and it announces itself
+
+```bash
+./ringer.py run swarm.json --no-baseline "checks assert unchanged invariants on purpose"
+./ringer.py run swarm.json --no-canary   "tasks are fully independent, no shared manifest fault possible"
+```
+
+Each takes a **reason**, not a bare flag. The reason is printed as a `WAIVED (not proved, not verified)` banner and recorded in the run record — a gate nobody can bypass under pressure gets deleted rather than fixed, but a bypass that leaves no trace is the same as no gate. A blank reason is rejected rather than silently re-enabling the gate.
+
+Every run record carries a `preflight` block with the baseline verdict per task and the canary's state, so *"was this checked?"* is answerable months later by someone who was not there.
 
 ## Make your agent actually use this
 

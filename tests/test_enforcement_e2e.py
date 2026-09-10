@@ -52,7 +52,7 @@ class EnforcementEndToEndTests(unittest.TestCase):
         ]), encoding="utf-8")
         return path
 
-    def _run(self, root: Path, manifest: dict, config: Path):
+    def _run(self, root: Path, manifest: dict, config: Path, waive_baseline: str | None = None):
         manifest_path = root / "manifest.json"
         manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
         env = os.environ.copy()
@@ -60,10 +60,12 @@ class EnforcementEndToEndTests(unittest.TestCase):
                    XDG_CONFIG_HOME=str(root / "xdg"), RINGER_NO_SELF_UPDATE="1")
         (root / "home").mkdir(exist_ok=True)
         (root / "rhome").mkdir(exist_ok=True)
+        cmd = [sys.executable, "ringer.py", "run", str(manifest_path),
+               "--config", str(config), "--no-dashboard"]
+        if waive_baseline is not None:
+            cmd.extend(["--no-baseline", waive_baseline])
         return subprocess.run(
-            [sys.executable, "ringer.py", "run", str(manifest_path),
-             "--config", str(config), "--no-dashboard"],
-            cwd=str(ROOT), env=env, capture_output=True, text=True, timeout=180)
+            cmd, cwd=str(ROOT), env=env, capture_output=True, text=True, timeout=180)
 
     def test_a_budget_stops_the_run_and_the_run_reports_failure(self):
         # Each worker announces $5 of spend. A $6 budget must stop the run, and
@@ -83,7 +85,14 @@ class EnforcementEndToEndTests(unittest.TestCase):
                     for i in range(4)
                 ],
             }
-            proc = self._run(root, manifest, cfg)
+            # These four tasks check `exit 0` on purpose -- they exist to burn
+            # a budget, not to be verified -- so the baseline gate refuses the
+            # manifest before any of the budget machinery below can run. The
+            # waiver is the documented escape and keeps this test about
+            # budgets. That the gate refuses an `exit 0` check at all is
+            # pinned in tests/test_prove_before_buy.py.
+            proc = self._run(root, manifest, cfg,
+                             waive_baseline="synthetic budget-burn manifest; checks are not verification")
             self.assertIn("BUDGET", proc.stdout.upper() + proc.stderr.upper(),
                           f"no budget stop was reported.\n{proc.stdout[-2000:]}")
             self.assertNotEqual(proc.returncode, 0,

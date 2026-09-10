@@ -2472,6 +2472,37 @@ class ProcessTree:
         return count
 
 
+@dataclass(frozen=True)
+class Preflight:
+    """What was proved before this run was allowed to spend anything.
+
+    It is carried into the run record on purpose. "Was this checked?" has to
+    be answerable from the record months later, by someone who was not there
+    — otherwise the honest answer is "somebody probably remembered to", which
+    is the same answer a run that skipped the gate would give.
+    """
+
+    baseline: BaselineResult | None = None
+    canary_enabled: bool = True
+    canary_skip_reason: str | None = None
+    canary_confirm: bool = False
+
+    def to_record(self) -> dict[str, Any]:
+        baseline = (
+            self.baseline.to_record()
+            if self.baseline is not None
+            else {"ran": False, "skipped_reason": "not requested"}
+        )
+        return {
+            "baseline": baseline,
+            "canary": {
+                "enabled": self.canary_enabled,
+                "skipped_reason": self.canary_skip_reason,
+                "human_confirm": self.canary_confirm,
+            },
+        }
+
+
 class StateWriter:
     def __init__(
         self,
@@ -2486,7 +2517,9 @@ class StateWriter:
         max_parallel: int = 1,
         artifact: ArtifactConfig | None = None,
         path: Path | None = None,
+        preflight: Preflight | None = None,
     ) -> None:
+        self.preflight = preflight or Preflight()
         self.run_id = run_id
         self.run_name = run_name
         self.identity = identity
@@ -2652,6 +2685,7 @@ class StateWriter:
                 "live_path": str(self.live_path) if self.artifact.enabled else None,
                 "report_path": str(self.report_path) if self.artifact.enabled else None,
                 "report_ready": self.report_written,
+                "preflight": self.preflight.to_record(),
             }
 
     def build_summary(self) -> dict[str, int]:
@@ -9009,11 +9043,13 @@ class RingerRunner:
         identity: str,
         dashboard_enabled: bool = True,
         force_browser: bool = False,
+        preflight: Preflight | None = None,
     ) -> None:
         self.manifest = manifest
         self.config = config
         self.identity = identity
         self.dashboard_enabled = dashboard_enabled
+        self.preflight = preflight or Preflight()
         self.run_id = build_run_id(manifest.run_name)
         self.started_at = datetime.now(timezone.utc)
         self.lock = threading.RLock()
@@ -9029,6 +9065,7 @@ class RingerRunner:
             self.lock,
             max_parallel=manifest.max_parallel,
             artifact=config.artifact,
+            preflight=self.preflight,
         )
         self.dashboard = (
             Dashboard(
@@ -9069,7 +9106,7 @@ class RingerRunner:
                 else None
             )
             try:
-                await asyncio.gather(*(self._run_task(runtime) for runtime in self.runtimes))
+                await self._dispatch()
             finally:
                 if watcher is not None:
                     watcher.cancel()
@@ -9112,6 +9149,110 @@ class RingerRunner:
                     results_page = artifact_live_path(self.state_writer.state_dir, self.manifest.run_name)
                     print(f"\nYour results: {results_page}")
                     print("Open it in a browser, or run './ringer.py hud' for the full Ringside view (http://127.0.0.1:8700).")
+
+    def _split_canary(self) -> tuple[TaskRuntime | None, list[TaskRuntime]]:
+        """The canary task, and the batch held behind it.
+
+        A run of one task needs no canary: that task IS the whole exposure,
+        and stopping "the rest" after it would stop nothing. Announcing the
+        auto-skip matters more than it looks — silence here is
+        indistinguishable from the gate being off.
+        """
+        if not self.preflight.canary_enabled:
+            return None, list(self.runtimes)
+        if len(self.runtimes) < 2:
+            if self.runtimes:
+                print(
+                    "Canary: skipped — a single-task run is its own canary, "
+                    "so there is no batch to hold back.",
+                    flush=True,
+                )
+            return None, list(self.runtimes)
+        return self.runtimes[0], list(self.runtimes[1:])
+
+    async def _dispatch(self) -> None:
+        """Release the canary, judge it, then release the rest.
+
+        The batch is not a smaller batch — it is a STOP. Every remaining task
+        checks `stop_reason` before it spawns, so a bad canary verdict costs
+        exactly one task's spend instead of the manifest's.
+        """
+        canary, rest = self._split_canary()
+        if canary is None:
+            await asyncio.gather(*(self._run_task(runtime) for runtime in rest))
+            return
+        print(
+            f"\nCanary: running 1 of {len(self.runtimes)} tasks "
+            f"({canary.task.key}) before releasing the other {len(rest)}.",
+            flush=True,
+        )
+        await self._run_task(canary)
+        await self._judge_canary(canary, held_back=len(rest))
+        await asyncio.gather(*(self._run_task(runtime) for runtime in rest))
+
+    async def _judge_canary(self, runtime: TaskRuntime, *, held_back: int) -> None:
+        """Decide whether the batch is released, and say why if it is not."""
+        with self.lock:
+            if self.stop_reason is not None:
+                # Something else already stopped the run (budget, a signal).
+                # Do not overwrite a reason that is already true.
+                return
+            status = runtime.status
+            detail = runtime.setup_error or shorten(runtime.last_check_output, 300)
+        if status != "pass":
+            reason = (
+                f"canary task {runtime.task.key!r} did not pass its own check, "
+                f"so the remaining {held_back} task(s) were not dispatched"
+            )
+            with self.lock:
+                self.stop_reason = reason
+            print(f"\n*** RUN STOPPED: {reason} ***", flush=True)
+            if detail:
+                for line in detail.splitlines()[:6]:
+                    print(f"    {line}", flush=True)
+            print(
+                "The canary is the cheapest evidence you will get: whatever it hit, "
+                f"the other {held_back} task(s) would have hit too. Fix the manifest, "
+                "then re-run.",
+                flush=True,
+            )
+            return
+        print(f"Canary: {runtime.task.key} passed — releasing {held_back} task(s).", flush=True)
+        if self.preflight.canary_confirm:
+            await self._confirm_canary(runtime, held_back=held_back)
+
+    async def _confirm_canary(self, runtime: TaskRuntime, *, held_back: int) -> None:
+        """Ask a human before the batch goes out.
+
+        Deliberately NOT the default. A pause a human meets on every run
+        becomes a keypress they learn to hit, which buys the appearance of a
+        gate and none of the substance — the executed check above is the
+        verdict that always runs.
+        """
+        if not sys.stdin.isatty():
+            reason = (
+                "--canary-confirm asked for a human verdict, but stdin is not a "
+                "terminal, so nobody can give one"
+            )
+            with self.lock:
+                if self.stop_reason is None:
+                    self.stop_reason = reason
+            print(f"\n*** RUN STOPPED: {reason} ***", flush=True)
+            return
+        prompt = (
+            f"\nCanary {runtime.task.key} passed. Read its output, then release "
+            f"the remaining {held_back} task(s)? [y/N] "
+        )
+        try:
+            answer = await asyncio.to_thread(input, prompt)
+        except (EOFError, KeyboardInterrupt):
+            answer = ""
+        if answer.strip().lower() not in {"y", "yes"}:
+            reason = f"canary {runtime.task.key!r} was not released by the operator"
+            with self.lock:
+                if self.stop_reason is None:
+                    self.stop_reason = reason
+            print(f"\n*** RUN STOPPED: {reason} ***", flush=True)
 
     async def kill_all_workers(self) -> None:
         procs = list(self.active_processes.values())
@@ -10507,7 +10648,90 @@ def shorten(value: str, limit: int) -> str:
     return clean[: max(0, limit - 3)] + "..."
 
 
-async def run_baseline(manifest: Manifest, *, config: AppConfig) -> int:
+@dataclass(frozen=True)
+class BaselineTaskResult:
+    """One task's check, executed against the unmodified tree.
+
+    `outcome` is deliberately three-valued rather than a bool, because the
+    three cases mean opposite things. "fail" is the WANTED result: the check
+    demands behavior that does not exist yet, which is what a worker is being
+    bought to build. "pass" means the check is already satisfied, so passing
+    it again at the end proves nothing. "error" means the check could not be
+    executed at all.
+    """
+
+    key: str
+    outcome: str  # "fail" (wanted) | "pass" (proves nothing) | "error" (broken)
+    returncode: int | None = None
+    timed_out: bool = False
+    detail: str = ""
+
+
+@dataclass(frozen=True)
+class BaselineResult:
+    """The whole baseline phase, in a form a run record can carry."""
+
+    tasks: tuple[BaselineTaskResult, ...] = ()
+    leaked_worktrees: tuple[str, ...] = ()
+    skipped_reason: str | None = None
+
+    @property
+    def ran(self) -> bool:
+        return self.skipped_reason is None
+
+    def keys_with(self, outcome: str) -> tuple[str, ...]:
+        return tuple(task.key for task in self.tasks if task.outcome == outcome)
+
+    def objections(self) -> tuple[str, ...]:
+        """Why this manifest must not be dispatched. Empty means go.
+
+        Only two shapes block, and neither is "a check failed" — a failing
+        check is the whole point of a baseline. What blocks is a check that
+        cannot be executed, and a check that is already green.
+        """
+        objections: list[str] = []
+        errored = self.keys_with("error")
+        if errored:
+            objections.append(
+                f"{len(errored)} check(s) could not be executed at all "
+                f"({', '.join(errored)}). A worker cannot be verified by a "
+                "check that does not run, so its attempts would be bought blind."
+            )
+        already_green = self.keys_with("pass")
+        if already_green:
+            objections.append(
+                f"{len(already_green)} check(s) already pass against the "
+                f"unmodified tree ({', '.join(already_green)}). A check that is "
+                "green before any work starts is green after it too, so it "
+                "cannot tell you whether the work happened."
+            )
+        return tuple(objections)
+
+    def to_record(self) -> dict[str, Any]:
+        if not self.ran:
+            return {"ran": False, "skipped_reason": self.skipped_reason}
+        return {
+            "ran": True,
+            "skipped_reason": None,
+            "total": len(self.tasks),
+            "fail": len(self.keys_with("fail")),
+            "pass": len(self.keys_with("pass")),
+            "error": len(self.keys_with("error")),
+            "objections": list(self.objections()),
+            "tasks": [
+                {
+                    "key": task.key,
+                    "outcome": task.outcome,
+                    "check_returncode": task.returncode,
+                    "check_timed_out": task.timed_out,
+                    "detail": shorten(task.detail, 2000),
+                }
+                for task in self.tasks
+            ],
+        }
+
+
+async def execute_baseline(manifest: Manifest) -> BaselineResult:
     """Execute every task's CHECK against the unmodified tree. Spawn nothing.
 
     The point: a check assertion that encodes NEW behavior is *expected* to
@@ -10523,14 +10747,12 @@ async def run_baseline(manifest: Manifest, *, config: AppConfig) -> int:
     scratch taskdir (a detached worktree when the manifest uses worktrees),
     removed afterwards, so no state leaks between checks or into a later run.
     """
-    del config  # engines are irrelevant: baseline spawns no workers
     verifier = Verifier()
     worktrees = manifest.worktrees and manifest.repo is not None
     baseline_root = Path(tempfile.mkdtemp(prefix="ringer-baseline-"))
     total = len(manifest.tasks)
     print(f"Baseline: executing {total} check(s) with no workers spawned.")
-    failures = 0
-    errors = 0
+    results: list[BaselineTaskResult] = []
     leaked_worktrees: list[str] = []
     try:
         for task in manifest.tasks:
@@ -10538,8 +10760,9 @@ async def run_baseline(manifest: Manifest, *, config: AppConfig) -> int:
             # Same containment rule as the real run path: a key must not
             # escape its scratch root.
             if not taskdir.is_relative_to(baseline_root.resolve()) or taskdir == baseline_root.resolve():
-                errors += 1
-                print(f"{task.key:<24} baseline: ERROR (task key escapes the baseline scratch root)")
+                detail = "task key escapes the baseline scratch root"
+                results.append(BaselineTaskResult(key=task.key, outcome="error", detail=detail))
+                print(f"{task.key:<24} baseline: ERROR ({detail})")
                 continue
             if worktrees:
                 proc = await asyncio.create_subprocess_exec(
@@ -10557,9 +10780,16 @@ async def run_baseline(manifest: Manifest, *, config: AppConfig) -> int:
                 )
                 stdout, _ = await proc.communicate()
                 if proc.returncode != 0:
-                    errors += 1
-                    print(f"{task.key:<24} baseline: ERROR (git worktree add failed)")
                     message = stdout.decode("utf-8", errors="replace").strip()
+                    results.append(
+                        BaselineTaskResult(
+                            key=task.key,
+                            outcome="error",
+                            returncode=proc.returncode,
+                            detail=f"git worktree add failed: {message}",
+                        )
+                    )
+                    print(f"{task.key:<24} baseline: ERROR (git worktree add failed)")
                     for line in message.splitlines()[:4]:
                         print(f"    {line}")
                     continue
@@ -10573,9 +10803,17 @@ async def run_baseline(manifest: Manifest, *, config: AppConfig) -> int:
                     f"{task.key:<24} baseline: {status} "
                     f"(rc={verify.check_returncode}{timed_out})"
                 )
+                excerpt = verify.raw_output_excerpt.strip()
+                results.append(
+                    BaselineTaskResult(
+                        key=task.key,
+                        outcome="pass" if verify.ok else "fail",
+                        returncode=verify.check_returncode,
+                        timed_out=verify.check_timed_out,
+                        detail=excerpt,
+                    )
+                )
                 if not verify.ok:
-                    failures += 1
-                    excerpt = verify.raw_output_excerpt.strip()
                     for line in excerpt.splitlines()[:6]:
                         print(f"    {line}")
             finally:
@@ -10602,7 +10840,13 @@ async def run_baseline(manifest: Manifest, *, config: AppConfig) -> int:
                             print(f"    {line}")
     finally:
         shutil.rmtree(baseline_root, ignore_errors=True)
-    passed = total - failures - errors
+    result = BaselineResult(
+        tasks=tuple(results),
+        leaked_worktrees=tuple(leaked_worktrees),
+    )
+    failures = len(result.keys_with("fail"))
+    errors = len(result.keys_with("error"))
+    passed = len(result.keys_with("pass"))
     print(f"\nbaseline: {passed} pass, {failures} fail, {errors} error of {total} check(s).")
     if leaked_worktrees:
         print(
@@ -10616,7 +10860,40 @@ async def run_baseline(manifest: Manifest, *, config: AppConfig) -> int:
         "behavior means the check itself is broken and will burn worker attempts\n"
         "against something no model can satisfy — fix the check before spawning."
     )
+    return result
+
+
+async def run_baseline(manifest: Manifest, *, config: AppConfig) -> int:
+    """`run --baseline`: report the baseline and dispatch nothing."""
+    del config  # engines are irrelevant: baseline spawns no workers
+    await execute_baseline(manifest)
     return 0
+
+
+def require_reason(flag: str, value: str | None) -> str | None:
+    """A waiver flag is only a waiver if it says why.
+
+    The blank case is the one that matters. `--no-baseline ""` must not read
+    as "no waiver requested" — that would quietly run the gate the operator
+    believed they had turned off — nor as a waiver with nothing recorded
+    against it, which is a bypass that leaves no trace.
+    """
+    if value is None:
+        return None
+    reason = " ".join(value.split())
+    if not reason:
+        raise ValueError(
+            f"{flag} requires a reason explaining why the gate is being skipped"
+        )
+    return reason
+
+
+def announce_waiver(gate: str, reason: str, consequence: str) -> None:
+    """Print a bypass loudly enough that it cannot be mistaken for a pass."""
+    print(f"\n*** {gate} WAIVED (not proved, not verified) ***")
+    print(f"    reason: {reason}")
+    print(f"    {consequence}")
+    print("    The reason above is recorded in the run record.")
 
 
 def append_text(path: Path, text: str) -> None:
@@ -11205,6 +11482,7 @@ async def run_manifest(
     identity: str,
     dashboard_enabled: bool,
     force_browser: bool,
+    preflight: Preflight | None = None,
 ) -> int:
     runner = RingerRunner(
         manifest,
@@ -11212,6 +11490,7 @@ async def run_manifest(
         identity=identity,
         dashboard_enabled=dashboard_enabled,
         force_browser=force_browser,
+        preflight=preflight,
     )
     register_active_run(
         runner.run_id,
@@ -11480,6 +11759,30 @@ def build_parser() -> argparse.ArgumentParser:
             "execute every task's CHECK against the unmodified tree and report, "
             "spawning no workers — assertions about unchanged behavior that fail "
             "baseline are bugs in the check, not work for a model"
+        ),
+    )
+    run_parser.add_argument(
+        "--no-baseline",
+        metavar="REASON",
+        help=(
+            "dispatch without proving the checks first. Takes a REASON, which is "
+            "printed as a waiver and recorded in the run record"
+        ),
+    )
+    run_parser.add_argument(
+        "--no-canary",
+        metavar="REASON",
+        help=(
+            "release the whole batch at once instead of holding it behind the "
+            "first task. Takes a REASON, which is printed and recorded"
+        ),
+    )
+    run_parser.add_argument(
+        "--canary-confirm",
+        action="store_true",
+        help=(
+            "after the canary passes its check, also require a human to release "
+            "the batch (the executed check is the default verdict)"
         ),
     )
     run_parser.add_argument(
@@ -11778,6 +12081,59 @@ def main(argv: list[str] | None = None) -> int:
             # Deliberately before preflight_engine_bins: baseline spawns no
             # workers, so a missing engine binary must not block it.
             return asyncio.run(run_baseline(manifest, config=config))
+
+        # Everything below this line costs money, so everything above it has to
+        # have been proved. Both escapes take a REASON rather than being bare
+        # flags: a gate nobody can bypass under pressure gets deleted rather
+        # than fixed, but a bypass that leaves no trace is the same as no gate.
+        baseline_waiver = require_reason("--no-baseline", getattr(args, "no_baseline", None))
+        if baseline_waiver is not None:
+            announce_waiver(
+                "BASELINE",
+                baseline_waiver,
+                "This run is buying work that nobody proved could succeed.",
+            )
+            baseline_result = BaselineResult(skipped_reason=baseline_waiver)
+        else:
+            baseline_result = asyncio.run(execute_baseline(manifest))
+            objections = baseline_result.objections()
+            if objections:
+                print("\n*** DISPATCH REFUSED: this manifest was not proved ***", file=sys.stderr)
+                for objection in objections:
+                    print(f"  - {objection}", file=sys.stderr)
+                print(
+                    "\nNo workers were spawned and nothing was spent. Fix the checks, "
+                    'or dispatch anyway with --no-baseline "<reason>".',
+                    file=sys.stderr,
+                )
+                return 2
+
+        canary_waiver = require_reason("--no-canary", getattr(args, "no_canary", None))
+        canary_enabled = True
+        canary_skip_reason: str | None = None
+        if canary_waiver is not None:
+            announce_waiver(
+                "CANARY",
+                canary_waiver,
+                "The whole batch goes out at once; a fault in the first task "
+                "will be paid for in every other task too.",
+            )
+            canary_enabled = False
+            canary_skip_reason = canary_waiver
+        elif args.command == "demo":
+            # The demo exists to show parallel fan-out on Ringside; holding two
+            # of its three workers behind the first would hide the thing it
+            # demonstrates. Recorded in the run record rather than silent —
+            # silence here is indistinguishable from the gate being off.
+            canary_enabled = False
+            canary_skip_reason = "demo manifest: the parallel fan-out IS the demonstration"
+
+        preflight = Preflight(
+            baseline=baseline_result,
+            canary_enabled=canary_enabled,
+            canary_skip_reason=canary_skip_reason,
+            canary_confirm=bool(getattr(args, "canary_confirm", False)),
+        )
         preflight_engine_bins(manifest, config)
         if args.command == "run":
             start_catalog_auto_refresh()
@@ -11790,6 +12146,7 @@ def main(argv: list[str] | None = None) -> int:
                 identity=identity,
                 dashboard_enabled=dashboard_enabled,
                 force_browser=args.browser,
+                preflight=preflight,
             )
         )
     except KeyboardInterrupt:
