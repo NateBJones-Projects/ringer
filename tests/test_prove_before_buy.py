@@ -232,6 +232,62 @@ class ProveBeforeBuyTests(unittest.TestCase):
         self.assertIn("DISPATCH REFUSED", output)
         self.assertIn("could not be executed at all", output)
 
+    def test_a_deliverable_no_worker_could_write_is_refused(self) -> None:
+        # The literal measured incident: a manifest that told every worker to
+        # write its deliverable to a path nothing can create. Previously that
+        # was invisible until after payment -- 31 of 36 tasks failing
+        # identically, $19.43 on the worst restart alone.
+        #
+        # The parent is a regular FILE, so creating anything beneath it fails
+        # with ENOTDIR on every platform. A read-only directory would not do:
+        # CI often runs as root, where mode bits are ignored and the test
+        # would silently stop proving anything.
+        blocker = self.root / "blocker"
+        blocker.write_text("I am a file, not a directory\n", encoding="utf-8")
+        unreachable = blocker / "out.txt"
+
+        manifest = self.write_manifest(
+            [
+                {
+                    "key": "unreachable-deliverable",
+                    "engine": "mock",
+                    "task_type": "probe",
+                    "spec": f"MOCK_FILE: {unreachable}\nx\nMOCK_END",
+                    "check": f"test -f {unreachable} || {{ echo 'FAIL: missing'; exit 1; }}",
+                    "expect_files": [str(unreachable)],
+                    "verified": "the deliverable exists",
+                },
+                self.writes("honest", "honest.txt"),
+            ]
+        )
+
+        result = self.run_ringer(manifest)
+        output = result.stdout + result.stderr
+
+        self.assertEqual(2, result.returncode, output)
+        self.assertIn("DISPATCH REFUSED", output)
+        self.assertIn("could not be executed at all", output)
+        self.assertIn("unreachable-deliverable", output)
+        self.assertIn("is not a directory", output)
+
+    def test_a_relative_deliverable_is_never_called_unwritable(self) -> None:
+        # The complement that keeps the check honest: a relative deliverable
+        # lands in the task's own scratch dir, which the harness creates. If
+        # this ever started reading as unwritable, the gate would refuse
+        # essentially every well-formed manifest.
+        manifest = self.write_manifest(
+            [
+                self.writes("first", "nested/dir/first.txt"),
+                self.writes("second", "second.txt"),
+            ]
+        )
+
+        result = self.run_ringer(manifest, "--no-canary", "exercising baseline only")
+        output = result.stdout + result.stderr
+
+        self.assertNotIn("DISPATCH REFUSED", output)
+        self.assertNotIn("unwritable", output)
+
     # ---- refusal 3: a bad canary holds the batch -----------------------
 
     def test_a_bad_canary_verdict_holds_the_rest_of_the_batch(self) -> None:
@@ -397,6 +453,28 @@ class ProveBeforeBuyTests(unittest.TestCase):
         self.assertTrue(canary["enabled"])
         self.assertIsNone(canary["skipped_reason"])
         self.assertFalse(canary["human_confirm"])
+        # "Was a canary configured?" and "was it judged, and what did it say?"
+        # are different questions, and only the second one says whether the
+        # batch was released on evidence.
+        self.assertEqual("released", canary["verdict"]["outcome"])
+        self.assertEqual("first", canary["verdict"]["task"])
+        self.assertEqual(1, canary["verdict"]["held_back"])
+
+    def test_a_held_batch_records_why_it_was_held(self) -> None:
+        manifest = self.write_manifest(
+            [
+                self.writes_nothing("canary", "never.txt"),
+                self.writes("second", "second.txt"),
+            ]
+        )
+
+        result = self.run_ringer(manifest)
+        self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
+
+        verdict = self.read_run_record()["preflight"]["canary"]["verdict"]
+        self.assertEqual("held", verdict["outcome"])
+        self.assertEqual("canary", verdict["task"])
+        self.assertIn("did not pass its own check", verdict["reason"])
 
 
 if __name__ == "__main__":

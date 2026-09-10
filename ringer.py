@@ -2520,6 +2520,10 @@ class StateWriter:
         preflight: Preflight | None = None,
     ) -> None:
         self.preflight = preflight or Preflight()
+        # Set during the run, not before it: whether the canary was judged and
+        # what the judgment was. Preflight itself stays frozen and describes
+        # only what was decided BEFORE dispatch.
+        self.canary_verdict: dict[str, Any] | None = None
         self.run_id = run_id
         self.run_name = run_name
         self.identity = identity
@@ -2685,8 +2689,19 @@ class StateWriter:
                 "live_path": str(self.live_path) if self.artifact.enabled else None,
                 "report_path": str(self.report_path) if self.artifact.enabled else None,
                 "report_ready": self.report_written,
-                "preflight": self.preflight.to_record(),
+                "preflight": self._preflight_record(),
             }
+
+    def _preflight_record(self) -> dict[str, Any]:
+        """The pre-dispatch decisions, plus how the canary actually turned out.
+
+        Without the verdict the record answers "was a canary configured?" and
+        not "was it judged, and what did it say?" -- and only the second
+        question tells you whether the batch was released on evidence.
+        """
+        record = self.preflight.to_record()
+        record["canary"]["verdict"] = self.canary_verdict
+        return record
 
     def build_summary(self) -> dict[str, int]:
         with self.lock:
@@ -9159,6 +9174,11 @@ class RingerRunner:
         indistinguishable from the gate being off.
         """
         if not self.preflight.canary_enabled:
+            self.state_writer.canary_verdict = {
+                "task": None,
+                "outcome": "waived",
+                "reason": self.preflight.canary_skip_reason,
+            }
             return None, list(self.runtimes)
         if len(self.runtimes) < 2:
             if self.runtimes:
@@ -9167,6 +9187,11 @@ class RingerRunner:
                     "so there is no batch to hold back.",
                     flush=True,
                 )
+                self.state_writer.canary_verdict = {
+                    "task": None,
+                    "outcome": "skipped",
+                    "reason": "single-task run is its own canary",
+                }
             return None, list(self.runtimes)
         return self.runtimes[0], list(self.runtimes[1:])
 
@@ -9206,6 +9231,12 @@ class RingerRunner:
             )
             with self.lock:
                 self.stop_reason = reason
+            self.state_writer.canary_verdict = {
+                "task": runtime.task.key,
+                "outcome": "held",
+                "reason": reason,
+                "held_back": held_back,
+            }
             print(f"\n*** RUN STOPPED: {reason} ***", flush=True)
             if detail:
                 for line in detail.splitlines()[:6]:
@@ -9218,6 +9249,12 @@ class RingerRunner:
             )
             return
         print(f"Canary: {runtime.task.key} passed — releasing {held_back} task(s).", flush=True)
+        self.state_writer.canary_verdict = {
+            "task": runtime.task.key,
+            "outcome": "released",
+            "reason": "canary passed its own executed check",
+            "held_back": held_back,
+        }
         if self.preflight.canary_confirm:
             await self._confirm_canary(runtime, held_back=held_back)
 
@@ -9237,6 +9274,12 @@ class RingerRunner:
             with self.lock:
                 if self.stop_reason is None:
                     self.stop_reason = reason
+            self.state_writer.canary_verdict = {
+                "task": runtime.task.key,
+                "outcome": "held",
+                "reason": reason,
+                "held_back": held_back,
+            }
             print(f"\n*** RUN STOPPED: {reason} ***", flush=True)
             return
         prompt = (
@@ -9252,6 +9295,12 @@ class RingerRunner:
             with self.lock:
                 if self.stop_reason is None:
                     self.stop_reason = reason
+            self.state_writer.canary_verdict = {
+                "task": runtime.task.key,
+                "outcome": "held",
+                "reason": reason,
+                "held_back": held_back,
+            }
             print(f"\n*** RUN STOPPED: {reason} ***", flush=True)
 
     async def kill_all_workers(self) -> None:
@@ -10731,6 +10780,38 @@ class BaselineResult:
         }
 
 
+def unwritable_deliverables(task: TaskSpec) -> list[str]:
+    """Declared deliverables no worker will be able to write.
+
+    Only ABSOLUTE paths are checked, and that is the whole point: a relative
+    `expect_files` entry lands inside the task's own scratch dir, which the
+    harness creates and which is therefore always writable. An absolute one
+    escapes to somewhere nobody has verified — the fix-swarm patch export is
+    the legitimate version of this, and "every worker writes its deliverable
+    to a path the sandbox forbids" is the expensive one. That was one run,
+    restarted sixteen times, 31 of 36 tasks failing identically, $19.43 on
+    the worst restart alone.
+
+    A directory that does not exist is not automatically a fault -- the check
+    may create it -- so the nearest EXISTING ancestor is what gets probed. If
+    that ancestor is not a writable directory, nothing below it can be
+    created and every attempt is bought for nothing.
+    """
+    problems: list[str] = []
+    for declared in task.expect_files:
+        path = Path(declared)
+        if not path.is_absolute():
+            continue
+        ancestor = path.parent
+        while not ancestor.exists() and ancestor != ancestor.parent:
+            ancestor = ancestor.parent
+        if not ancestor.is_dir():
+            problems.append(f"{declared} (its parent {ancestor} is not a directory)")
+        elif not os.access(ancestor, os.W_OK):
+            problems.append(f"{declared} (no write permission on {ancestor})")
+    return problems
+
+
 async def execute_baseline(manifest: Manifest) -> BaselineResult:
     """Execute every task's CHECK against the unmodified tree. Spawn nothing.
 
@@ -10761,6 +10842,13 @@ async def execute_baseline(manifest: Manifest) -> BaselineResult:
             # escape its scratch root.
             if not taskdir.is_relative_to(baseline_root.resolve()) or taskdir == baseline_root.resolve():
                 detail = "task key escapes the baseline scratch root"
+                results.append(BaselineTaskResult(key=task.key, outcome="error", detail=detail))
+                print(f"{task.key:<24} baseline: ERROR ({detail})")
+                continue
+            unwritable = unwritable_deliverables(task)
+            if unwritable:
+                # No point running the check: its subject cannot be produced.
+                detail = "declared deliverable is unwritable: " + "; ".join(unwritable)
                 results.append(BaselineTaskResult(key=task.key, outcome="error", detail=detail))
                 print(f"{task.key:<24} baseline: ERROR ({detail})")
                 continue
