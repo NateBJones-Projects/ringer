@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+"""assert-file — file assertions for Ringer checks, without the quoting minefield.
+
+Ringer checks live inside a JSON string, inside a shell command, and every
+hand-written `ruby -e '...'` assertion therefore passes through JSON escaping,
+shell quoting, and Ruby string parsing before its regex is even compiled. On
+2026-09-09 four consecutive checks failed CORRECT worker output:
+
+  * one aborted because the banned string it grepped for appeared in the
+    explanatory COMMENT the brief had asked the worker to write;
+  * two carried `\\"` sequences that arrived at Ruby as a syntax error or as a
+    literal that could never match;
+  * one asserted on a notes.md that belonged to a different task entirely.
+
+Every one of those was the check being wrong, not the work. This script exists
+so that class of bug cannot be written again: no nested quoting, comments
+stripped by file type, and a non-zero exit that says which assertion failed and
+what it actually saw.
+
+Usage:
+  assert-file PATH --absent PATTERN [...]     pattern must NOT appear
+  assert-file PATH --contains PATTERN [...]   pattern MUST appear
+  assert-file PATH --count PATTERN=N          pattern appears exactly N times
+  assert-file PATH --before A B               A must appear before B
+
+Options:
+  --strip-comments   remove comments before matching (default ON; --raw to disable)
+  --raw              match the file verbatim, comments included
+  --fixed            treat patterns as literal strings, not regexes (default)
+  --regex            treat patterns as Python regexes
+  --label TEXT       prefix for the failure message
+
+Exit 0 with a one-line OK when every assertion holds; exit 1 naming the first
+failure and, for --absent, the line the match was found on.
+"""
+import argparse
+import re
+import sys
+from pathlib import Path
+
+# Comment syntaxes by extension. ERB first: an <%# %> block is the exact shape
+# that failed on 2026-09-09, since a worker documenting "max-w-xs -> max-w-lg"
+# plants the banned string in prose the brief demanded.
+COMMENT_PATTERNS = {
+    ".erb": [r"<%#.*?%>"],
+    ".html": [r"<!--.*?-->"],
+    ".rb": [r"(?m)^\s*#.*$"],
+    ".py": [r"(?m)^\s*#.*$"],
+    ".js": [r"/\*.*?\*/", r"(?m)//.*$"],
+    ".css": [r"/\*.*?\*/"],
+    ".md": [r"<!--.*?-->"],
+}
+
+
+def strip_comments(text, suffix):
+    for pat in COMMENT_PATTERNS.get(suffix, []):
+        text = re.sub(pat, "", text, flags=re.DOTALL)
+    return text
+
+
+def find_all(haystack, needle, use_regex):
+    if use_regex:
+        return [m.start() for m in re.finditer(needle, haystack)]
+    return [m.start() for m in re.finditer(re.escape(needle), haystack)]
+
+
+def line_of(text, offset):
+    return text.count("\n", 0, offset) + 1
+
+
+def main():
+    p = argparse.ArgumentParser(add_help=True)
+    p.add_argument("path")
+    p.add_argument("--absent", action="append", default=[])
+    p.add_argument("--contains", action="append", default=[])
+    p.add_argument("--count", action="append", default=[])
+    p.add_argument("--before", nargs=2, action="append", default=[])
+    p.add_argument("--raw", action="store_true")
+    p.add_argument("--regex", action="store_true")
+    p.add_argument("--fixed", action="store_true")
+    p.add_argument("--label", default="")
+    a = p.parse_args()
+
+    path = Path(a.path)
+    if not path.exists():
+        print(f"FAIL: {a.label or a.path}: file does not exist")
+        return 1
+
+    raw = path.read_text(errors="replace")
+    text = raw if a.raw else strip_comments(raw, path.suffix)
+    tag = a.label or path.name
+    scope = "verbatim" if a.raw else "comments stripped"
+
+    for pat in a.contains:
+        if not find_all(text, pat, a.regex):
+            print(f"FAIL: {tag}: expected to find {pat!r} ({scope}), and it is absent")
+            return 1
+
+    for pat in a.absent:
+        hits = find_all(text, pat, a.regex)
+        if hits:
+            print(
+                f"FAIL: {tag}: {pat!r} must not appear ({scope}) — "
+                f"found {len(hits)}x, first at line {line_of(text, hits[0])}"
+            )
+            return 1
+
+    for spec in a.count:
+        if "=" not in spec:
+            print(f"FAIL: --count needs PATTERN=N, got {spec!r}")
+            return 1
+        pat, _, want = spec.rpartition("=")
+        hits = find_all(text, pat, a.regex)
+        if len(hits) != int(want):
+            print(f"FAIL: {tag}: expected {pat!r} {want}x ({scope}), found {len(hits)}x")
+            return 1
+
+    for first, second in a.before:
+        fh = find_all(text, first, a.regex)
+        sh = find_all(text, second, a.regex)
+        if not fh:
+            print(f"FAIL: {tag}: {first!r} not found, so it cannot precede {second!r}")
+            return 1
+        if not sh:
+            print(f"FAIL: {tag}: {second!r} not found, so {first!r} cannot precede it")
+            return 1
+        if fh[0] >= sh[0]:
+            print(
+                f"FAIL: {tag}: {first!r} (line {line_of(text, fh[0])}) must come before "
+                f"{second!r} (line {line_of(text, sh[0])})"
+            )
+            return 1
+
+    n = len(a.contains) + len(a.absent) + len(a.count) + len(a.before)
+    print(f"OK: {tag} — {n} assertion(s) held ({scope})")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
