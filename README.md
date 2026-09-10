@@ -163,6 +163,46 @@ lint: clean (1 tasks)
 
 A check that cannot fail is trusting the worker with extra steps.
 
+### Budget: stop a run before it empties the key
+
+A run's real cost lives in the worker's own log: engines that stream JSON report
+what the provider charged for every model call. Ringer sums that and prints it,
+per task and per run.
+
+This is not the same number as `tokens` in the scoreboard. `worker_tokens`
+records a *single* step, so it cannot be used for money — measured on real work
+it ran 19x to 40x below the truth, which is how a $41.71 swarm reported as
+roughly $3 and got restarted sixteen times.
+
+Two manifest keys stop a run that is going wrong:
+
+```json
+{
+  "budget_usd": 6.00,
+  "abort_after_repeated_failures": 3
+}
+```
+
+- **`budget_usd`** — a hard ceiling. Cost is totted up the moment each worker
+  exits, before its check runs, so a slow verification cannot overshoot it. When
+  the ceiling is hit, in-flight workers are terminated and queued tasks are
+  marked `SKIPPED` with the reason.
+- **`abort_after_repeated_failures`** — stop once this many tasks in a row fail
+  with the *same* signature (check exit code plus the first line it printed). A
+  manifest asking for something no worker can produce fails every task
+  identically; without this the run pays for all of them, and pays twice because
+  each failure is retried. Different failures do not trip it — that is an
+  ordinary bad run, not an impossible manifest.
+
+Both default to off, so existing manifests behave exactly as before.
+
+`lint` also refuses a manifest whose **spec** tells the worker to write an
+absolute path outside its own task directory. A worker may only write inside its
+task directory and its assigned temp dir. An absolute path in `expect_files` is
+perfectly normal when the *check* produces it — the fix-swarm pattern exports a
+patch out of the worktree that way — so only the spec naming the path is
+flagged.
+
 ### Baseline: prove your checks before spending tokens
 
 Lint reads the manifest; `--baseline` executes it — every task's `check` runs against the unmodified tree, spawning no workers and writing no eval rows:
