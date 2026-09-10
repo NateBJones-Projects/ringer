@@ -8987,9 +8987,19 @@ class RingerRunner:
                 runtime.cost_usd = cost
             runtime.model_steps = steps
             if cost is None and engine is not None:
-                # All steps, never runtime.tokens -- that field is one step, and
-                # pricing from it underestimates by the very factor this module
-                # was written to expose.
+                # Prefer the streamed total: summing every step is right by
+                # construction. Harnesses that stream nothing (Codex prints only
+                # a "tokens used" line) leave this at 0, and the engine's own
+                # reported figure is the only number available.
+                #
+                # Whether that figure is a running total or a single step is a
+                # property of the harness, not something knowable here -- which
+                # is what `token_scale` exists to correct per engine. Measured on
+                # Codex: 619 logs, zero step_finish events, and a "tokens used"
+                # value whose median (47, i.e. 47k) sits in the same range as
+                # OpenCode's fresh input for comparable work, so it reads as a
+                # task total rather than one step. Confirm before trusting it for
+                # a new engine.
                 streamed = parse_step_tokens(runtime.log_path)
                 billable = streamed or (runtime.tokens or 0)
                 if billable:
@@ -9878,8 +9888,14 @@ def parse_step_costs(log_path: Path) -> tuple[float | None, int]:
                 continue
             cost = part.get("cost")
             if isinstance(cost, (int, float)) and not isinstance(cost, bool):
-                total += float(cost)
-                saw_cost = True
+                value = float(cost)
+                # A worker log is untrusted input. NaN compares false against
+                # everything, so one would make `spent < budget` false forever
+                # and disable the stop; a negative would refund exposure the run
+                # has actually spent. Skip both rather than poison the total.
+                if math.isfinite(value) and value >= 0:
+                    total += value
+                    saw_cost = True
     return (total if saw_cost else None), steps
 
 

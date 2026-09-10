@@ -199,10 +199,12 @@ Two manifest keys stop a run that is going wrong:
   reports them separately: an engine that reports no cost of its own still
   spends real money, and a budget blind to it is no budget for precisely the
   case it is most needed.
-- **`abort_after_repeated_failures`** — stop once this many **tasks** in a row
-  fail with the *same* signature (check exit code plus the first line it
-  printed). Counted per task, retries included, not per attempt: a single task
-  failing twice is one failure, not two. A
+- **`abort_after_repeated_failures`** — stop once this many **tasks** have
+  failed the *same* way (check exit code plus the first line it printed).
+  Counted per task, retries included, not per attempt: a single task failing
+  twice is one failure, not two. Not a consecutive streak — a tally per
+  signature, so A, B, A still counts two A failures. Workers finish in arbitrary
+  order, and a streak would miss exactly the repetition worth stopping on. A
   manifest asking for something no worker can produce fails every task
   identically; without this the run pays for all of them, and pays twice because
   each failure is retried. Different failures do not trip it — that is an
@@ -224,8 +226,8 @@ ticketed_task_types = ["code-fix", "code-feature"]
 ```
 
 Spend you cannot attribute to a requirement is spend you cannot steer: on one
-estate 175 of 178 product tasks were keyed `fix-L13` and similar, so "what did
-this requirement cost?" had no answer.
+estate almost every product task was keyed by lane number rather than by the
+work item it served, so "what did this requirement cost?" had no answer.
 
 `lint` also refuses a manifest whose **spec** tells the worker to write an
 absolute path outside its own task directory. A worker may only write inside its

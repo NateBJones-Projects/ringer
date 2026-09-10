@@ -208,12 +208,13 @@ index_out = "~/.ringer/artifacts/index.html"
 
 # Which task types must name the requirement they serve. Lint flags a product
 # task with no "ticket", because spend you cannot attribute to a requirement is
-# spend you cannot steer -- on one estate 175 of 178 product tasks were keyed
-# `fix-L13` and similar, and what a requirement cost was simply unanswerable.
+# spend you cannot steer -- on one estate almost every product task was keyed
+# by lane number rather than by work item, and what a requirement cost was
+# simply unanswerable.
 #
 # OFF by default -- this is a policy, and a shared tool does not get to decide
 # that its users track requirements the way its author does. Name the task types
 # it should apply to and it switches on; a bakeoff, probe or research task serves
 # no requirement and is never flagged.
 #
-# ticketed_task_types = ["code-fix", "code-feature", "dotnet-fix"]
+# ticketed_task_types = ["code-fix", "code-feature"]
