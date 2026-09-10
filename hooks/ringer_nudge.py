@@ -29,6 +29,23 @@ HARNESS_RE = re.compile(
     r"\.(?:mjs|js|ts|py)\b",
     re.IGNORECASE,
 )
+CLI_AGENT_RE = re.compile(
+    r"(?:^|[;&|(]\s*|\s)"
+    r"(?:claude\s+(?:-p|--print)\b|codex\s+exec\b|opencode\s+run\b|aider\b)",
+    re.IGNORECASE,
+)
+
+PRE_BASH_COOLDOWN_SECONDS = 900
+
+
+def pre_bash_cooldown_seconds() -> float:
+    value = os.environ.get("RINGER_NUDGE_COOLDOWN_SECONDS")
+    if value:
+        try:
+            return float(value)
+        except ValueError:
+            pass
+    return float(PRE_BASH_COOLDOWN_SECONDS)
 
 
 def ringer_home() -> Path:
@@ -104,16 +121,24 @@ def marker_path(home: Path, session_id: Any, event: str) -> Path:
     return state_dir(home) / f"{digest}.{event}.nudged"
 
 
-def claim_dedupe_marker(home: Path, session_id: Any, event: str) -> bool:
+def claim_nudge_slot(home: Path, session_id: Any, event: str, cooldown_seconds: float) -> bool:
+    """True when no nudge fired for (session, event) within the cooldown window.
+
+    Claims the slot by (re)stamping the marker with the current time, so the
+    nudge re-arms after the cooldown instead of staying silent all session.
+    """
     directory = state_dir(home)
     directory.mkdir(parents=True, exist_ok=True)
     marker = marker_path(home, session_id, event)
-    try:
-        with marker.open("x", encoding="utf-8") as fh:
-            fh.write(datetime.now(timezone.utc).isoformat())
-            fh.write("\n")
-    except FileExistsError:
-        return False
+    now = datetime.now(timezone.utc)
+    if marker.exists():
+        try:
+            stamped = datetime.fromisoformat(marker.read_text(encoding="utf-8").strip())
+        except ValueError:
+            stamped = None
+        if stamped is not None and (now - stamped).total_seconds() < cooldown_seconds:
+            return False
+    marker.write_text(now.isoformat() + "\n", encoding="utf-8")
     return True
 
 
@@ -147,7 +172,7 @@ def should_nudge_pre_bash(payload: dict[str, Any], home: Path) -> bool:
         return False
     if "ringer.py" in command:
         return False
-    if not (PROVIDER_RE.search(command) or HARNESS_RE.search(command)):
+    if not (PROVIDER_RE.search(command) or HARNESS_RE.search(command) or CLI_AGENT_RE.search(command)):
         return False
 
     active_runs = read_live_active_runs(home)
@@ -164,24 +189,37 @@ def post_edit_state_path(home: Path, session_id: Any) -> Path:
 
 def load_post_edit_state(path: Path) -> dict[str, Any]:
     if not path.exists():
-        return {"count": 0, "file_paths": []}
+        return {"count": 0, "file_paths": [], "last_nudged_count": 0}
     with path.open("r", encoding="utf-8") as fh:
         raw = json.load(fh)
     if not isinstance(raw, dict):
-        return {"count": 0, "file_paths": []}
+        return {"count": 0, "file_paths": [], "last_nudged_count": 0}
     count = raw.get("count")
     file_paths = raw.get("file_paths")
+    last_nudged_count = raw.get("last_nudged_count")
     if not isinstance(count, int):
         count = 0
     if not isinstance(file_paths, list):
         file_paths = []
-    return {"count": count, "file_paths": [str(path) for path in file_paths]}
+    if not isinstance(last_nudged_count, int):
+        last_nudged_count = 0
+    return {
+        "count": count,
+        "file_paths": [str(path) for path in file_paths],
+        "last_nudged_count": last_nudged_count,
+    }
 
 
-def record_post_edit(payload: dict[str, Any], home: Path) -> tuple[int, int]:
+POST_EDIT_NUDGE_EVERY = 8
+POST_EDIT_MIN_FILES = 3
+
+
+def should_nudge_post_edit(payload: dict[str, Any], home: Path) -> bool:
+    """Record the edit; nudge at 8 edits / 3 files, then again every 8 edits."""
     path = post_edit_state_path(home, payload.get("session_id"))
     state = load_post_edit_state(path)
     count = int(state["count"]) + 1
+    last_nudged = int(state["last_nudged_count"])
     files = set(str(item) for item in state["file_paths"])
 
     tool_input = payload.get("tool_input")
@@ -190,16 +228,18 @@ def record_post_edit(payload: dict[str, Any], home: Path) -> tuple[int, int]:
         if isinstance(file_path, str) and file_path.strip():
             files.add(file_path)
 
-    next_state = {"count": count, "file_paths": sorted(files)}
+    nudge = (
+        count >= POST_EDIT_NUDGE_EVERY
+        and len(files) >= POST_EDIT_MIN_FILES
+        and count - last_nudged >= POST_EDIT_NUDGE_EVERY
+        and not read_live_active_runs(home)
+    )
+    if nudge:
+        last_nudged = count
+
+    next_state = {"count": count, "file_paths": sorted(files), "last_nudged_count": last_nudged}
     write_json_atomic(path, next_state)
-    return count, len(files)
-
-
-def should_nudge_post_edit(payload: dict[str, Any], home: Path) -> bool:
-    count, distinct_files = record_post_edit(payload, home)
-    if count < 8 or distinct_files < 3:
-        return False
-    return not read_live_active_runs(home)
+    return nudge
 
 
 def load_stdin_payload() -> dict[str, Any] | None:
@@ -223,11 +263,13 @@ def run(argv: list[str]) -> int:
     session_id = payload.get("session_id")
 
     if mode == "pre-bash":
-        if should_nudge_pre_bash(payload, home) and claim_dedupe_marker(home, session_id, mode):
+        if should_nudge_pre_bash(payload, home) and claim_nudge_slot(
+            home, session_id, mode, pre_bash_cooldown_seconds()
+        ):
             output_nudge("PreToolUse")
         return 0
 
-    if should_nudge_post_edit(payload, home) and claim_dedupe_marker(home, session_id, mode):
+    if should_nudge_post_edit(payload, home):
         output_nudge("PostToolUse")
     return 0
 

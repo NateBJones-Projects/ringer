@@ -123,6 +123,27 @@ class NudgeHookTests(unittest.TestCase):
         self.assertNudged(first, "PreToolUse")
         self.assertSilent(second)
 
+    def test_pre_bash_rearms_after_cooldown(self) -> None:
+        os.environ["RINGER_NUDGE_COOLDOWN_SECONDS"] = "0"
+        self.addCleanup(os.environ.pop, "RINGER_NUDGE_COOLDOWN_SECONDS", None)
+        first = self.run_hook("pre-bash", self.pre_bash_payload("node probe-simulate.mjs"))
+        second = self.run_hook("pre-bash", self.pre_bash_payload("node probe-simulate.mjs"))
+        self.assertNudged(first, "PreToolUse")
+        self.assertNudged(second, "PreToolUse")
+
+    def test_pre_bash_nudges_on_cli_agent_spawn(self) -> None:
+        for command in (
+            'claude -p "summarize this repo"',
+            "codex exec --json task.md",
+            "cd /tmp && opencode run fix.md",
+        ):
+            proc = self.run_hook("pre-bash", self.pre_bash_payload(command, f"session-{command[:5]}"))
+            self.assertNudged(proc, "PreToolUse")
+
+    def test_pre_bash_stays_silent_on_plain_claude_invocation(self) -> None:
+        proc = self.run_hook("pre-bash", self.pre_bash_payload("claude --version"))
+        self.assertSilent(proc)
+
     def test_post_edit_nudges_at_eight_edits_and_three_files_once(self) -> None:
         files = [
             "/tmp/a.py",
@@ -141,6 +162,16 @@ class NudgeHookTests(unittest.TestCase):
 
         again = self.run_hook("post-edit", self.post_edit_payload("/tmp/d.py"))
         self.assertSilent(again)
+
+    def test_post_edit_renudges_every_eight_edits(self) -> None:
+        for index in range(8):
+            self.run_hook("post-edit", self.post_edit_payload(f"/tmp/file{index % 4}.py"))
+        for index in range(7):
+            self.assertSilent(
+                self.run_hook("post-edit", self.post_edit_payload(f"/tmp/file{index % 4}.py"))
+            )
+        sixteenth = self.run_hook("post-edit", self.post_edit_payload("/tmp/file0.py"))
+        self.assertNudged(sixteenth, "PostToolUse")
 
     def test_post_edit_stays_silent_for_seven_edits_and_two_files(self) -> None:
         files = ["/tmp/a.py", "/tmp/b.py", "/tmp/a.py", "/tmp/b.py", "/tmp/a.py", "/tmp/b.py", "/tmp/a.py"]
