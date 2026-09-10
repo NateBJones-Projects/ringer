@@ -147,6 +147,14 @@ checks and raw logs support — no vibes, no worker self-reports.
   contention findings (full catalog re-ingest per sync; schema writes on
   read paths) plus an empirical XSS all-clear on the new DOM surfaces.
   Third proven-tier structured review today.
+- 2026-09-10 — code-fix, nexo Run 1 pilot (run `nexo-run1-fix-swarm`, 3 tasks):
+  **3/3 pass, 2 first-attempt.** work#666 (bash + a race harness), work#919 (a
+  7-file instruction sweep), work#950 (pre-flight + new selftest cases, attempt 2).
+  Quality sat above the checks' floor rather than on it: work#666 identified that
+  the real fix was reading the head sha ONCE and reusing it — atomicity — not
+  merely deriving the diff locally, and work#919 respected its ownership boundary
+  by leaving CLAUDE.md untouched while flagging that it needed a follow-up. All
+  three patches later merged unchanged.
 
 ## kimi-k2.7 via opencode (`openrouter/moonshotai/kimi-k2.7-code`)
 
@@ -280,6 +288,23 @@ checks and raw logs support — no vibes, no worker self-reports.
   before blaming the model.
 - 2026-07-06 — opencode sqlite "database is locked" again with just 2
   simultaneous opencode spawns (page-news + page-about-faq); retry absorbed it.
+- 2026-09-10 — **an aggregate scoreboard row cannot tell "the model cannot do
+  this" from "the harness was broken", and reading it as capability nearly cost a
+  24-ticket batch.** glm-5.2's code-fix row read 0.17 first-try / 0.22 pass over 63
+  tasks. All 63 came from ONE sibling factory's run whose dominant failure was
+  `worker_returncode=1` with `missing_expect_files` — a single block of 64 of 69
+  identical. That is a harness signature. The same model then went 3/3 on a
+  different factory's pilot; the runs differed in check design and deliverable
+  path, not in engine. **Group failures by run_id and read the failure mode before
+  routing on the number.**
+- 2026-09-10 — **deliverables land in the worktree; the CHECK exports them.** A
+  scout task declared its deliverable at an absolute path outside the worker's
+  sandbox. The log shows the model finding the correct answer in four tool calls
+  and then burning ~40 on `write`, `cat >`, `dd`, `cp`, python, `xattr -c` and
+  `touch` against a path it was never allowed to touch. Sibling fix-swarm tasks
+  were immune purely because their check exported the patch from the check side.
+  A worker can write inside its own worktree and its assigned TMPDIR, nowhere
+  else — and it will spend a whole task's budget proving that to you.
 
 ## codex (2026-07-06, bench-operator-proofing)
 - 8/8 code-feature tasks passed attempt 1 across 3 rounds (worktrees mode, Python harness refactor; 108k-406k tokens/task). Specs embedded the approved architecture doc + exact file ownership; checks built fresh uv venvs and ran the full pytest suite.
