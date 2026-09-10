@@ -187,12 +187,12 @@ index_out = "~/.ringer/artifacts/index.html"
 
 # ── Cost visibility for engines that bill on another account ──────────────
 # Codex reports tokens but never a cost, so its work shows as free in every
-# provider-reported total. On one estate that hid 797 of 922 tasks -- every
+# provider-reported total. On one estate that hid the large majority of tasks -- every
 # code review among them -- which made review look free when it was the
 # expensive half.
 #
 # token_scale: some harnesses report THOUSANDS of tokens, not units. Codex
-# does: measured over 40 real tasks its "tokens used" runs 12-230 where
+# does: measured over a sample of real tasks its "tokens used" runs 12-230 where
 # OpenCode reports hundreds of thousands for comparable work. Without this a
 # Codex loop reads a thousand times cheaper than it is.
 #

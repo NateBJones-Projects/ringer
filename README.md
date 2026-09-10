@@ -171,8 +171,9 @@ per task and per run.
 
 This is not the same number as `tokens` in the scoreboard. `worker_tokens`
 records a *single* step, so it cannot be used for money — measured on real work
-it ran 19x to 40x below the truth, which is how a $41.71 swarm reported as
-roughly $3 and got restarted sixteen times.
+it ran 19x to 40x below the truth, which is how a swarm can report a small
+fraction of its real cost and be restarted many times by an operator with no
+way to see otherwise.
 
 Two manifest keys stop a run that is going wrong:
 

@@ -747,7 +747,7 @@ class EngineConfig:
     # agnostic instead of hard-coding one model into the command line.
     model_default: str = ""
     # Some harnesses report tokens in thousands rather than units. Codex does:
-    # measured over 40 real tasks its "tokens used" runs 12-230 where OpenCode
+    # measured over a sample of real tasks its "tokens used" runs 12-230 where OpenCode
     # reports hundreds of thousands for comparable work. Summed naively a Codex
     # loop reads a thousand times cheaper than it is.
     token_scale: int = 1
@@ -1054,10 +1054,10 @@ def load_artifact_config(raw: Any, state_dir: Path) -> ArtifactConfig:
 # scoped rather than universal.
 #
 # The default is only the canonical vocabulary this project documents. Estates
-# that coin their own product task types -- "dotnet-fix", "juce-test", whatever
+# that coin their own product task types -- whatever
 # their stack is called -- extend it in config rather than here:
 #
-#   ticketed_task_types = ["code-fix", "code-feature", "dotnet-fix"]
+#   ticketed_task_types = ["code-fix", "code-feature"]
 #
 # Hard-coding one estate's stack into everyone's linter is how a shared tool
 # stops being shared.
@@ -1658,8 +1658,13 @@ def load_engines(raw: Any) -> dict[str, EngineConfig]:
             if raw is None:
                 return None
             value = float(raw)
-            if value < 0:
-                raise ValueError(f"engines.{clean_name}.{field} must not be negative")
+            # Same reasoning as budget_usd: NaN compares false against
+            # everything and infinity is unreachable, so either would make the
+            # exposure it feeds meaningless.
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(
+                    f"engines.{clean_name}.{field} must be a finite, non-negative number"
+                )
             return value
 
         price_in = _price("price_in_per_mtok")
@@ -1703,10 +1708,10 @@ class TaskSpec:
     full_access: bool = False
     engine_args: tuple[str, ...] = ()
     verified: str = ""
-    # The requirement this task serves, e.g. "work#666". Optional -- plenty of
+    # The requirement this task serves, e.g. a work-item id in whatever form your tracker uses. Optional -- plenty of
     # runs are bakeoffs and probes that serve no ticket -- but without it a fix
     # swarm's spend cannot be attributed to anything. Measured on a real estate:
-    # 175 of 178 product tasks were keyed `fix-L13` and similar, so the question
+    # almost every product task was keyed by lane number rather than by work item, so the question
     # "what did this requirement cost?" had no answer at all.
     ticket: str = ""
     # Which model a harness engine should run for this task (fills the
@@ -8885,6 +8890,7 @@ class RingerRunner:
         # completion order. A per-signature tally answers the question actually
         # being asked -- has THIS failure now happened N times.
         self.failure_counts: dict[str, int] = {}
+        self.failure_tasks: dict[str, list[str]] = {}
 
     async def run(self) -> int:
         self.manifest.workdir.mkdir(parents=True, exist_ok=True)
@@ -8967,7 +8973,7 @@ class RingerRunner:
         engine that reports no cost of its own still spends real money, and a
         budget that ignores it is no budget at all for exactly the case it is
         most needed -- a plan-billed or separately-billed worker, which on one
-        estate was 797 of 922 tasks.
+        estate was the large majority of tasks.
         """
         with self.lock:
             measured = sum(r.cost_usd or 0.0 for r in self.runtimes)
@@ -8995,7 +9001,8 @@ class RingerRunner:
                 # Whether that figure is a running total or a single step is a
                 # property of the harness, not something knowable here -- which
                 # is what `token_scale` exists to correct per engine. Measured on
-                # Codex: 619 logs, zero step_finish events, and a "tokens used"
+                # Codex: across every log on one estate, zero step_finish
+                # events, and a "tokens used"
                 # value whose median (47, i.e. 47k) sits in the same range as
                 # OpenCode's fresh input for comparable work, so it reads as a
                 # task total rather than one step. Confirm before trusting it for
@@ -9026,11 +9033,18 @@ class RingerRunner:
         with self.lock:
             seen = self.failure_counts.get(signature, 0) + 1
             self.failure_counts[signature] = seen
+            self.failure_tasks.setdefault(signature, []).append(runtime.task.key)
             tripped = seen >= limit and self.stop_reason is None
             if tripped:
+                # Name the tasks. The signature is deliberately coarse, so a stop
+                # can be a genuine repeated failure or an unlucky collision
+                # between checks that open with the same line -- and the reader
+                # can only tell which by seeing which tasks were counted.
+                which = ", ".join(self.failure_tasks[signature])
                 self.stop_reason = (
                     f"{seen} tasks failed the same way ({first_line or 'no output'}) "
-                    f"-- stopping rather than paying for the rest of the manifest"
+                    f"-- {which} -- stopping rather than paying for the rest of the "
+                    f"manifest"
                 )
         if tripped:
             print(f"\n*** RUN STOPPED: {self.stop_reason} ***", flush=True)
@@ -9782,7 +9796,7 @@ def estimate_cost_from_tokens(engine: "EngineConfig", tokens: int) -> float | No
 
     Codex is the case this exists for: it bills on another account entirely, so
     its work is invisible in any provider-reported total. On one estate 797 of
-    922 tasks -- every code review among them -- carried no cost at all, which
+    most tasks -- every code review among them -- carried no cost at all, which
     made review look free when it was the expensive half.
 
     Two things make this honest rather than misleading. The engine's
@@ -9856,9 +9870,9 @@ def parse_step_costs(log_path: Path) -> tuple[float | None, int]:
 
     This exists because `worker_tokens` records ONE step, not the sum -- the
     token regex reads a single figure out of the tail of the stream. Measured on
-    real tasks the gap is 19x to 40x, which is how a $41.71 swarm reported as
-    roughly $3 and was restarted sixteen times by an operator who had no way to
-    see otherwise.
+    real tasks the gap is 19x to 40x, which is how a swarm can report a small
+    fraction of its real cost and be restarted many times by an operator who has
+    no way to see otherwise.
 
     Returns (usd, steps). usd is None when the log carries no cost data at all
     (a plan-billed or non-JSON engine), which is different from a run that

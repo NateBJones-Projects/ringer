@@ -376,6 +376,28 @@ class EstimateUsesEveryStepTests(unittest.TestCase):
         self.assertEqual(ringer.parse_step_tokens(tmp), 0)
 
 
+class PriceValidationTests(unittest.TestCase):
+    """A price is input too, and feeds the same enforcement path as the budget."""
+
+    def _load(self, value):
+        cfgdir = Path(tempfile.mkdtemp())
+        (cfgdir / "config.toml").write_text(
+            "[engines.x]\n"
+            'bin = "/bin/true"\n'
+            'args_template = ["{spec}"]\n'
+            f"price_in_per_mtok = {value}\n", encoding="utf-8")
+        return ringer.AppConfig.load(cfgdir / "config.toml")
+
+    def test_non_finite_and_negative_prices_are_refused(self):
+        for bad in ("nan", "inf", "-1.0"):
+            with self.assertRaises(ValueError, msg=f"{bad} was accepted as a price"):
+                self._load(bad)
+
+    def test_a_normal_price_still_loads(self):
+        cfg = self._load("1.25")
+        self.assertAlmostEqual(cfg.engines["x"].price_in_per_mtok, 1.25)
+
+
 class BudgetValidationTests(unittest.TestCase):
     def test_nan_and_infinity_are_refused(self):
         for bad in (float("nan"), float("inf")):
