@@ -51,13 +51,13 @@ mkdir -p ~/.config/ringer && cp config.sample.toml ~/.config/ringer/config.toml 
 
 ```bash
 # optional but recommended: teach your agent to route work through ringer
-./ringer.py install-agent
+./ringer install-agent
 ```
 
 4. Run the demo:
 
 ```bash
-./ringer.py demo                                      # 3 real workers, verified end to end
+./ringer demo                                      # 3 real workers, verified end to end
 ```
 
 The demo spawns three Codex workers in parallel, verifies each artifact by executing it, and prints a verdict table — and Ringside, the live dashboard, opens in your browser on its own. If all three say PASS, that's the whole setup.
@@ -65,8 +65,10 @@ The demo spawns three Codex workers in parallel, verifies each artifact by execu
 Run your own batch:
 
 ```bash
-./ringer.py run swarm.json --max-parallel 4
+./ringer run swarm.json --max-parallel 4
 ```
+
+`./ringer` is the recommended entrypoint. It finds `python3.13`, `python3.12`, `python3.11`, or `python3` on `PATH`, verifies the interpreter is Python 3.11+, then runs the repository's `ringer.py`. Direct invocation with a Python 3.11+ interpreter, such as `python3.11 ringer.py ...`, remains supported for scripts and environments that pin an interpreter explicitly.
 
 ```json
 {
