@@ -1433,8 +1433,12 @@
         const leftLive = left.state === "live" ? 1 : 0;
         const rightLive = right.state === "live" ? 1 : 0;
         if (leftLive !== rightLive) return rightLive - leftLive;
-        // Stable within each group: two live runs must never swap rows as
-        // their "updated Ns ago" leapfrogs every flush (demo-night lesson).
+        // Live artifacts always lead and stay name-ascending so their picker
+        // rows never move as polling changes timestamps (demo-night lesson).
+        if (leftLive) return left.name.localeCompare(right.name);
+        // Every non-live artifact sorts by updatedTs descending; equal
+        // timestamps fall back to name ascending for a stable order.
+        if (right.updatedTs !== left.updatedTs) return right.updatedTs - left.updatedTs;
         return left.name.localeCompare(right.name);
       });
     }
