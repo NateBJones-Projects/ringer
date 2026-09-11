@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "../..",
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true
+  },
+  "include": [
+    "templates/**/template.doc.mjs",
+    "templates/**/*.doc.mjs",
+    "../core/src/docs-types.ts"
+  ]
+}
