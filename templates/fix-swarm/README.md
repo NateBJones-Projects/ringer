@@ -22,6 +22,7 @@ Use it after the orchestrator has already decided what should be fixed. It is a 
 | `{{REPO_PATH}}` | Absolute path to the repo Ringer will clone into per-task worktrees. |
 | `{{FIX_KEY}}` | Stable task key for one fix, used in the exported patch filename. |
 | `{{OWNED_FILES — every file or directory this task may modify, comma or newline separated}}` | Exact file or directory ownership list. It must be disjoint from every other worker and concurrent run. |
+| `{{ITEM_IDS}}` | Comma-separated IDs this task was commissioned to close (e.g. `R17-P0.1,R17-P1.1`). Every diff hunk must cite at least one, so dark code -- a change nobody asked for -- fails the check. Leave empty to disable. |
 | `{{FINDING — the confirmed bug or issue, with file:line evidence and the desired behavior}}` | The specific issue to fix, including evidence and what correct behavior looks like. |
 | `{{LOCAL_VERIFY — exact command or manual check to understand the failure}}` | Reproduction or inspection step the worker should run before editing. |
 | `{{BUILD_OR_TEST_COMMAND — exact command that proves the fix and prints useful errors}}` | Command the validator executes after the worker edits. It should fail loudly when the fix is wrong. |
