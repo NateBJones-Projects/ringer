@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 import tempfile
 import unittest
@@ -23,7 +24,10 @@ from ringer import (  # noqa: E402
     WorkerResult,
     build_worker_command,
     effective_model_from_command,
+    effective_reasoning_effort_from_command,
     load_engines,
+    load_model_identity_registry,
+    parse_reported_model,
     preflight_engine_bins,
     validate_manifest_engines,
 )
@@ -85,8 +89,69 @@ class EffectiveModelFromCommandTests(unittest.TestCase):
         self.assertEqual("", effective_model_from_command(["codex", "--model"]))
         self.assertEqual("", effective_model_from_command(["codex", "--model="]))
 
+    def test_reads_codex_and_claude_reasoning_flag_forms(self) -> None:
+        self.assertEqual(
+            "high",
+            effective_reasoning_effort_from_command(
+                ["codex", "-c", "model_reasoning_effort=high"]
+            ),
+        )
+        self.assertEqual(
+            "medium",
+            effective_reasoning_effort_from_command(["claude", "--effort", "medium"]),
+        )
+        self.assertEqual(
+            "low",
+            effective_reasoning_effort_from_command(["claude", "--effort=low"]),
+        )
+
 
 class ModelPlaceholderTests(unittest.TestCase):
+    def test_built_in_claude_engine_is_pinned_and_fail_closed(self) -> None:
+        engine = load_engines(None)["claude"]
+        self.assertEqual("claude-sonnet-5", engine.model_default)
+
+        command = build_worker_command(
+            engine,
+            taskdir=Path("/tmp/claude-task"),
+            spec="write the file",
+            full_access=False,
+            engine_args=("--effort", "medium"),
+        )
+        self.assertTrue(Path(command[0]).name.startswith("claude"))
+        self.assertEqual("write the file", command[command.index("-p") + 1])
+        self.assertEqual("claude-sonnet-5", command[command.index("--model") + 1])
+        self.assertEqual("acceptEdits", command[command.index("--permission-mode") + 1])
+        self.assertIn("--no-session-persistence", command)
+        self.assertEqual("medium", effective_reasoning_effort_from_command(command))
+        settings = json.loads(command[command.index("--settings") + 1])
+        self.assertTrue(settings["sandbox"]["enabled"])
+        self.assertTrue(settings["sandbox"]["failIfUnavailable"])
+        self.assertFalse(settings["sandbox"]["allowUnsandboxedCommands"])
+
+        full_access_command = build_worker_command(
+            engine,
+            taskdir=Path("/tmp/claude-task"),
+            spec="write the file",
+            full_access=True,
+        )
+        self.assertIn("--dangerously-skip-permissions", full_access_command)
+        full_settings = json.loads(
+            full_access_command[full_access_command.index("--settings") + 1]
+        )
+        self.assertFalse(full_settings["sandbox"]["enabled"])
+
+        reported = parse_reported_model(
+            '{"type":"system","model":"claude-sonnet-5"}',
+            engine.model_report_regex,
+        )
+        self.assertEqual("claude-sonnet-5", reported)
+        identity = load_model_identity_registry().resolve("claude", reported)
+        self.assertEqual(
+            ("Claude Sonnet 5", "Anthropic", "Claude Code"),
+            (identity.model_display, identity.lab, identity.harness),
+        )
+
     def test_model_default_fills_placeholder(self) -> None:
         cmd = build_worker_command(
             harness_engine(), taskdir=Path("/tmp/t"), spec="do it", full_access=False
@@ -283,7 +348,26 @@ class ModelValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "binary not found.*npm install -g @openai/codex"):
             preflight_engine_bins(manifest, config)
 
+    def test_preflight_names_claude_install_and_login(self) -> None:
+        broken = EngineConfig(
+            name="claude",
+            bin="/nonexistent/path/to/claude",
+            args_template=("-p", "{spec}"),
+            full_access_args=(),
+            sandbox_args=(),
+            token_regex=None,
+        )
+        config = self.config({"claude": broken})
+        manifest = self.manifest(self.base_task(engine="claude"))
+        with self.assertRaisesRegex(
+            ValueError,
+            "binary not found.*@anthropic-ai/claude-code.*claude auth login",
+        ):
+            preflight_engine_bins(manifest, config)
+
     def test_preflight_accepts_absolute_and_path_resolved_binaries(self) -> None:
+        path_resolved = shutil.which("sh") or shutil.which("git")
+        self.assertIsNotNone(path_resolved)
         absolute = EngineConfig(
             name="worker",
             bin=sys.executable,
@@ -294,7 +378,7 @@ class ModelValidationTests(unittest.TestCase):
         )
         bare = EngineConfig(
             name="shellworker",
-            bin="sh",
+            bin=Path(path_resolved).name,
             args_template=("{spec}",),
             full_access_args=(),
             sandbox_args=(),

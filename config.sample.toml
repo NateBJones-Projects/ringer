@@ -91,6 +91,44 @@ token_regex = "tokens\\s+used\\s*:?\\s*([0-9][0-9,]*)"
 # default reads the `model:` header; override it here only if that format changes.
 model_report_regex = "(?m)^model:[ \\t]*([^ \\t\\r\\n]+)[ \\t]*\\r?$"
 
+# Claude Code is a built-in worker lane, so no config block is required. This
+# explicit block documents and lets you override the shipped defaults. Install
+# with `npm install -g @anthropic-ai/claude-code`, then `claude auth login`.
+# Ringer runs Claude in non-interactive stream-JSON mode, pins the current
+# Sonnet model instead of inheriting local settings drift, and passes per-task
+# `engine_args` through (for example ["--effort", "low|medium|high"]).
+[engines.claude]
+bin = "claude"
+model_default = "claude-sonnet-5"
+args_template = [
+  "-p",
+  "{spec}",
+  "--output-format",
+  "stream-json",
+  "--verbose",
+  "--no-session-persistence",
+  "--model",
+  "{model}",
+  "{access_args}",
+  "{engine_args}",
+]
+
+# Claude's native sandbox writes only inside the worker cwd. failIfUnavailable
+# prevents a missing Seatbelt/bubblewrap setup from silently running loose, and
+# allowUnsandboxedCommands=false removes Claude's sandbox escape hatch.
+sandbox_args = [
+  "--permission-mode",
+  "acceptEdits",
+  "--settings",
+  '{"sandbox":{"enabled":true,"failIfUnavailable":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false}}',
+]
+full_access_args = [
+  "--dangerously-skip-permissions",
+  "--settings",
+  '{"sandbox":{"enabled":false}}',
+]
+model_report_regex = '"model"\s*:\s*"([^"]+)"'
+
 # Grok Build CLI (xAI). Install: curl -fsSL https://x.ai/cli/install.sh | bash
 # (or: npm install -g @xai-official/grok), then `grok login` — OAuth on a
 # SuperGrok or X Premium Plus plan. Headless mode (-p) runs a full agentic
