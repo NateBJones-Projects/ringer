@@ -287,6 +287,13 @@ checks and raw logs support — no vibes, no worker self-reports.
 
 ## gpt-5.6-sol (codex)
 - 2026-07-15 ringer-self-update run (3 serial tasks, direct-repo-edit mode): code-fix baseline-test repair 1/1 first-try (61k tokens, 1.6m); code-feature self-update mechanism (git fetch/ff-pull/re-exec + HUD staleness restart + 20-test suite) 1/1 first-try at high effort (153k, 8.1m); code-feature signal-contract (all 3 scoreboard surfaces + canonical-route lint enforcement) passed on retry (358k, 13.7m) — attempt 1 died on stale old-column assertions in pre-existing tests it hadn't finished updating; the retry prompt's injected FAIL list was enough to close it out. Lesson: when a task rewrites a display contract, name every test file asserting the old contract in the spec's ownership list AND tell it to update them FIRST.
+- 2026-07-13 reasoning-effort surfaces (dated observation): codex CLI on this
+  box accepted `model_reasoning_effort=max` for gpt-5.6-sol. As of 2026-07-16
+  the Codex config reference types the field `minimal|low|medium|high|xhigh`
+  (no `max`), while OpenRouter metadata lists supported_efforts including
+  `max` for ALL three 5.6 tiers. The surfaces disagree — per-tier effort
+  ceilings are unsettled; the capability sheets carry only the per-surface
+  documented facts.
 - 2026-07-09 code-feature/code-fix (ringside-overhaul): 4/4 first-try — a ringer.py logging change with tests, a 265-line stdlib backfill CLI (atomic rewrite, dry-run, idempotence all check-verified), a ~1500-line single-file HTML redesign (running-now pills + worker-card grid + multi-expansion refactor, 30KB patch, node --check + contract greps + unittest), and a render-gating change where it correctly UPDATED tests asserting the old behavior instead of gaming the check. Medium/high reasoning, 65–120k tokens/task.
 - Same day, different session (bench-harness-patches, code-fix): 0.29 first-try over 7 tasks on a Next.js/Turbopack harness. Spec and check quality dominate model choice — see the scoreboard before generalizing either number.
 
@@ -309,6 +316,13 @@ checks and raw logs support — no vibes, no worker self-reports.
 
 ## gpt-5.6-luna (codex)
 - 2026-07-09 code-feature (unlock-ai guide-format conversion, strict type-contract check): 1/1 first-try, 42.6k tokens, 80s. Followed a multi-file TS pattern precisely at $1/$6 pricing. Good candidate for mechanical codegen/docs lanes; audition in adjacent types.
+- 2026-07-14 long-context (dated observation, no run): Luna's nominal window
+  is 1.05M, same as Sol/Terra, but a search that day found no tier-by-tier
+  long-context recall benchmark from OpenAI or any third party — per-tier
+  long-context behavior is unverified in both directions. Routing judgment,
+  not scoreboard evidence: until run evidence accumulates, the conservative
+  slot for Luna is short-context, low-stakes, latency-sensitive work; treat
+  long-context Luna assignments as exploration, not proven routing.
 
 ## opencode / z-ai glm-5.2 (via openrouter)
 - 2026-07-09 (aicred-invoice-downloads, 4 code-fix tasks + 1 follow-up, worktrees+npm ci checks): systematic attempt-1 NO-OP — all 4 parallel workers produced zero edits and no summary on first attempt, then completed cleanly on attempt 2 after retry-prompt injection (34k-69k tokens each). Follow-up single task passed attempt 1. Suspect first-invocation session warm-up in opencode-sandboxed under parallel spawn; budget for 2 attempts on parallel GLM batches. Output quality on Next.js/Stripe route+test work: solid, spec-faithful, one boss-caught design gap (used user-scoped supabase client where RLS demanded service role — spec didn't say explicitly; say it explicitly).
