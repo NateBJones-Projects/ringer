@@ -43,13 +43,25 @@ def contains_marker(haystack: str, marker: str) -> bool:
 
 
 def validate_model(transcript: str, combined: str, min_response_chars: int, failures: list[str]) -> None:
+    # Accept either the colon markers from prompts/model-calling-probe.txt or
+    # the "## Model Response Or API Result" heading that manifest.json's spec
+    # asks for. Strict on substance (a non-empty response), tolerant on format.
+    heading = re.search(
+        r"^##\s+Model Response[^\n]*\n(.*?)(?=^##\s|\Z)",
+        transcript,
+        re.IGNORECASE | re.MULTILINE | re.DOTALL,
+    )
     response = (
         section_after_marker(transcript, "MODEL RESPONSE:")
         or section_after_marker(transcript, "ASSISTANT:")
         or section_after_marker(transcript, "RESPONSE:")
+        or (heading.group(1).strip() if heading else "")
     )
     if not response:
-        failures.append("model mode requires a MODEL RESPONSE, ASSISTANT, or RESPONSE section")
+        failures.append(
+            "model mode requires a MODEL RESPONSE:, ASSISTANT:, or RESPONSE: marker, "
+            "or a '## Model Response Or API Result' heading with content under it"
+        )
         return
     visible_chars = len(re.sub(r"\s+", "", response))
     if visible_chars < min_response_chars:
