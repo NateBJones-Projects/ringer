@@ -1433,8 +1433,12 @@
         const leftLive = left.state === "live" ? 1 : 0;
         const rightLive = right.state === "live" ? 1 : 0;
         if (leftLive !== rightLive) return rightLive - leftLive;
-        // Stable within each group: two live runs must never swap rows as
-        // their "updated Ns ago" leapfrogs every flush (demo-night lesson).
+        // Live runs stay name-sorted: two in-flight runs must never swap rows
+        // as their "updated Ns ago" leapfrogs every flush (demo-night lesson).
+        if (leftLive) return left.name.localeCompare(right.name);
+        // Finished runs sort by recency, newest first; name breaks ties so
+        // equal timestamps stay in a stable order.
+        if (right.updatedTs !== left.updatedTs) return right.updatedTs - left.updatedTs;
         return left.name.localeCompare(right.name);
       });
     }
