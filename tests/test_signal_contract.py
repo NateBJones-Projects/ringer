@@ -167,6 +167,21 @@ source = "fixture"
             notes_path=self.notes_path,
         )
 
+    def test_shipped_registry_resolves_openrouter_probation_models(self) -> None:
+        registry = load_model_identity_registry(
+            ROOT / "registry" / "model-identity.toml"
+        )
+        for model, display, lab in (
+            ("openrouter/deepseek/deepseek-v4.1-flash", "DeepSeek V4.1 Flash", "DeepSeek"),
+            ("openrouter/xiaomi/mimo-v2.5", "MiMo V2.5", "Xiaomi"),
+        ):
+            identity = registry.resolve("opencode", model)
+            self.assertFalse(identity.unregistered, model)
+            self.assertFalse(identity.misrouted, model)
+            self.assertEqual(display, identity.model_display)
+            self.assertEqual(lab, identity.lab)
+            self.assertEqual("2026-09-17", identity.last_verified)
+
     def test_all_three_surfaces_emit_contract_columns_in_order(self) -> None:
         output = io.StringIO()
         with contextlib.redirect_stdout(output):

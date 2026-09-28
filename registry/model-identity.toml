@@ -98,3 +98,17 @@ lab = "Meta"
 confidence = "verified"
 source = "manifest model field; OpenRouter slug meta-llama/llama-3.3-70b-instruct:free"
 last_verified = 2026-07-10
+
+[engines.opencode.models."openrouter/deepseek/deepseek-v4.1-flash"]
+display = "DeepSeek V4.1 Flash"
+lab = "DeepSeek"
+confidence = "verified"
+source = "https://www.deepseek.com/en/news/deepseek-v4-1-flash/"
+last_verified = 2026-09-17
+
+[engines.opencode.models."openrouter/xiaomi/mimo-v2.5"]
+display = "MiMo V2.5"
+lab = "Xiaomi"
+confidence = "verified"
+source = "https://huggingface.co/XiaomiMiMo/MiMo-V2.5"
+last_verified = 2026-09-17
