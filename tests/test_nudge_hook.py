@@ -66,6 +66,57 @@ class NudgeHookTests(unittest.TestCase):
             "tool_response": {"success": True},
         }
 
+    def codex_command_payload(self, source: str, session_id: str = "codex-session-1") -> dict[str, object]:
+        return {
+            "session_id": session_id,
+            "hook_event_name": "PreToolUse",
+            "tool_name": "functions.exec",
+            "tool_input": {"source": source},
+        }
+
+    def codex_patch_payload(self, file_path: str, session_id: str = "codex-session-1") -> dict[str, object]:
+        return {
+            "session_id": session_id,
+            "hook_event_name": "PostToolUse",
+            "tool_name": "functions.exec",
+            "tool_input": {
+                "source": (
+                    "await tools.apply_patch(\"*** Begin Patch\\n"
+                    f"*** Update File: {file_path}\\n"
+                    "@@\\n-old\\n+new\\n*** End Patch\")"
+                )
+            },
+            "tool_response": {"success": True},
+        }
+
+    def canonical_bash_payload(self, command: str, session_id: str = "codex-canonical-1") -> dict[str, object]:
+        # Canonical Codex PreToolUse payload: tool_name Bash, source in
+        # tool_input.command.
+        return {
+            "session_id": session_id,
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": command},
+        }
+
+    def canonical_apply_patch_payload(self, file_path: str, session_id: str = "codex-canonical-1") -> dict[str, object]:
+        # Canonical Codex PostToolUse payload: tool_name apply_patch, patch
+        # source in tool_input.command.
+        return {
+            "session_id": session_id,
+            "hook_event_name": "PostToolUse",
+            "tool_name": "apply_patch",
+            "tool_input": {
+                "command": (
+                    "*** Begin Patch\n"
+                    f"*** Update File: {file_path}\n"
+                    "@@\n-old\n+new\n"
+                    "*** End Patch"
+                )
+            },
+            "tool_response": {"success": True},
+        }
+
     def assertNudged(self, proc: subprocess.CompletedProcess[str], event_name: str) -> None:
         self.assertEqual(0, proc.returncode)
         data = json.loads(proc.stdout)
@@ -146,6 +197,77 @@ class NudgeHookTests(unittest.TestCase):
         files = ["/tmp/a.py", "/tmp/b.py", "/tmp/a.py", "/tmp/b.py", "/tmp/a.py", "/tmp/b.py", "/tmp/a.py"]
         for file_path in files:
             self.assertSilent(self.run_hook("post-edit", self.post_edit_payload(file_path, "session-2")))
+
+    def test_codex_pre_tool_nudges_on_harness_inside_exec_source(self) -> None:
+        payload = self.codex_command_payload(
+            'await tools.exec_command({cmd: "python3 persona-smoke.py"})'
+        )
+        self.assertNudged(self.run_hook("codex-pre-tool", payload), "PreToolUse")
+
+    def test_codex_pre_tool_ignores_non_command_tool(self) -> None:
+        payload = self.codex_command_payload("curl https://api.openai.com/v1/chat/completions")
+        payload["tool_name"] = "apply_patch"
+        self.assertSilent(self.run_hook("codex-pre-tool", payload))
+
+    def test_codex_post_tool_counts_apply_patch_files(self) -> None:
+        files = [
+            "/tmp/a.py",
+            "/tmp/a.py",
+            "/tmp/b.py",
+            "/tmp/b.py",
+            "/tmp/a.py",
+            "/tmp/b.py",
+            "/tmp/a.py",
+        ]
+        for file_path in files:
+            self.assertSilent(self.run_hook("codex-post-tool", self.codex_patch_payload(file_path)))
+
+        nudged = self.run_hook("codex-post-tool", self.codex_patch_payload("/tmp/c.py"))
+        self.assertNudged(nudged, "PostToolUse")
+
+    def test_codex_post_tool_ignores_ordinary_exec(self) -> None:
+        payload = {
+            "session_id": "codex-session-2",
+            "hook_event_name": "PostToolUse",
+            "tool_name": "functions.exec",
+            "tool_input": {"source": 'await tools.exec_command({cmd: "ls"})'},
+        }
+        self.assertSilent(self.run_hook("codex-post-tool", payload))
+        self.assertFalse((self.ringer_home / "nudge-state" / "codex-session-2.json").exists())
+
+    def test_codex_pre_tool_canonical_bash_payload_nudges_on_harness(self) -> None:
+        # Canonical Codex payload: tool_name Bash, source in tool_input.command.
+        payload = self.canonical_bash_payload("python3 grader-eval.py")
+        self.assertNudged(self.run_hook("codex-pre-tool", payload), "PreToolUse")
+
+    def test_codex_pre_tool_canonical_bash_silent_on_ringer_py(self) -> None:
+        payload = self.canonical_bash_payload("python3 ringer.py run swarm.json")
+        self.assertSilent(self.run_hook("codex-pre-tool", payload))
+
+    def test_codex_pre_tool_canonical_bash_silent_on_ordinary_command(self) -> None:
+        payload = self.canonical_bash_payload("ls -la")
+        self.assertSilent(self.run_hook("codex-pre-tool", payload))
+
+    def test_codex_post_tool_canonical_apply_patch_counts_files(self) -> None:
+        # Canonical apply_patch PostToolUse: tool_name apply_patch, patch
+        # source in tool_input.command with *** Update File: markers.
+        files = [
+            "/tmp/a.py",
+            "/tmp/a.py",
+            "/tmp/b.py",
+            "/tmp/b.py",
+            "/tmp/a.py",
+            "/tmp/b.py",
+            "/tmp/a.py",
+        ]
+        for file_path in files:
+            self.assertSilent(self.run_hook("codex-post-tool", self.canonical_apply_patch_payload(file_path)))
+
+        nudged = self.run_hook("codex-post-tool", self.canonical_apply_patch_payload("/tmp/c.py"))
+        self.assertNudged(nudged, "PostToolUse")
+
+        again = self.run_hook("codex-post-tool", self.canonical_apply_patch_payload("/tmp/d.py"))
+        self.assertSilent(again)
 
     def test_malformed_stdin_exits_zero_silently(self) -> None:
         proc = self.run_hook("pre-bash", "{not json")

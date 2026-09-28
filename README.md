@@ -177,7 +177,7 @@ Each check runs in a fresh scratch dir (a detached worktree when the manifest us
 
 Between swarms, agents drift back to invisible inline work. Reminders decay, so enforcement ships with the product.
 
-Run one command:
+For Claude Code, run:
 
 ```bash
 ./ringer.py install-agent
@@ -185,7 +185,17 @@ Run one command:
 
 It installs the ringer skill — the orchestrator playbook — user-level for Claude Code, and registers two gentle hooks: a Bash hook that notices model-calling or harness commands running outside a live Ringer run, and an edit-loop hook that notices batch editing without a run. Each hook nudges ONCE per session, pointing the agent at the skill.
 
-The hooks never block anything. A user who says "just do it inline" is obeyed; uninstall with `./ringer.py uninstall-agent`.
+For Codex, run:
+
+```bash
+./ringer.py install-agent --codex
+```
+
+This installs the Codex-native ringer skill under `~/.agents/skills/ringer` (the path Codex discovers repository and user skills) and merges equivalent `PreToolUse` and `PostToolUse` nudges into `~/.codex/hooks.json` (or `$CODEX_HOME/hooks.json` if `CODEX_HOME` is set — skill discovery is not tied to `CODEX_HOME`, only hook/config storage is). Start a new Codex session, open `/hooks`, and approve the two Ringer hooks before they can run. Codex owns hook trust; the installer does not bypass that review.
+
+The Codex playbook keeps the current Codex model in the coordinator seat and defaults implementation to the OpenCode/OpenRouter lane. The hooks understand canonical Codex `Bash` and `apply_patch` payloads (with the command source in `tool_input.command`) as well as the `functions.exec` compatibility shape, while preserving the same once-per-session, non-blocking behavior.
+
+The hooks never block anything. A user who says "just do it inline" is obeyed. Uninstall with `./ringer.py uninstall-agent` for Claude Code or `./ringer.py uninstall-agent --codex` for Codex. Add `--project` to either command to use the current project's `.claude` directory or the current project's `.agents` (skill) and `.codex` (hooks) directories instead of the user-level installation. Running `install-agent --codex --project` from inside the Ringer repository itself is safe: the canonical skill is left in place (the source is the target) and only the hooks are written.
 
 For CI and evals, `config.sample.toml` includes `[engines.mock]` so the enforcement stack can be tested without an API bill.
 
