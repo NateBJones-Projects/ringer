@@ -1,0 +1,88 @@
+# Capability sheet — GLM 5.3 Flash via OpenCode/OpenRouter. Only facts verified
+# from the dated sources below; boundaries are stated, not inferred from GLM 5.2
+# or from native-Z.ai API behaviour.
+
+[model]
+key = "openrouter/z-ai/glm-5.3-flash"
+display = "GLM 5.3 Flash"
+vendor = "Z.ai"
+release_date = "2026-08-26"
+
+[api]
+endpoint_families = ["chat-completions"]
+auth = "OpenCode uses OpenRouter API-key auth with model slug z-ai/glm-5.3-flash."
+streaming = "Served through OpenRouter's OpenAI-compatible Chat Completions endpoint."
+
+[caching]
+supported = false
+mode = "none advertised"
+how_enabled = "Through OpenRouter/OpenCode, do not rely on prompt caching for GLM 5.3 Flash today: every current upstream endpoint in the OpenRouter endpoint metadata reports supports_implicit_caching=false, even though the catalog exposes input_cache_read pricing."
+ttl = "unknown"
+read_pricing_per_m = 0.015
+write_pricing_per_m = "unknown"
+min_cacheable_prefix_tokens = "unknown"
+
+[tool_calling]
+format = "OpenAI-compatible Chat Completions tools array with tool_choice. OpenRouter endpoint metadata advertises reasoning, include_reasoning, reasoning_effort, tools, tool_choice and response_format broadly, but structured_outputs and exact tool_choice modes vary by upstream provider."
+parallel = "unknown"
+strict_json_schema = "unknown"
+quirks = [
+  "structured_outputs is advertised by only some upstream endpoints (e.g. DeepInfra, Fireworks, Cloudflare); others such as Z.AI, Relace, Novita and GMICloud do not advertise it.",
+  "Exact tool_choice modes vary by upstream: Z.AI and SiliconFlow advertise auto only, while DeepInfra and Together advertise none/auto/required/function.",
+  "Use provider.require_parameters=true when a harness depends on tools, tool_choice, response_format, structured_outputs, reasoning, or reasoning_effort; otherwise OpenRouter may route to a provider that ignores unsupported parameters."
+]
+
+[reasoning]
+params = ["reasoning", "include_reasoning", "reasoning_effort"]
+supported_efforts = ["low", "high", "max"]
+default_effort = "max"
+defaults = "The Z.ai model card documents reasoning_effort values low, high and max, with max as the default. OpenRouter endpoint metadata advertises reasoning, include_reasoning and reasoning_effort on current endpoints."
+
+[limits]
+context_window = 1310720
+max_output_tokens = 131072
+rate_limits = "unknown"
+
+[pricing]
+prompt_per_m = 0.075
+completion_per_m = 0.25
+cache_read_per_m = 0.015
+cache_write_per_m = "unknown"
+as_of = "2026-08-30"
+note = "Current OpenRouter catalog pricing on 2026-08-30; potentially promotional or provider-dependent, not a durable price."
+
+[[sources]]
+claim = "model: OpenRouter catalog entry (id, name, modality, context length)"
+url = "https://openrouter.ai/api/v1/models"
+accessed = "2026-08-30"
+quote = "\"id\":\"z-ai/glm-5.3-flash\",\"name\":\"Z.ai: GLM 5.3 Flash\",\"context_length\":1310720,\"modality\":\"text+image+video->text\""
+
+[[sources]]
+claim = "model launch: Z.ai blog post announcing GLM-5.3-Flash, dated 2026-08-26"
+url = "https://z.ai/blog/glm-5.3-flash"
+accessed = "2026-08-30"
+quote = "date:`2026-08-26`,title:`GLM-5.3-Flash: Frontier Intelligence, Flash Cost`"
+
+[[sources]]
+claim = "limits: completion-token ceiling on the flagship Z.AI endpoint"
+url = "https://openrouter.ai/api/v1/models/z-ai/glm-5.3-flash/endpoints"
+accessed = "2026-08-30"
+quote = "\"provider_name\":\"Z.AI\",\"max_completion_tokens\":131072"
+
+[[sources]]
+claim = "caching: no current endpoint advertises implicit caching"
+url = "https://openrouter.ai/api/v1/models/z-ai/glm-5.3-flash/endpoints"
+accessed = "2026-08-30"
+quote = "\"supports_implicit_caching\":false"
+
+[[sources]]
+claim = "reasoning: official Z.ai Hugging Face model card documents reasoning_effort low/high/max, default max (coordinator-verified source)"
+url = "https://huggingface.co/zai-org/GLM-5.3-Flash"
+accessed = "2026-08-30"
+quote = "reasoning_effort parameter, which accepts three levels: `low`, `high`, and `max`. It defaults to `max` if not passed"
+
+[[sources]]
+claim = "pricing: OpenRouter catalog prompt, completion and cache-read pricing"
+url = "https://openrouter.ai/api/v1/models"
+accessed = "2026-08-30"
+quote = "\"prompt\":\"0.000000075\",\"completion\":\"0.00000025\",\"input_cache_read\":\"0.000000015\""
