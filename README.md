@@ -209,6 +209,8 @@ Unless a model ships its own first-class harness (Codex does), OpenCode is the h
 
 OpenCode ships no OS sandbox, so the engine's `bin` points at an absolute path to `engines/opencode-sandboxed.sh` (ringer does not resolve engine bins relative to the repo): a macOS Seatbelt wrapper that leaves network and reads open but confines writes to the task dir, a per-run scratch dir (wired as the agent's `TMPDIR`/`XDG_CACHE_HOME`), and OpenCode's own state/config dirs. Its `--dangerously-skip-permissions` flag only silences OpenCode's interactive prompts; Seatbelt is the actual containment. Task paths reach the profile as `sandbox-exec -D` parameters rather than string interpolation, so a task dir with quotes or parens can't inject sandbox rules. `--no-sandbox` is wired as the engine's `full_access_args`, so ringer's `allow_full_access` gate still governs escapes. Non-macOS installs need their own sandbox (or full-access mode).
 
+To let a worker edit a real repository, pass the repo checkout to the wrapper with its repeatable `--writable-root PATH` option — e.g. `engine_args = ["--writable-root", "{{REPO_PATH}}"]` (the `repo-feature` kit does exactly this). The wrapper strips every `--writable-root` pair before OpenCode sees the args and opens each root to the Seatbelt write allowlist (again via `-D` parameters, never interpolation). The Codex-only config string `-c sandbox_workspace_write.writable_roots=[...]` is NOT understood by this wrapper and is silently ignored — so a custom engine that wants OS-level write confinement must supply its own equivalent writable-root mechanism, or its workers hit EPERM on every repo edit.
+
 Setting it up takes about five minutes:
 
 ```bash

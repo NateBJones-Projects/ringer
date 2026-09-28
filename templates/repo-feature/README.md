@@ -46,7 +46,7 @@ Validate against the current upstream head before merging. A worker can pass aga
 
 Never run `git add -A` in a checkout with untracked scratch files. Stage specific paths after human review; the Ringer check only proves the worker's current diff is confined.
 
-`engine_args` must include the repo in `sandbox_workspace_write.writable_roots`, or the worker will only be able to write its task directory.
+`engine_args` must open the repo to the sandbox wrapper with `--writable-root {{REPO_PATH}}`. The Codex-only config string `-c sandbox_workspace_write.writable_roots=[...]` is NOT understood by the OpenCode wrapper — without `--writable-root` the worker can only write its task directory and hits EPERM on every repo edit. Custom engines need an equivalent writable-root mechanism.
 
 The worker's `notes.md` belongs in the task directory, not the repo. The repo check should assert real source changes and git cleanliness; notes are just the build report.
 
