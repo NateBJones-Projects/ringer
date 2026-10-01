@@ -606,7 +606,7 @@
     );
     $("task-type").value = state.taskType;
     const modelName = (r) =>
-      `${esc(r.model_display || r.model || "Unknown")}${r.show_reasoning_effort ? `<span class="meta">${esc(r.reasoning_effort)}</span>` : ""}${num(r.tasks) < 5 ? '<span class="meta retry">Low sample</span>' : ""}${r.misrouted || r.unattributed ? '<span class="meta retry">Not ranked · quarantined data</span>' : r.unregistered ? '<span class="meta retry">Unregistered</span>' : ""}`;
+      `${esc(r.model_display || r.model || "Unknown")}${num(r.tasks) < 5 ? '<span class="meta retry">Low sample</span>' : ""}${r.misrouted || r.unattributed ? '<span class="meta retry">Not ranked · quarantined data</span>' : r.unregistered ? '<span class="meta retry">Unregistered</span>' : ""}`;
     const speed = (r) =>
       r.median_duration_ms == null
         ? "—"

@@ -163,7 +163,9 @@ const models = {
   generated_at: now,
   rollup: [
     {
-      model_display: "Model A",
+      model_display: "Model A · high",
+      show_reasoning_effort: true,
+      reasoning_effort: "high",
       harness: "Codex",
       tasks: 42,
       attempts: 49,
@@ -244,6 +246,7 @@ const data = {
   env.click({ view: "models" });
   await settle();
   assert.match(env.el("model-rows").innerHTML, /91%/);
+  assert.equal((env.el("model-rows").innerHTML.match(/high/g) || []).length, 1);
   assert.match(env.el("model-rows").innerHTML, /Low sample/);
   assert.match(
     env.el("model-signal-rows").innerHTML,
