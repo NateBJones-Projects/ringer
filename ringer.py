@@ -8623,7 +8623,20 @@ def run_models_command(config: AppConfig, args: argparse.Namespace) -> int:
     log_path = (args.log or default_log_path).expanduser().resolve()
     since = validate_since_date(args.since)
     explicit_db = getattr(args, "db", None) is not None
-    db_path = (getattr(args, "db", None) or default_read_model_db_path()).expanduser().resolve()
+    # The read model is state, so it belongs under state_dir. Resolving it from
+    # ringer_home() instead meant that a caller which isolated state_dir but did
+    # not pass --db -- exactly what the test suite does -- still read and wrote
+    # the real ~/.ringer/ringer.db. Four rows of test fixture ("run1".."run3",
+    # model "proven-model") landed in the live scoreboard that way and were
+    # reported as a proven model at 1.00. state_dir defaults to
+    # ~/.ringer, so production behaviour is unchanged.
+    db_arg = getattr(args, "db", None)
+    if db_arg is not None:
+        db_path = db_arg.expanduser().resolve()
+    else:
+        state_dir = getattr(config, "state_dir", None)
+        base = Path(state_dir) if state_dir else ringer_home()
+        db_path = (base / "ringer.db").expanduser().resolve()
     catalog_path = (getattr(args, "catalog_file", None) or default_catalog_path()).expanduser().resolve()
     registry_path = (getattr(args, "registry", None) or default_model_registry_path()).expanduser().resolve()
     notes_path = (getattr(args, "notes_file", None) or default_model_notes_path()).expanduser().resolve()
