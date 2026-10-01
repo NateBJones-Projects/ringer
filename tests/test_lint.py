@@ -311,5 +311,63 @@ class LintManifestTests(unittest.TestCase):
                 self.assertEqual([], findings, f"{path} should lint clean, got: {findings}")
 
 
+class AllowlistLintTests(unittest.TestCase):
+    """A spec must not order a command the worker's --allowedTools will refuse (observed incident)."""
+
+    ALLOW_NO_HASH = ["--allowedTools", "Bash(/usr/local/bin/imagegen:*)", "Bash(curl:*)", "Read", "Write"]
+    ALLOW_WITH_HASH = ALLOW_NO_HASH[:3] + ["Bash(shasum:*)", "Read", "Write"]
+    SPEC = (
+        "ISOLATION NOTICE: only this specification applies. You make exactly ONE paid call. "
+        "VERIFY THESE SHA-256 VALUES BEFORE ANY PAID ACTION: run `shasum -a 256 prompt.txt` and compare. "
+        "Then save `/usr/local/bin/imagegen account status --json` output to `balance-before.json` "
+        "and write `job.json` before anything else. Model id is `image-model-v1`."
+    )
+
+    def manifest(self, engine_args: list[str] | None, spec: str = SPEC) -> Manifest:
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        task: dict[str, object] = {
+            "key": "gen",
+            "spec": spec,
+            "check": GOOD_CHECK,
+            "expect_files": ["output.png"],
+            "verified": "the job ran once and the image is the right size",
+        }
+        if engine_args is not None:
+            task["engine_args"] = engine_args
+        return Manifest.from_obj(
+            {"run_name": "lint-test", "workdir": str(Path(temp_dir.name) / "work"), "max_parallel": 1, "tasks": [task]}
+        )
+
+    def findings(self, engine_args: list[str] | None, spec: str = SPEC) -> list[str]:
+        return [f for f in lint_manifest(self.manifest(engine_args, spec)) if "allowedTools" in f]
+
+    def test_observed_incident_fires_twice(self) -> None:
+        findings = self.findings(self.ALLOW_NO_HASH)
+        self.assertEqual(len(findings), 2, findings)
+        self.assertTrue(any("run 'shasum'" in f for f in findings), findings)
+        self.assertTrue(any("requires hash verification" in f for f in findings), findings)
+
+    def test_allowlisted_hash_tool_is_quiet(self) -> None:
+        self.assertEqual(self.findings(self.ALLOW_WITH_HASH), [])
+
+    def test_ungated_bash_is_quiet(self) -> None:
+        self.assertEqual(self.findings(["--allowedTools", "Bash", "Read"]), [])
+        self.assertEqual(self.findings(None), [])
+
+    def test_filenames_and_values_are_not_commands(self) -> None:
+        spec = "Write `job.json` first, then `balance-before.json`; the model is `image-model-v1`. No hashing."
+        self.assertEqual(self.findings(self.ALLOW_NO_HASH, spec), [])
+
+    def test_absolute_path_matches_by_basename(self) -> None:
+        spec = "Run `imagegen account status --json` and save it. No hashing involved."
+        self.assertEqual(self.findings(self.ALLOW_NO_HASH, spec), [])
+
+    def test_no_bash_at_all_flags_every_command(self) -> None:
+        findings = self.findings(["--allowedTools", "Read", "Write"])
+        self.assertTrue(any("run 'shasum'" in f for f in findings), findings)
+        self.assertTrue(any("run '/usr/local/bin/imagegen'" in f for f in findings), findings)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
