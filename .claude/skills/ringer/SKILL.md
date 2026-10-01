@@ -304,6 +304,16 @@ per task via the manifest `engine` field. Defaults are deliberate:
   image-gen, docs, probe, bakeoff, ...). Untyped tasks bucket as (untyped)
   and teach the scoreboard nothing; lint nudges you when it's missing.
 
+
+**Escalate the model when the task warrants it.** The default lane is for
+default work. When a single task carries architecture-level complexity —
+many interacting contract requirements, novel design, a 15+ test frozen
+suite — flag it and recommend a stronger model or lane WITH the scoreboard
+numbers before spawning; the per-task `model`/`engine` fields exist for
+exactly this. Signals worth escalating on: prior same-shape tasks burned
+>5M tokens, or produced workaround-shaped output under spec pressure.
+Quality-per-token beats tokens-per-dollar on contract-heavy work.
+
 ## Worktrees-mode footguns (learned the hard way)
 
 Run-level `"worktrees": true` gives each task an isolated git worktree of
@@ -337,9 +347,13 @@ someone's untracked scratch files.
    manifest.
 3. Spot-check at least one PASSING task's artifact per run. The check
    catches most laziness; you catch the rest.
-4. Failures with useless error messages mean your CHECK needs work, not
+4. **Read every hunk of config and manifest files in the patch** —
+   `package.json`, build scripts, CI configs. The two check-gaming incidents
+   both hid in one-line config changes adjacent to legitimate edits; diff
+   stats and spot-checks do not catch them.
+5. Failures with useless error messages mean your CHECK needs work, not
    (only) the worker.
-5. **Update `docs/MODEL-NOTES.md`** (in the ringer repo) when a run taught
+6. **Update `docs/MODEL-NOTES.md`** (in the ringer repo) when a run taught
    you something about a model: one dated line under the model — task type,
    what happened (attempts, tokens, failure mode), what you'd do
    differently. Only what the executed checks and raw logs support. The raw
