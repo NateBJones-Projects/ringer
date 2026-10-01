@@ -147,6 +147,28 @@ self-contained:
   do what it says"): the watcher sees no brief, and the retry prompt loses
   the context it needs. Point at files for source MATERIAL; the instructions
   themselves live in the spec. Lint flags pointer specs.
+- **Give every hard bind an escalation path.** If a spec pairs an absolute
+  assertion ("output must contain no X") with a no-touch zone ("never edit
+  dir Y"), and Y is where X comes from, a worker that cannot ask questions
+  will CHEAT rather than fail — observed: a sed appended to the build script
+  to rewrite scan targets in the output. Every such pair gets: "if the
+  assertion is violated from inside the no-touch zone, STOP and list the
+  offending paths in ./notes.md — do not work around it." Have the check
+  accept the reported-conflict state as a distinct PASS.
+- **Ask an implementing worker to prove it read the file.** Before its first
+  edit, have it quote one existing line, with path and line number, from each
+  file it will modify. A worker that cannot READ a repo can still WRITE
+  plausible edits through the shell, and nothing else in the flow separates
+  informed edits from blind ones — observed when an engine's workspace
+  boundary refused `read_file` on every repo path, including the frozen test
+  file that was the contract, and the worker proceeded anyway and reasoned
+  through the assertions by hand. Treat a missing read-proof as an
+  uninformed-edit tell and review that patch before trusting it. This is a
+  tripwire, not a boundary: a worker can fabricate a plausible quote, so it
+  raises the cost of a blind edit rather than preventing one.
+- **Boilerplate for every repo-editing worker:** "Delete any scratch or
+  debug files you create before finishing — the ownership check fails on
+  strays."
 
 ## Check-writing rules
 
