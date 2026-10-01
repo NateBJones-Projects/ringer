@@ -125,7 +125,7 @@ function environment(payload, native = false) {
       docEvents.click({ target: { closest: () => ({ dataset }) } }),
     input: (id, value) => el(id).events.input({ target: { value } }),
     change: (id, value) => el(id).events.change({ target: { value } }),
-    nativeRuns: () => applyNative(payload["/api/runs"]),
+    nativeRuns: (value = payload["/api/runs"]) => applyNative(value),
   };
 }
 const tick = () => new Promise((resolve) => setImmediate(resolve));
@@ -275,12 +275,39 @@ const data = {
   await settle();
   assert.match(env.el("runs-error").textContent, /disconnected/);
   assert.match(env.el("task-table").innerHTML, /zombie/);
-  data["/api/runs"] = { runs: [run] };
+  const history = {
+    ...run,
+    run_id: "older",
+    run_name: "Completed history",
+    state: "finished",
+    tasks: [{ key: "old task", status: "pass" }],
+  };
+  data["/api/runs"] = { runs: [run, history] };
   const native = environment(data, true);
   native.nativeRuns();
   await settle();
   assert.equal(native.el("compact-panel").hidden, false);
   assert.match(native.el("compact-runs").innerHTML, /Release/);
+  native.nativeRuns([]);
+  assert.match(native.el("compact-runs").innerHTML, /Release/);
+  assert.match(native.el("recent-runs").innerHTML, /Completed history/);
+  native.nativeRuns([
+    { ...run, run_id: "native-only", run_name: "Offline native run" },
+  ]);
+  assert.doesNotMatch(
+    native.el("compact-runs").innerHTML,
+    /Offline native run/,
+  );
+  data["/api/runs"] = new Error("HUD offline");
+  native.timers.find((t) => t.ms === 1000).fn();
+  await settle();
+  assert.match(native.el("compact-runs").innerHTML, /Offline native run/);
+  data["/api/runs"] = { runs: [run, history] };
+  native.timers.find((t) => t.ms === 1000).fn();
+  await settle();
+  native.nativeRuns([]);
+  assert.match(native.el("compact-runs").innerHTML, /Release/);
+  assert.match(native.el("recent-runs").innerHTML, /Completed history/);
   native.el("expand-button").onclick();
   await settle();
   assert.equal(native.el("compact-panel").hidden, true);

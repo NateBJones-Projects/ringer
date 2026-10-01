@@ -48,6 +48,8 @@
     frameGeneration: 0,
     refresh: storage("ringside-auto-refresh") !== "false",
     pending: new Set(),
+    hudRunsAvailable: false,
+    nativeRuns: null,
   };
   const duration = (seconds) => {
     const s = Math.max(0, Math.floor(num(seconds)));
@@ -656,6 +658,7 @@
     return poll("runs", async () => {
       try {
         const payload = await request("/api/runs");
+        state.hudRunsAvailable = true;
         applyRuns(payload);
         const update = payload.update;
         const k = JSON.stringify(update);
@@ -672,7 +675,10 @@
           $("update-banner").hidden = true;
         };
       } catch (error) {
-        if (!bridge) {
+        state.hudRunsAvailable = false;
+        if (bridge && state.nativeRuns !== null) {
+          applyRuns(state.nativeRuns);
+        } else if (!bridge) {
           state.runError = error.message;
           renderRuns();
         }
@@ -868,7 +874,11 @@
     $("hud-hide").hidden = false;
     $("hud-hide").onclick = bridge.hide;
     bridge.onRuns((payload) => {
-      if (state.refresh || !state.updated) applyRuns(payload);
+      state.nativeRuns = payload;
+      // The HUD keeps longer history than the tray poller. Prefer its full
+      // snapshot while reachable; use native events only as an offline fallback.
+      if (!state.hudRunsAvailable && (state.refresh || !state.updated))
+        applyRuns(payload);
     });
   }
   setCompact(state.compact);
