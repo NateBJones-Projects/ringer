@@ -52,7 +52,10 @@ CONFIG_DIR_NAME = TOOL_NAME
 CONFIG_FILE_NAME = "config.toml"
 DEFAULT_ENGINE_NAME = "codex"
 DEFAULT_TIMEOUT_S = 900
-CHECK_TIMEOUT_S = 60
+# Default budget for running a task's check command. Real build/test suites
+# routinely run 1-5 minutes; a task can raise this via the manifest's
+# "check_timeout_s" field when its check legitimately needs longer.
+CHECK_TIMEOUT_S = 300
 DEFAULT_DASHBOARD_PORT_BASE = 8787
 DEFAULT_HUD_PORT = 8700
 DEFAULT_CATALOG_SOURCE = "https://openrouter.ai/api/v1/models"
@@ -1731,6 +1734,10 @@ class TaskSpec:
     timeout_s: int = DEFAULT_TIMEOUT_S
     max_attempts: int = 2
     redact_spec: bool = False
+    # 0 means "use CHECK_TIMEOUT_S" — kept separate from timeout_s (the
+    # worker's own kill timer) since a check running a real build/test suite
+    # often needs a different budget than the worker that produced it.
+    check_timeout_s: int = 0
     full_access: bool = False
     engine_args: tuple[str, ...] = ()
     verified: str = ""
@@ -1778,6 +1785,9 @@ class TaskSpec:
         max_attempts = raw_max_attempts
         if max_attempts <= 0:
             raise ValueError(f"task {key}: max_attempts must be positive")
+        check_timeout_s = int(obj.get("check_timeout_s", 0))
+        if check_timeout_s < 0:
+            raise ValueError(f"task {key}: check_timeout_s must not be negative")
         engine_args = obj.get("engine_args", [])
         if not isinstance(engine_args, list) or not all(isinstance(item, str) for item in engine_args):
             raise ValueError(f"task {key}: engine_args must be a list of strings")
@@ -1799,6 +1809,7 @@ class TaskSpec:
             timeout_s=timeout_s,
             max_attempts=max_attempts,
             redact_spec=require_bool(obj.get("redact_spec", False), key, "redact_spec"),
+            check_timeout_s=check_timeout_s,
             full_access=bool(obj.get("full_access", False)),
             engine_args=tuple(engine_args),
             verified=verified.strip(),
@@ -8724,7 +8735,9 @@ def run_models_command(config: AppConfig, args: argparse.Namespace) -> int:
 
 class Verifier:
     async def verify(self, task: TaskSpec, taskdir: Path) -> VerifyResult:
-        check_returncode, check_timed_out, output = await self._run_check(task.check, taskdir)
+        check_returncode, check_timed_out, output = await self._run_check(
+            task.check, taskdir, task.check_timeout_s or CHECK_TIMEOUT_S
+        )
         missing_files = tuple(
             rel for rel in task.expect_files if not self._is_nonempty_file(self._expect_file_path(taskdir, rel))
         )
@@ -8762,7 +8775,12 @@ class Verifier:
         return candidate if candidate.is_absolute() else taskdir / candidate
 
     @staticmethod
-    async def _run_check(command: str, cwd: Path) -> tuple[int | None, bool, str]:
+    async def _run_check(command: str, cwd: Path, timeout: int | None = None) -> tuple[int | None, bool, str]:
+        # None resolves to the current CHECK_TIMEOUT_S at call time (not a
+        # def-time default), so callers that mutate the module global — and
+        # the per-task budget passed explicitly — both take effect.
+        if timeout is None:
+            timeout = CHECK_TIMEOUT_S
         proc = await asyncio.create_subprocess_shell(
             command,
             cwd=str(cwd),
@@ -8773,7 +8791,7 @@ class Verifier:
         )
         timed_out = False
         try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=CHECK_TIMEOUT_S)
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except asyncio.TimeoutError:
             timed_out = True
             terminate_process_group(proc)
@@ -8784,7 +8802,7 @@ class Verifier:
                 stdout, _ = await proc.communicate()
         output = stdout.decode("utf-8", errors="replace") if stdout else ""
         if timed_out:
-            output += f"\n[ringer.py] check timed out after {CHECK_TIMEOUT_S}s\n"
+            output += f"\n[ringer.py] check timed out after {timeout}s\n"
         return proc.returncode, timed_out, output
 
 
@@ -10173,6 +10191,7 @@ def dry_run(
         print(f"    dir: {taskdir}")
         print(f"    timeout_s: {task.timeout_s}")
         print(f"    max_attempts: {task.max_attempts}")
+        print(f"    check_timeout_s: {task.check_timeout_s or CHECK_TIMEOUT_S}")
         if task.full_access:
             print(f"    full_access: true allowed={full_access_allowed}")
         else:
