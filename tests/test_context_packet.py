@@ -9,6 +9,19 @@ from ringer import build_context_packet
 
 
 class ContextPacketTests(unittest.TestCase):
+    def test_packet_preamble_requires_file_delivery_and_matching_stdout(self) -> None:
+        packet = build_context_packet("Summarize the release decision.")
+        preamble, marker, _ = packet.text.partition("CURRENT_REQUEST_JSON")
+        lowered = preamble.lower()
+
+        self.assertEqual("CURRENT_REQUEST_JSON", marker)
+        self.assertRegex(lowered, r"\b(?:write|save)\b[^\n]*\banswer[.]md\b")
+        self.assertRegex(lowered, r"\banswer[.]md\b[^\n]*\b(?:print|stdout)\b")
+        self.assertRegex(
+            lowered,
+            r"[.]\/answer[.]md|\bcurrent (?:working )?directory\b|\bcwd\b",
+        )
+
     def test_packet_selects_relevant_material_and_stays_under_limit(self) -> None:
         with tempfile.TemporaryDirectory() as temp_root:
             source = Path(temp_root) / "notes.md"
