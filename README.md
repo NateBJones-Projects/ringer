@@ -105,13 +105,33 @@ Each task gets its own directory, its own worker, its own log, and its own verdi
 | `engine` | Which configured engine runs this task (default `codex`) |
 | `model` | Which model a harness engine runs for this task — fills the engine's `{model}` placeholder (e.g. `"openrouter/moonshotai/kimi-k2.7"`); empty uses the engine's `model_default` |
 | `task_type` | Optional free-form string naming the kind of work this task is, so the model-performance log can slice pass rates by task shape rather than only by model. Suggested vocabulary: `code-feature`, `code-fix`, `code-review`, `test-hardening`, `docs`, `research`, `persona-review`, `copywriting`, `site-build`, `motion-design`, `image-gen`, `data-pipeline`, `format-conversion`, `probe`, `bakeoff`. Empty is allowed; the log just reports it under `(none)`. |
-| `timeout_s` | Per-task kill timer (default 900) |
+| `timeout_s` | Per-task kill timer (default 900, clamped to 3300 — under an hour, on purpose). A task that needs longer is too big; split it |
+| `stall_after_s` | Stop the worker when it has written nothing for this long (default 180). A worker that goes quiet is stuck — a provider retrying a refused call, a prompt that will never be answered, a hung read — and waiting out `timeout_s` only hides it. Never exceeds `timeout_s` |
+| `check_timeout_s` | Kill timer for the CHECK (default 60). Raise it when the check executes the artifact for real — a repo task whose check runs a type checker and a test suite needs minutes. A check that exceeds it fails the task with `check timed out`, which reads like a worker failure but is not one |
 | `max_attempts` | How many times this task may run (default 2 — one try plus one retry with the check's failure output injected). Set `1` for a hard no-retry lane |
 | `redact_spec` | Replace this task's spec with `[redacted request packet]` in the run state, the logged command line, and the eval row, for specs carrying sensitive material. Redacts Ringer's own records only — captured worker output is never rewritten (invariant), so a worker that echoes its request still puts that text in `worker.log` |
 | `engine_args` | Extra CLI flags for this task's worker, spliced in at the engine's `{engine_args}` placeholder — e.g. `["-c", "model_reasoning_effort=low"]` so the orchestrator picks reasoning depth per task |
 | `verified` | One plain-English sentence saying what the check proves — shown on the results page next to "finished & checked" |
 | `full_access` | Worker runs unsandboxed — required for workers that spawn their own sub-workers; must also be enabled in config |
 | `worktrees` (run-level) | Give each task an isolated git worktree of `repo` so parallel workers can't collide |
+
+### When a worker cannot work
+
+A task that never finishes is a task nobody learns anything from, so the
+supervisor watches every worker and reports one of three endings instead of a
+single silent `TIMEOUT`:
+
+| Verdict | What it means |
+|---|---|
+| `BLOCKED` | The worker went quiet and its output names a provider refusal — a rate limit, a rejected key, a permission or billing error. Retrying repeats it, so Ringer does not. |
+| `STALLED` | The worker went quiet for `stall_after_s` with no refusal to blame. It is retried only if it produced something; a worker that wrote nothing leaves a retry prompt with nothing to describe. |
+| `TIMEOUT` | The worker was still working when `timeout_s` ran out. Usually the task is too big — split it. |
+
+Refusal patterns **explain** a worker that has already stopped or gone quiet.
+They never stop one that is still writing, and lines prefixed `path:line:` are
+dropped before matching. Both rules exist because a worker's job is to read
+text that looks like errors: on 2026-09-04 a healthy lane grepped a test suite
+containing `{ status: 401 }` and was killed after 143 KB of real progress.
 
 > **Worktree footgun:** on PASS the task's worktree is removed — including anything written inside it. In worktrees mode, worker logs live outside task worktrees in `workdir/logs/`; have workers write deliverables outside the worktree too, or have your `check` copy artifacts out before it exits 0.
 

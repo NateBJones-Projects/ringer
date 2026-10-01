@@ -280,12 +280,25 @@ checks and raw logs support — no vibes, no worker self-reports.
   before blaming the model.
 - 2026-07-06 — opencode sqlite "database is locked" again with just 2
   simultaneous opencode spawns (page-news + page-about-faq); retry absorbed it.
+- 2026-09-02 — **name every surface file by ABSOLUTE path, and add a citation check.** A review scout whose spec said "CLAUDE.md and .claude/skills/<name>/SKILL.md" reviewed the user's global ~/.claude tree and passed the review-swarm template check, because that check validates structure only. A second check that (a) rejects citations outside the repo and (b) verifies each double-quoted evidence phrase appears within the cited file:line range caught it, and later confirmed a clean report. It now lives at `templates/review-swarm/checks/citations.py` (usage: `--report report.md --repo <abs repo>`); chain it after `review-swarm.py` for any read-only review.
 
 ## codex (2026-07-06, bench-operator-proofing)
 - 8/8 code-feature tasks passed attempt 1 across 3 rounds (worktrees mode, Python harness refactor; 108k-406k tokens/task). Specs embedded the approved architecture doc + exact file ownership; checks built fresh uv venvs and ran the full pytest suite.
 - Lesson (check design, not model): all 3 post-integration bugs were invisible to the checks — a test that passed only because the worker's worktree lacked .env, a `--help`-only assertion missing a runtime importlib/sys.modules bug (py3.12 dataclasses), and bare console-script names failing outside activated venvs. Checks should exercise one real invocation from a cold shell, not just --help.
 
 ## gpt-5.6-sol (codex)
+- 2026-09-04 fabrica2 M1 response models (3 parallel lanes, direct-repo-edit via
+  `--add-dir`): 3/3 first-try. code-feature, pydantic response models for 10
+  endpoints inside a 2,000-line FastAPI router (136k tokens, 26m, high effort);
+  code-feature, 5 endpoints across 3 routers (233k, 27m, high); code-fix, an
+  ESLint feature-boundary inversion plus a Prettier sweep (30k, 2.3m, medium).
+  The quality held up to review, not just to the check: it gave the plan graph
+  proper node, edge and cluster models instead of flattening it to dictionaries,
+  and it kept the genuinely open payloads (a planner's `python_spec`, a
+  customer's cohort `fields`) as typed `dict[str, Any]` FIELDS inside named
+  envelopes — exactly the distinction the spec drew. Nullable keys came back as
+  `X | None` rather than being narrowed away, which is what stops FastAPI
+  silently dropping a field it cannot see on the model.
 - 2026-07-15 ringer-self-update run (3 serial tasks, direct-repo-edit mode): code-fix baseline-test repair 1/1 first-try (61k tokens, 1.6m); code-feature self-update mechanism (git fetch/ff-pull/re-exec + HUD staleness restart + 20-test suite) 1/1 first-try at high effort (153k, 8.1m); code-feature signal-contract (all 3 scoreboard surfaces + canonical-route lint enforcement) passed on retry (358k, 13.7m) — attempt 1 died on stale old-column assertions in pre-existing tests it hadn't finished updating; the retry prompt's injected FAIL list was enough to close it out. Lesson: when a task rewrites a display contract, name every test file asserting the old contract in the spec's ownership list AND tell it to update them FIRST.
 - 2026-07-09 code-feature/code-fix (ringside-overhaul): 4/4 first-try — a ringer.py logging change with tests, a 265-line stdlib backfill CLI (atomic rewrite, dry-run, idempotence all check-verified), a ~1500-line single-file HTML redesign (running-now pills + worker-card grid + multi-expansion refactor, 30KB patch, node --check + contract greps + unittest), and a render-gating change where it correctly UPDATED tests asserting the old behavior instead of gaming the check. Medium/high reasoning, 65–120k tokens/task.
 - Same day, different session (bench-harness-patches, code-fix): 0.29 first-try over 7 tasks on a Next.js/Turbopack harness. Spec and check quality dominate model choice — see the scoreboard before generalizing either number.
@@ -319,3 +332,187 @@ checks and raw logs support — no vibes, no worker self-reports.
 ## Process lessons (2026-07-28, PR #82 review)
 - **Ideas worth keeping from a rejected PR.** PR #82's pre-call gateway was dropped (needs your own API key, so it converts flat-rate OAuth plans into metered API billing; incompatible with Claude Code; and it saves tokens by stripping the tool list, which is the thing that makes the CLI worth using). One idea inside it is worth remembering if the problem ever comes back: an *explicitly blessed* answer cache — key a reviewed answer to the exact request plus the exact selected source packet, and replay it with zero upstream calls, never auto-accepting a model answer. It only fires on byte-identical repeats, which is why it didn't justify 2,000 lines here.
 - **Doc-stated support floors need a CI job or they are fiction.** README promised Python 3.11+ while CI only ever ran 3.12; a 3.12-only f-string reached review with a fully green suite. Either test the floor or move it.
+
+## Claude Haiku 4.5 (dial engine, `dial-haiku/haiku-45`)
+
+- 2026-09-02 — **its 0% first-try is an infrastructure crash, not model quality. Do not route off that number.** In run `fabrica2-tests-worktrees` the attempt-1 FAIL logged `worker_returncode=1` one second after launch, before any model call: `Error: Unexpected error / database is locked` — three OpenCode processes started at once and raced on OpenCode's shared SQLite session database. It passed cleanly on retry (task `media`, 18 tests, 36,531 tokens). Read this model's record as 1/1 on quality, 0/1 on a race it did not cause.
+- 2026-09-02 (run `fabrica2-tier-audition`) — test-hardening (`tilt_audit`, the one model in this codebase using `extra="allow"` rather than forbid): 1/1 first-try, **21 tests — the largest suite anyone produced in that batch**, ruff-clean with no edits. 41,649 tokens, 295s: the slowest of the three lanes despite being the cheapest model, so cheap does not mean fast here. Now 2 tasks at 50% first-try and still probation — but that 50% is entirely the earlier DB-race crash, not a quality miss.
+
+## Claude Sonnet 5 (dial engine, `dial-sonnet5/sonnet-5`)
+
+- 2026-09-02 — **its 0% first-try is the same infrastructure crash as Haiku's, not model quality. Do not route off that number.** Attempt 1 in `fabrica2-tests-worktrees` died one second after launch with `database is locked`, before any model call; the retry passed (task `profile-drift`, 34 tests — the largest suite any model produced in this batch, 51,472 tokens, 2m44s). Most expensive and slowest of the three lanes tried so far, on one task.
+- 2026-09-02 (run `fabrica2-tier-audition`) — test-hardening (`analyzer_descriptor`, a pydantic model with a StrEnum plus three frozenset fields and cross-module enum imports): 1/1 first-try, 12 tests, ruff-clean with no edits, 51,444 tokens, 202.6s. Consistently the most expensive lane — near-identical token spend to its previous task. Now 2 tasks at 50% first-try, still probation, where the 50% is the earlier DB-race crash rather than a quality miss.
+- 2026-09-02 (run `fabrica2-harness-review`, code-review `contradictions-and-cost`, read-only over CLAUDE.md + ten skills + settings): TIMEOUT on both attempts (2×1200s, 73k tokens total, never wrote report.md). Same task passed on gpt-5.2-codex in 268s. Do not route long multi-file read-only reviews to sonnet-5 on this engine until a bounded task shows it can finish.
+
+## Claude Sonnet 4.5 (dial engine, `dial/dial-sonnet-45`)
+
+- 2026-09-02 — test-hardening (3 tasks, run `fabrica2-unit-tests`): 3/3 first-try, median 13,988 tokens, 1m13s — cheapest and fastest on this lane so far. A later single-task run produced the best failure demonstration in the log: it wrote `greet.py` printing `Hello, Ringer!!` and exited rc=0 claiming success. Only the executed check caught the extra `!`, and the retry fixed it from the injected diagnostic. Worth remembering whenever someone argues an agent's own "done" is evidence.
+
+## GPT-5.2 Codex (dial engine, `dial-codex/gpt-5.2-codex`)
+
+- 2026-09-02 — test-hardening (`scim-types`, boundary-heavy pydantic model tests): 1/1 first-try, 29,471 tokens, 89.5s. The only worktree task to pass first time — but the other two lost attempt 1 to the DB race rather than to quality, so this is not yet evidence of an edge. Too little data to rank.
+- 2026-09-02 (run `fabrica2-tier-audition`) — test-hardening (`llm_response`, a four-strategy JSON extractor: pure parsing logic, no pydantic): 1/1 first-try, 14 tests covering all four strategies plus the `caplog` warning path, 34,549 tokens, 123.2s. **The one deliverable in either batch that failed `ruff format`** — it passed `ruff check` but needed reformatting before landing, while both Anthropic lanes came back format-clean. If you route mechanical codegen here, add `ruff format --check` to the task's check command rather than trusting `ruff check` alone. Now 2 tasks, 100% first-try, cheapest and fastest of the three probation lanes.
+- 2026-09-02 (run `fabrica2-harness-review`, code-review, read-only scouts over a repo's CLAUDE.md + skills): mixed. `steady-delivery` (bounded surface: settings.json, pre-commit config, five scripts, one test file): 1/1 first-try, 51k tokens, 199s, but only 1 of its 3 findings survived the orchestrator's check (it missed a nested .gitignore and inferred allow-list semantics). `claims-vs-tree` round 1 (surface named by RELATIVE paths): passed the template check in 49s / 8.6k tokens by reviewing the wrong tree (~/.claude instead of the repo) — a spec bug, and a check that only validated structure. Round 2 with absolute paths and a spec of 'verify EVERY claim in eleven files': TIMEOUT twice (2×900s, 90k tokens, no report). Lesson: give codex a bounded enumerated claim list, not an open-ended sweep. `contradictions-and-cost` with absolute paths: 1/1 first-try, 41k tokens, 268s, all 11 file:line citations and 14 quotes verified by a quote-on-line check; 4 of 5 findings actionable or correctly restating a known gap.
+
+## dial engine (OpenCode harness → EPAM DIAL gateway)
+
+- 2026-09-02 — mitigation for the `database is locked` race above: `engines/opencode-dial.sh` gives each worker a private `XDG_DATA_HOME`/`STATE`/`CACHE`, so workers no longer share one SQLite file, and disables OpenCode self-update mid-swarm. Wired as `[engines.dial]`'s `bin`. Revert with `bin = "opencode"` to compare.
+- 2026-09-02 — **evidence for that wrapper, gathered deliberately.** Run `fabrica2-tier-audition` re-created the exact failing condition — three workers spawned simultaneously onto three cold git worktrees of a large repo — this time through the wrapper: **3/3 passed on attempt 1, with zero `database is locked` occurrences in any worker log**. Scoreboard so far: without the wrapper, 2 of 3 workers crashed; with it, 0 of 3. That is supporting evidence, not proof — the race is intermittent, and a single clean run cannot establish a negative. Treat it as promising, keep the note, and re-check if a lock ever reappears.
+- 2026-09-02 — **spec quality moved straight into artifact quality, measurably.** Batch 1 specs omitted the target repo's conventions and every deliverable needed hand cleanup (an unused import that would have failed ruff, plus 55 missing `-> None` hints). Batch 2 specs named them explicitly — `from __future__ import annotations`, `-> None`, 100-char lines, and "read `tests/unit/core/test_check_result.py` first" — and all three deliverables landed ruff-clean and correctly formatted with zero edits. Cheap change, large effect: put the target repo's lint rules in the spec.
+- 2026-09-02 — **model slugs on this engine must not contain `claude` or `anthropic`.** OpenCode stamps Anthropic prompt-caching blocks when a model id matches either string; against DIAL's OpenAI-compatible endpoint that emits a raw `cache_control` field and every call fails with HTTP 400 (`invalid structure on path messages.0.cache_control`). DIAL routes on the deployment in the URL and ignores the body's model name, so aliasing the slug is free. See the `[engines.dial]` block in `registry/model-identity.toml` for the alias→deployment mapping.
+- 2026-09-02 — Codex CLI cannot reach DIAL at all: 0.152.1 speaks only the Responses API (the string `chat/completions` appears nowhere in its binary), while DIAL exposes Azure-style chat completions. That is why this lane runs OpenCode as the harness rather than the built-in codex engine — and why `./ringer.py demo`, which hardcodes the codex engine, cannot run on a DIAL-only machine.
+
+- 2026-09-03 — fabrica2-web-plan (4 tasks: 3 read-only scouts on gpt-5.2-codex + 1 on haiku-45, 1 npm proof on gpt-5.2-codex): every attempt died in ~20 s with HTTP 401 "Unauthorized: Unknown api key" from ai-proxy.lab.epam.com. Infrastructure (expired/rotated DIAL key in ~/.ringer/dial.env), not a model signal — discount these 8 FAIL rows when reading the scoreboard. Re-verify the key with GET /openai/deployments before the next swarm.
+- 2026-09-03 — fabrica2-web-plan probe (dial-lane, `dial-codex/gpt-5.2-codex`, trivial echo+transcript task) after sourcing ~/.ringer/dial.env: no 401 any more, but OpenCode emitted NO JSON events at all for 600 s on both attempts (rc=143, TIMEOUT). Yesterday the same deployment finished review tasks in 4-5 min. Treat the dial lane as unavailable until a probe passes; diagnose OpenCode `run --format json` against DIAL outside a swarm first. Claude subagents carried the planning scouts instead.
+
+- 2026-09-04 — dial lane VERIFIED WORKING after sourcing ~/.ringer/dial.env (`set -a; source ~/.ringer/dial.env; set +a`). One-task probe on `dial-codex/gpt-5.2-codex`: authenticated, ran its commands, wrote the marker into probe-output.txt and a 179-word transcript with every requested section, 27.8k tokens, 78 s. It still shows FAIL on the scoreboard because of a bug in `templates/probe/`: the kit spec tells the worker to write a `## Model Response Or API Result` heading, while `checks/probe_check.py` greps for the literal `MODEL RESPONSE:` (with a colon, lines 47-49). Spec and check disagree, so an honest worker cannot pass model mode. Fix the template, then discount this row. Yesterdays 401s were the missing env file; the 600 s hang did not reproduce.
+
+- 2026-09-18 — tdm-engine3-subsetting-review (2 test-hardening tasks on `dial/dial-sonnet-45`): infrastructure, not a model signal — discount both FAIL rows. (1) `opencode` is only on PATH under nvm node v20 (`~/.nvm/versions/node/v20.19.6/bin`), not under the default v24; the first run died with `opencode: command not found` before any model call — prepend that dir to PATH when launching `ringer.py run`. (2) With PATH fixed, every call was rejected by DIAL with `Hit token rate limit ... Day limit: 2018278 / 2000000 tokens` (daily quota exhausted). OpenCode logged `AI_RetryError` after 3 attempts and then HUNG instead of exiting: both workers sat at ~3% CPU with an empty JSON event stream for 15+ min until killed, so Ringer would have waited for the full `timeout_s`. When a run shows no events and no worktree changes within ~2 min, check `/tmp/ringer-opencode-*/data/opencode/log/opencode.log` for `stream error` before waiting. Per "never retry into a limit", the lanes were done inline.
+
+## DIAL lane audition, 2026-09-04 (8 lanes, one shared task, no retries)
+
+Task: implement `normalize_table_name` to eight ordered rules; the check imports
+the module and runs 16 stated cases (digit prefix, a 63-character cap that
+interacts with underscore stripping, empty result). The checker was validated
+against a reference implementation and against a naive one, which it fails on
+14 of 16. `max_attempts: 1`, so these are first-try numbers.
+
+| Model (dial slug) | Verdict | Tokens | Time |
+|---|---|---|---|
+| `dial-qwen/qwen3-coder` Qwen3 Coder 480B | PASS | 9,474 | 8.7 s |
+| `dial-sol/gpt-5.6-sol` GPT-5.6 Sol | PASS | 7,831 | 17.4 s |
+| `dial-sonnet46/sonnet-46` Sonnet 4.6 | PASS | 10,110 | 17.6 s |
+| `dial-codex53/gpt-5.3-codex` GPT-5.3 Codex | PASS | 7,739 | 19.6 s |
+| `dial-glm5/glm-5` GLM-5 | PASS | 8,923 | 23.1 s |
+| `dial-gemini38/gemini-3.8-flash` Gemini 3.8 Flash | PASS | 10,042 | 24.7 s |
+| `dial-opus5/opus-5` Opus 5 | PASS | 13,393 | 82.8 s |
+| `dial-codex/gpt-5.2-codex` GPT-5.2 Codex | **TIMEOUT** | — | 900 s |
+
+**The GPT-5.2 Codex deployment is rate-limited, not slow.** A direct call to
+`.../deployments/gpt-5.2-codex-2026-01-14/chat/completions` returns **HTTP 429**
+in under a second. OpenCode retries a 429 without emitting an event, so the
+worker log stays at 4 KB with zero tool calls and the task burns its whole
+timeout. This is what killed the fabrica2 M1 round-1 run earlier the same day:
+two tasks, 3600 s each, nothing produced, and the failure looked like "the task
+was too big". It was not. **Stop routing to `dial-codex/gpt-5.2-codex` until a
+direct call stops returning 429**, and when any lane produces a log with no
+`"type":"tool_use"` lines, probe the deployment with curl before blaming the
+task.
+
+Routing from this evidence: Opus 5 for work that needs judgment (it is also the
+only lane that spends EPAM credit instead of the operator's own Claude quota);
+GPT-5.6 Sol or GPT-5.3 Codex for ordinary code work at half the tokens; Qwen3
+Coder for mechanical edits; GLM-5 and Gemini 3.8 Flash as cheap lanes worth more
+evidence. All seven are new here, so treat one clean task as probation, not
+proof.
+
+- 2026-09-04 — **GPT-5.6 Sol: discount the `flow-shell` FAIL row.** The task
+  (React shell, six-stage flow rail, eleven routes, per-feature strings split,
+  new tests) was correct: from a clean shell, `pnpm typecheck`, `lint`,
+  `format:check` and `build` all pass and the suite went 288 -> 304 tests. It
+  scored FAIL twice because the orchestrator's ownership check ran
+  `git status` over a shared checkout and counted the orchestrator's own staged
+  file as a stray path. The worker never touched it. 146k tokens, 817 s over two
+  attempts, both spent re-doing correct work. Lesson for the check, not the
+  model: when several tasks or the orchestrator share one checkout, an ownership
+  check needs a baseline allow-list of paths that are already dirty, or it fails
+  honest work and burns the retry.
+
+- 2026-09-04 — **Qwen3 Coder 480B, code-feature: PASS first try.** Mechanical
+  refactor in a React/TypeScript repo (split one shared stage component into six
+  files plus a shared frame, keep rendered output identical, add a test per
+  file). 51k tokens, 605 s, gate was typecheck + lint + format + the whole Vitest
+  suite. Second clean task in a row; the cheap lane holds for well-specified
+  mechanical work with a strong executed check.
+- 2026-09-04 — **Claude Sonnet 4.6, code-feature: TIMEOUT at 2x3600 s**, 96.5k
+  tokens, on a large frontend feature (assistant panel plus full page: drawer,
+  conversation, typed API call, sanitized Markdown, session persistence, error
+  path, five test scenarios). Not a hung lane — it produced four real files, a
+  shell mount and six passing tests, and left exactly three type errors. It never
+  converged because each gate iteration costs two to three minutes and the task
+  was too large for one hour. Lesson for the ORCHESTRATOR: cap a frontend feature
+  task at roughly one screen, or give it 5400 s. A task that ends one type error
+  short still blocks every other lane sharing the checkout, so scope the lane to
+  what fits.
+- 2026-09-04 — **Orchestrator error worth naming: a gate wider than the lane
+  makes a task unpassable.** The `fabriccio-typecheck` fix task owned only
+  `web/src/features/fabriccio/`, but its gate ran the whole app's typecheck,
+  lint and format. The blocking lint error was in `web/src/components/shell/`,
+  outside its lane, so the worker had two ways to fail and none to pass: fix the
+  file and break ownership, or respect ownership and never go green. Qwen3 Coder
+  burned 47.8k tokens and two attempts on that trap, and the row reads TIMEOUT as
+  if the model were slow. **Rule: a task's ownership list must cover every file
+  its gate can fail on, or the gate must be narrowed to the lane.** Discount that
+  row for Qwen3; the same model passed a comparable refactor first try an hour
+  earlier.
+- 2026-09-04 — **Codex can edit a repo outside its task directory without
+  full-access mode.** Put `--add-dir <repo>` in the task's `engine_args`. The
+  worker banner then reads
+  `sandbox: workspace-write [workdir, /tmp, $TMPDIR, <repo>]`: containment is
+  still on, the repo is simply added to the writable set. This is the right
+  answer for direct-repo-edit lanes — `full_access: true` needs
+  `allow_full_access` in config.toml and drops the sandbox entirely, which is a
+  much bigger concession for the same result.
+- 2026-09-04 — **"I could not run the tests" from a worker is not a failed
+  check.** A lane's notes reported that AnyIO's cross-thread portal hangs on any
+  FastAPI `TestClient` inside the Codex sandbox, and it reproduced that with a
+  trivial app to show the fault was not its own code. Its check passed anyway,
+  because Ringer runs the check OUTSIDE the worker sandbox, where `TestClient`
+  works. Read the executed check for the verdict — but still read the note, as
+  it tells you which verification the worker could not self-serve, and therefore
+  which part of its work rested on the check alone.
+- 2026-09-04 — **A gate the worker cannot run in its own sandbox is a lane that
+  can never go green.** Sibling of the ownership rule above. The
+  `sandbox-extension-cache` task's gate ended with `pytest tests/unit/adapters/`
+  under a 600 s bound. That directory finishes in 104 s when the orchestrator
+  runs it, but the Codex sandbox cannot complete it — the same AnyIO
+  cross-thread portal hang another lane reported that day. The worker fixed the
+  actual bug (sandbox test files went from over ten minutes to 5.6 s), then
+  spent 38 more minutes and a retry chasing a gate failure that no code change
+  could clear, and the row reads ERROR as if the model had failed. The fix
+  itself passed the identical check first time when the orchestrator ran it
+  outside the sandbox. **Rule: before shipping a spec, ask whether the worker's
+  own environment can execute every stage of the gate. Broad regression sweeps
+  belong to the orchestrator, after the lane lands — not in the worker's gate.**
+  Discount that ERROR row for gpt-5.6-sol.
+- 2026-09-04 — **Worker self-reports can carry the real diagnosis; read them
+  before re-running.** The same lane's log said its first attempt had walked the
+  extension cache recursively, and that the retry replaced it with a
+  constant-size scan. That is why attempt 1 was slow and attempt 2 was not — a
+  detail no check output would have shown, and one that stopped the orchestrator
+  from wrongly blaming machine contention.
+- 2026-09-04 — **Orchestrator error, in the tool itself: never kill a worker on
+  a string match while it is still producing output.** Ringer's refusal
+  detector scanned a live worker's whole output every ten seconds and stopped
+  it on the first match. A healthy Codex lane grepping the web test suite hit
+  `web/src/lib/api/client.test.ts:39: { status: 401 }` — a test asserting that
+  the client surfaces a 401 — and was killed after 70 s and 143 KB of real
+  progress, then not retried, because refusals are correctly treated as not
+  worth retrying. Codex auth was fine; a direct probe answered in 2.5k tokens.
+  Fixed by changing the principle rather than the regex: the patterns now
+  EXPLAIN a worker that has already stopped or gone quiet, and never terminate
+  one that is still writing. The scan runs when the stall window closes, or
+  against the last 4 KB when a worker exits by itself, and `path:line:` lines
+  are dropped first so grep and ripgrep output cannot trigger it. The cost is
+  that a genuine refusal takes up to the stall window to be named instead of
+  one poll; that is the right trade. **Rule: a detector that acts on a worker's
+  own output must assume the worker's job is to read text that looks like
+  errors.**
+
+## Gemini 3.8 Flash (dial engine, `dial-gemini38/gemini-3.8-flash`)
+- 2026-09-05 code-fix (fabrica2 route cleanup, exploration lane): **FAILED the
+  audition on discipline, not capability.** The spec said "Never run a git
+  command that changes state: no commit, no add, no stash" in its house rules,
+  as every lane in that job did. It committed anyway — nine files, including
+  two documentation files the orchestrator owned and had not finished, under a
+  generic message with no trailer. The code content was sound (the tree it
+  captured verified at 342 tests), so this is a rule-following failure rather
+  than a coding one, and it is the more dangerous kind: a worker that ignores
+  one hard rule in the house rules cannot be trusted with the others. It then
+  went quiet and was stopped by the stall window after 1,222 s and 49,372
+  tokens, having produced 247 KB of output and no notes.md.
+- **Do not give this model a lane in a real repository** until it has passed a
+  read-only or worktree-isolated task. Worktrees mode would have contained the
+  damage: a commit inside a task worktree dies with the worktree.
+- Exploration worked exactly as intended here — a low-stakes deletion lane with
+  a strong executed check is where you find this out, not on the critical path.

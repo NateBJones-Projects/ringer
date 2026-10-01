@@ -39,6 +39,21 @@ class RingerCliTests(unittest.TestCase):
                 "ignore_term": ["-c", "trap '' TERM; echo $$ > worker.pid; while :; do sleep 1; done"],
                 "spec_shell": ["-c", "{spec}"],
                 "token_printer": ["-c", "printf done > out.txt; echo 'tokens used: 1,234'"],
+                # Emits a provider refusal, then keeps running as a real harness
+                # does while it retries the refused call behind the scenes.
+                "rate_limited": [
+                    "-c",
+                    "echo '{\"error\":{\"message\":\"Hit token rate limit\",\"code\":\"429\"}}'; sleep 60",
+                ],
+                # Says nothing at all and never exits: the hung-lane shape.
+                "silent_hang": ["-c", "sleep 60"],
+                # A healthy worker whose output QUOTES a 401, because it grepped
+                # a codebase that handles HTTP errors. It must be left alone.
+                "quotes_a_401": [
+                    "-c",
+                    "for i in 1 2 3; do echo 'src/api/client.test.ts:39:  { status: 401 }';"
+                    " sleep 0.2; done; printf done > out.txt; echo 'tokens used: 10'",
+                ],
             }
         )
 
@@ -258,6 +273,137 @@ class RingerCliTests(unittest.TestCase):
         rows = self.read_rows()
         self.assertEqual([row["verdict"] for row in rows], ["FAIL", "FAIL"])
         self.assertIn('missing_expect_files=["out.txt"]', rows[0]["notes"])
+
+    def test_a_worker_that_only_quotes_a_401_is_left_alone(self) -> None:
+        """Reading a file that mentions 401 is not the provider refusing us.
+
+        Regression, 2026-09-04: the refusal scan ran against a live worker's
+        whole output, so a lane that grepped a test suite containing
+        `{ status: 401 }` was stopped after 70 s and 143 KB of real progress,
+        and then not retried because refusals are not worth retrying.
+        """
+        manifest = self.write_manifest(
+            "quoting",
+            self.manifest(
+                "quoting",
+                {
+                    "key": "quoting",
+                    "engine": "quotes_a_401",
+                    "spec": "Grep a codebase that handles HTTP errors.",
+                    "expect_files": ["out.txt"],
+                    "timeout_s": 60,
+                    "stall_after_s": 10,
+                    "check": 'test "$(cat out.txt 2>/dev/null)" = done',
+                },
+            ),
+        )
+
+        result = self.run_ringer(manifest, timeout=40)
+
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual([row["verdict"] for row in self.read_rows()], ["PASS"])
+        log = (self.root / "work-quoting" / "quoting" / "worker.log").read_text(errors="replace")
+        self.assertNotIn("blocked", log)
+
+    def test_provider_refusal_stops_early_and_is_not_retried(self) -> None:
+        """A 429 is not a slow worker. Waiting out the timeout, twice, is waste."""
+        manifest = self.write_manifest(
+            "blocked",
+            self.manifest(
+                "blocked",
+                {
+                    "key": "blocked",
+                    "engine": "rate_limited",
+                    "spec": "Hit a rate-limited provider.",
+                    "expect_files": ["out.txt"],
+                    "timeout_s": 60,
+                    # The refusal is now read when the worker goes quiet, not
+                    # while it is still writing, so the window must be short
+                    # enough to close inside this test's own timeout.
+                    "stall_after_s": 3,
+                    "check": 'test "$(cat out.txt 2>/dev/null)" = done',
+                },
+            ),
+        )
+
+        result = self.run_ringer(manifest, timeout=40)
+
+        self.assertEqual(result.returncode, 1, result.stdout)
+        rows = self.read_rows()
+        # One attempt only, and it names the refusal instead of a timeout.
+        self.assertEqual([row["verdict"] for row in rows], ["BLOCKED"])
+        log = (self.root / "work-blocked" / "blocked" / "worker.log").read_text(errors="replace")
+        self.assertIn("stopped early", log)
+        self.assertIn("rate limited", log)
+        self.assertIn("not retrying", log)
+
+    def test_silent_worker_is_stopped_at_the_stall_window(self) -> None:
+        """A worker that says nothing is stuck; stop it in seconds, not an hour."""
+        manifest = self.write_manifest(
+            "stalled",
+            self.manifest(
+                "stalled",
+                {
+                    "key": "stalled",
+                    "engine": "silent_hang",
+                    "spec": "Say nothing.",
+                    "expect_files": ["out.txt"],
+                    "timeout_s": 60,
+                    "stall_after_s": 2,
+                    "check": 'test "$(cat out.txt 2>/dev/null)" = done',
+                },
+            ),
+        )
+
+        result = self.run_ringer(manifest, timeout=40)
+
+        self.assertEqual(result.returncode, 1, result.stdout)
+        rows = self.read_rows()
+        self.assertEqual([row["verdict"] for row in rows], ["STALLED"])
+        log = (self.root / "work-stalled" / "stalled" / "worker.log").read_text(errors="replace")
+        self.assertIn("produced nothing", log)
+        self.assertIn("not retrying", log)
+
+    def test_timeout_is_clamped_below_an_hour(self) -> None:
+        task = ringer.TaskSpec.from_obj(
+            {"key": "t", "spec": "s", "check": "true", "timeout_s": 7200}
+        )
+        self.assertEqual(task.timeout_s, ringer.MAX_TIMEOUT_S)
+        self.assertLess(ringer.MAX_TIMEOUT_S, 3600)
+        # The stall window never exceeds the task's own budget.
+        short = ringer.TaskSpec.from_obj(
+            {"key": "t", "spec": "s", "check": "true", "timeout_s": 5}
+        )
+        self.assertEqual(short.stall_after_s, 5)
+
+    def test_blocking_reason_names_the_refusal(self) -> None:
+        self.assertEqual(ringer.blocking_reason('{"code":"429"}'), "rate limited (429)")
+        self.assertIn("authentication", ringer.blocking_reason("Unknown api key") or "")
+        self.assertIn("permission", ringer.blocking_reason("HTTP 403 Forbidden") or "")
+        self.assertIsNone(ringer.blocking_reason("wrote 429 rows to the table"))
+        self.assertIsNone(ringer.blocking_reason("401 modules transformed"))
+        # Codex CLI's wording when the workspace runs dry. It exits 1, so
+        # without this the lane looks like an ordinary failure and is retried.
+        self.assertIn(
+            "billing",
+            ringer.blocking_reason("ERROR: Your workspace is out of credits. Add credits.")
+            or "",
+        )
+        # Quoted file content is what the worker READ, not what happened to it.
+        self.assertIsNone(
+            ringer.blocking_reason("src/api/client.test.ts:39:  { status: 401 }")
+        )
+        self.assertIsNone(
+            ringer.blocking_reason("web/src/lib/api/client.test.ts:12:  code: '429',")
+        )
+        # A real refusal still reads as one even alongside quoted lines.
+        self.assertIn(
+            "authentication",
+            ringer.blocking_reason(
+                "src/api/client.test.ts:39:  { status: 401 }\nerror: 401 unauthorized"
+            )
+            or "",
+        )
 
     def test_timeout_retries_once_and_reports_timeout(self) -> None:
         manifest = self.write_manifest(
@@ -632,6 +778,17 @@ class RingerCliTests(unittest.TestCase):
         self.assertTrue(timed_out)
         self.assertNotEqual(returncode, 0)
         self.assertIn("[ringer.py] check timed out after 1s", output)
+
+    def test_check_timeout_is_configurable_per_task(self) -> None:
+        """A check that executes a build or a test suite needs more than 60s."""
+        with tempfile.TemporaryDirectory(prefix="ringer-check-timeout-arg-") as tmp:
+            returncode, timed_out, output = asyncio.run(
+                ringer.Verifier._run_check("sleep 5", Path(tmp), 1)
+            )
+        self.assertTrue(timed_out)
+        self.assertNotEqual(returncode, 0)
+        self.assertIn("[ringer.py] check timed out after 1s", output)
+        self.assertIn("check_timeout_s", output)
 
     def test_token_count_parser_accepts_colon_and_newline_formats(self) -> None:
         self.assertEqual(ringer.parse_token_count("tokens used: 1,234", r"tokens\s+used\s*:?\s*([0-9][0-9,]*)"), 1234)

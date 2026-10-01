@@ -49,8 +49,8 @@ description: >-
    `--no-dashboard` except in automated tests or when the user explicitly
    asks.
 
-Ringer runs manifest tasks in parallel across cheap CLI workers (Codex,
-OpenCode/GLM, others via config) and verifies every task by **executing a
+Ringer runs manifest tasks in parallel across cheap CLI workers (OpenCode
+over DIAL, others via config) and verifies every task by **executing a
 check command** — exit 0 is the only PASS. Failed tasks are retried once
 with the check's actual failure output injected into the retry prompt. You —
 the orchestrating model — pay tokens only for specs, orchestration, and
@@ -235,9 +235,9 @@ from THEIR evidence.** Before the FIRST run of a job: read what's wired up
 and glance at `./ringer.py catalog --changes` for anything newly free or
 newly cheap. Then ask the user which model should do the typing — top 2–3
 options with the NUMBERS in the pitch and a recommendation, e.g.: *"GLM is
-6/6 first-try on persona work here at ~2¢/task — recommended. Codex is also
-100% but ~8x the tokens. And kimi went free on OpenRouter yesterday — want
-it auditioning one of the small tasks?"* Honor their pick via the per-task
+6/6 first-try on persona work here at ~2¢/task — recommended. Sonnet over
+DIAL is also 100% but ~8x the tokens. And kimi went free on OpenRouter
+yesterday — want it auditioning one of the small tasks?"* Honor their pick via the per-task
 `engine`/`model` fields; don't re-ask every round of the same job unless
 the mix isn't working. This is per-user by design: the scoreboard learns
 THIS user's workload — never import another machine's conclusions or
@@ -259,9 +259,8 @@ audition one rung up in adjacent types; repeated first-attempt failures end
 the audition — record the demotion in MODEL-NOTES so the next orchestrator
 doesn't re-run the experiment.
 
-**OpenCode is the harness; the model is a manifest field.** Unless a model
-ships its own first-class harness (Codex does), it runs through the
-`opencode` engine with the task's `"model"` field set to the OpenRouter
+**OpenCode is the harness; the model is a manifest field.** Every model runs
+through an OpenCode-backed engine with the task's `"model"` field set to the OpenRouter
 slug — e.g. `"engine": "opencode", "model": "openrouter/moonshotai/kimi-k2.7-code"`.
 This holds even when someone — including the user, in the heat of a run —
 says to "call kimi directly" or reach for the model's own CLI: the harness
@@ -275,8 +274,19 @@ model ran one model under three competitors' names).
 Engines are config blocks (`[engines.<name>]` in config.toml), selectable
 per task via the manifest `engine` field. Defaults are deliberate:
 
-- **codex** (default): strongest general worker. Use per-task `engine_args`
-  to set reasoning effort — spend it on hard tasks, not boilerplate.
+- **codex is PARKED (2026-09-07).** The Codex CLI is excluded from the
+  available workers. Never recommend it and never write `"engine": "codex"`.
+  Its config block is commented out in `~/.config/ringer/config.toml`, but
+  that is documentation, not enforcement: `ringer.py` hardcodes
+  `DEFAULT_ENGINE_NAME = "codex"` and still seeds a built-in codex engine, so
+  **every task in every manifest must name its `engine` explicitly** — an
+  omitted field silently runs on Codex. `ringer.py ask` likewise defaults to
+  codex, so always pass `--engine dial`. To un-park, uncomment the block and
+  delete this bullet.
+- **dial** (the standing pick): OpenCode against the DIAL gateway, via the
+  `engines/opencode-dial.sh` wrapper that gives each worker its own XDG tree.
+  `model_default` is `dial/dial-sonnet-45`. Source `~/.ringer/dial.env` before
+  the run or every worker 401s.
 - **opencode**: the universal lane — any OpenRouter model via the `model`
   field (engine `model_default` is GLM-5.2, the cheap-intelligence pick).
   Validate a model new to you with a trivial one-task manifest before

@@ -52,7 +52,87 @@ CONFIG_DIR_NAME = TOOL_NAME
 CONFIG_FILE_NAME = "config.toml"
 DEFAULT_ENGINE_NAME = "codex"
 DEFAULT_TIMEOUT_S = 900
+# A check that executes the artifact is the product, and some artifacts take
+# longer than a minute to prove: a repo task whose check runs a type checker
+# and a test suite needs minutes, not seconds. This is the DEFAULT; a task may
+# raise it with `check_timeout_s`. Keep the default low so a hung check still
+# fails fast for the tasks that do not opt in.
 CHECK_TIMEOUT_S = 60
+
+# A worker may not run for an hour. Nothing a single task should do takes that
+# long, and a task that hits the ceiling has almost always stopped making
+# progress much earlier — the wait just hides it. Manifests are clamped to this.
+MAX_TIMEOUT_S = 3300
+
+# If a worker writes nothing for this long, it is not thinking, it is stuck:
+# a provider retrying a refused call, a prompt for input that will never come,
+# a hung network read. Stop it and report, rather than paying the full timeout.
+DEFAULT_STALL_AFTER_S = 180
+
+# How often the supervisor looks at a running worker.
+WORKER_POLL_S = 10
+
+# How much of a finished worker's output to read when deciding whether the
+# provider refused it. A fatal error is the last thing printed; the rest of a
+# long log is the worker quoting files it read.
+BLOCKING_TAIL_CHARS = 4000
+
+# Provider refusals that no amount of waiting fixes. Matched against the
+# worker's own output, so the reason reaches the operator instead of a
+# timeout that looks like a slow model.
+# Each pattern needs error context, not a bare number: a worker that writes
+# "429 rows" is doing its job, and a check that stops it is worse than the wait.
+_HTTP = r"""(?:https?\s+)?(?:status(?:_?code)?|code|error)["']?\s*[:=]\s*["']?{c}\b|http[/ ]?{c}\b|\b{c}\s+(?:too\s+many|unauthorized|forbidden|payment)"""
+BLOCKING_PATTERNS: tuple[tuple[str, str], ...] = (
+    (_HTTP.format(c="429") + r"|too many requests", "rate limited (429)"),
+    (r"rate limit|quota exceeded|exceeded your [a-z ]{0,30}limit", "rate or quota limit"),
+    (
+        _HTTP.format(c="401") + r"|invalid api key|unknown api key|invalid_api_key",
+        "authentication rejected (401)",
+    ),
+    (_HTTP.format(c="403") + r"|permission denied", "permission denied (403)"),
+    (
+        _HTTP.format(c="402")
+        + r"|insufficient_quota|payment required"
+        # Codex CLI says this and then exits 1. Without it the lane reads as a
+        # plain failure and gets retried into a wall it can never pass
+        # (2026-09-04: 62k tokens on attempt 1, then a pointless attempt 2).
+        + r"|out of credits|add credits|insufficient (?:credit|balance|funds)"
+        + r"|billing (?:hard )?limit",
+        "billing or quota",
+    ),
+)
+_BLOCKING_RES: tuple[tuple[re.Pattern[str], str], ...] = tuple(
+    (re.compile(pattern, re.IGNORECASE), reason) for pattern, reason in BLOCKING_PATTERNS
+)
+
+
+# Lines a worker produced by READING the repository, not by failing. `grep -n`
+# and `rg -n` prefix every hit with `path:line:`, and a codebase that handles
+# HTTP errors contains the very strings these patterns look for — a test
+# asserting `{ status: 401 }` is not the provider rejecting our key. Dropping
+# these lines before the scan removes the whole false-positive class.
+_QUOTED_LINE_RE = re.compile(r"^[^\s:]+:\d+:")
+
+
+def _worker_diagnostics(text: str) -> str:
+    """The worker's own words, with quoted file content removed."""
+    return "\n".join(line for line in text.splitlines() if not _QUOTED_LINE_RE.match(line))
+
+
+def blocking_reason(text: str) -> str | None:
+    """Name the provider refusal in a worker's output, if there is one.
+
+    Only ever used to EXPLAIN a worker that has already stopped or gone quiet.
+    A worker that is still producing output is working, whatever its output
+    happens to mention, and must not be stopped on the strength of a string
+    match — that cost a healthy lane 143 KB of progress on 2026-09-04.
+    """
+    diagnostics = _worker_diagnostics(text)
+    for pattern, reason in _BLOCKING_RES:
+        if pattern.search(diagnostics):
+            return reason
+    return None
 DEFAULT_DASHBOARD_PORT_BASE = 8787
 DEFAULT_HUD_PORT = 8700
 DEFAULT_CATALOG_SOURCE = "https://openrouter.ai/api/v1/models"
@@ -1729,6 +1809,8 @@ class TaskSpec:
     engine: str = DEFAULT_ENGINE_NAME
     expect_files: tuple[str, ...] = ()
     timeout_s: int = DEFAULT_TIMEOUT_S
+    check_timeout_s: int = CHECK_TIMEOUT_S
+    stall_after_s: int = DEFAULT_STALL_AFTER_S
     max_attempts: int = 2
     redact_spec: bool = False
     full_access: bool = False
@@ -1766,6 +1848,23 @@ class TaskSpec:
         timeout_s = int(obj.get("timeout_s", DEFAULT_TIMEOUT_S))
         if timeout_s <= 0:
             raise ValueError(f"task {key}: timeout_s must be positive")
+        if timeout_s > MAX_TIMEOUT_S:
+            # Clamped, not rejected: a manifest asking for two hours still runs,
+            # it just cannot hold a lane open past the ceiling.
+            print(
+                f"ringer: task {key}: timeout_s {timeout_s} exceeds the {MAX_TIMEOUT_S}s "
+                f"ceiling; clamped. Split the task instead of waiting longer.",
+                file=sys.stderr,
+            )
+            timeout_s = MAX_TIMEOUT_S
+        stall_after_s = int(obj.get("stall_after_s", DEFAULT_STALL_AFTER_S))
+        if stall_after_s <= 0:
+            raise ValueError(f"task {key}: stall_after_s must be positive")
+        if stall_after_s > timeout_s:
+            stall_after_s = timeout_s
+        check_timeout_s = int(obj.get("check_timeout_s", CHECK_TIMEOUT_S))
+        if check_timeout_s <= 0:
+            raise ValueError(f"task {key}: check_timeout_s must be positive")
         # Strict on the fields this release introduces: `1.5` silently
         # truncating to 1 would remove the retry without saying so, and a
         # string is never what the author meant.
@@ -1797,6 +1896,8 @@ class TaskSpec:
             engine=engine,
             expect_files=tuple(str(item) for item in expect_files),
             timeout_s=timeout_s,
+            check_timeout_s=check_timeout_s,
+            stall_after_s=stall_after_s,
             max_attempts=max_attempts,
             redact_spec=require_bool(obj.get("redact_spec", False), key, "redact_spec"),
             full_access=bool(obj.get("full_access", False)),
@@ -2205,6 +2306,14 @@ class WorkerResult:
     tokens: int | None
     error: str | None = None
     reported_model: str | None = None
+    # Why the supervisor stopped this worker early: "stalled" when it wrote
+    # nothing for stall_after_s, or "blocked: <reason>" when the provider
+    # refused the call (rate limit, auth, permission). None means it ran to
+    # its own end or to the task timeout.
+    stop_reason: str | None = None
+    # Bytes the worker ever emitted. Zero means it produced nothing at all,
+    # which is never worth a retry.
+    progress_bytes: int = 0
 
 
 @dataclass(frozen=True)
@@ -8703,7 +8812,9 @@ def run_models_command(config: AppConfig, args: argparse.Namespace) -> int:
 
 class Verifier:
     async def verify(self, task: TaskSpec, taskdir: Path) -> VerifyResult:
-        check_returncode, check_timed_out, output = await self._run_check(task.check, taskdir)
+        check_returncode, check_timed_out, output = await self._run_check(
+            task.check, taskdir, task.check_timeout_s
+        )
         missing_files = tuple(
             rel for rel in task.expect_files if not self._is_nonempty_file(self._expect_file_path(taskdir, rel))
         )
@@ -8741,7 +8852,14 @@ class Verifier:
         return candidate if candidate.is_absolute() else taskdir / candidate
 
     @staticmethod
-    async def _run_check(command: str, cwd: Path) -> tuple[int | None, bool, str]:
+    async def _run_check(
+        command: str, cwd: Path, timeout_s: int | None = None
+    ) -> tuple[int | None, bool, str]:
+        # Resolved here, not in the signature default, so the module constant
+        # stays authoritative for callers that do not pass one and for tests
+        # that patch it.
+        if timeout_s is None:
+            timeout_s = CHECK_TIMEOUT_S
         proc = await asyncio.create_subprocess_shell(
             command,
             cwd=str(cwd),
@@ -8752,7 +8870,7 @@ class Verifier:
         )
         timed_out = False
         try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=CHECK_TIMEOUT_S)
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
         except asyncio.TimeoutError:
             timed_out = True
             terminate_process_group(proc)
@@ -8763,7 +8881,10 @@ class Verifier:
                 stdout, _ = await proc.communicate()
         output = stdout.decode("utf-8", errors="replace") if stdout else ""
         if timed_out:
-            output += f"\n[ringer.py] check timed out after {CHECK_TIMEOUT_S}s\n"
+            output += (
+                f"\n[ringer.py] check timed out after {timeout_s}s"
+                " (raise it with the task's check_timeout_s)\n"
+            )
         return proc.returncode, timed_out, output
 
 
@@ -8898,13 +9019,34 @@ class RingerRunner:
                         runtime.ended_at_monotonic = time.monotonic()
                     await self._cleanup_worktree_on_pass(runtime)
                     return
-                if attempt < max_attempts and verdict in {"FAIL", "TIMEOUT"}:
+                # A retry only helps when the worker actually tried and the
+                # check told it something useful. Two cases are worth nothing:
+                # the provider refused the call, which the next attempt will hit
+                # again, and a worker that emitted nothing at all, which leaves
+                # the retry prompt with no failure to describe. Both burn a full
+                # timeout to arrive back here.
+                # Narrow on purpose. A worker that exited on its own still gets
+                # its retry, even quietly, because it may have written files
+                # without saying anything. Only a worker the supervisor had to
+                # stop is denied one: a refusal repeats, and a stalled worker
+                # that never emitted a byte leaves the retry prompt nothing to
+                # describe.
+                stopped = worker.stop_reason or ""
+                retry_pointless = stopped.startswith("blocked") or (
+                    stopped.startswith("stalled") and worker.progress_bytes == 0
+                )
+                if attempt < max_attempts and verdict in {"FAIL", "TIMEOUT"} and not retry_pointless:
                     failure_context = build_failure_context(runtime.log_path, verify.raw_output_excerpt)
                     current_spec = (
                         f"{runtime.task.spec}\n\n"
                         f"Previous attempt failed: {failure_context}. Fix it."
                     )
                     continue
+                if retry_pointless and attempt < max_attempts:
+                    append_text(
+                        runtime.log_path,
+                        f"[ringer.py] not retrying: {worker.stop_reason or 'the worker produced no output'}\n",
+                    )
                 with self.lock:
                     runtime.status = "fail"
                     runtime.final_verdict = verdict
@@ -9204,10 +9346,62 @@ class RingerRunner:
             self.active_processes[proc.pid] = proc
             reader = asyncio.create_task(self._tee_stream(proc, log_fh, capture))
             timed_out = False
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=runtime.task.timeout_s)
-            except asyncio.TimeoutError:
-                timed_out = True
+            stop_reason: str | None = None
+            # Supervise rather than sleep. A worker that stops writing, or whose
+            # provider refuses the call, is stopped in minutes instead of at the
+            # task timeout, and the operator is told which of the two happened.
+            deadline = time.monotonic() + runtime.task.timeout_s
+            stall_after = runtime.task.stall_after_s
+            last_bytes = capture.total_bytes
+            last_progress_at = time.monotonic()
+            exited_on_its_own = False
+            while True:
+                # Never wait past the next thing that could stop this worker,
+                # or a one-second timeout would not be honoured for ten.
+                now = time.monotonic()
+                slice_s = min(
+                    WORKER_POLL_S,
+                    max(deadline - now, 0.0),
+                    max(last_progress_at + stall_after - now, 0.0),
+                )
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=max(slice_s, 0.05))
+                    exited_on_its_own = True
+                    break
+                except asyncio.TimeoutError:
+                    pass
+                now = time.monotonic()
+                if capture.total_bytes > last_bytes:
+                    last_bytes = capture.total_bytes
+                    last_progress_at = now
+                # Deadline first: when both windows close together, the task
+                # timeout is the more accurate thing to report.
+                if now >= deadline:
+                    timed_out = True
+                    break
+                if now - last_progress_at >= stall_after:
+                    # A worker that has gone quiet is either refused or stuck,
+                    # and only now is its output worth reading for a refusal.
+                    # Scanning while it still writes stops healthy workers over
+                    # strings they merely read (see blocking_reason).
+                    quiet = int(now - last_progress_at)
+                    reason = blocking_reason(capture.text())
+                    if reason is not None:
+                        stop_reason = f"blocked: {reason}"
+                    elif capture.total_bytes:
+                        stop_reason = f"stalled: no output for {quiet}s"
+                    else:
+                        stop_reason = f"stalled: produced nothing in {quiet}s"
+                    break
+            if exited_on_its_own and stop_reason is None:
+                # The harness may have given up on a refusal by itself. Read
+                # only the tail: a fatal provider error is the last thing a
+                # worker prints, while the body of a long log is the worker
+                # quoting the repository back at us.
+                reason = blocking_reason(capture.text()[-BLOCKING_TAIL_CHARS:])
+                if reason is not None:
+                    stop_reason = f"blocked: {reason}"
+            if proc.returncode is None:
                 terminate_process_group(proc)
                 try:
                     await asyncio.wait_for(proc.wait(), timeout=5)
@@ -9226,12 +9420,22 @@ class RingerRunner:
         reported_model = parse_reported_model(output_tail, engine.model_report_regex)
         if timed_out:
             append_text(log_path, f"\n[ringer.py] worker timed out after {runtime.task.timeout_s}s\n")
+        if stop_reason is not None:
+            append_text(
+                log_path,
+                f"\n[ringer.py] worker {'ended' if exited_on_its_own else 'stopped early'}"
+                f" — {stop_reason}"
+                f" (after {int(time.monotonic() - (deadline - runtime.task.timeout_s))}s,"
+                f" {capture.total_bytes} bytes of output)\n",
+            )
         append_text(log_path, f"[ringer.py] attempt {attempt} exited rc={proc.returncode}\n")
         return WorkerResult(
             returncode=proc.returncode,
             timed_out=timed_out,
             tokens=tokens,
             reported_model=reported_model,
+            stop_reason=stop_reason,
+            progress_bytes=capture.total_bytes,
         )
 
     async def _tee_stream(
@@ -9427,9 +9631,13 @@ class RollingBytes:
     def __init__(self, max_bytes: int) -> None:
         self.max_bytes = max_bytes
         self.data = bytearray()
+        # Everything ever written, not just what the window still holds. The
+        # supervisor watches this to tell a working worker from a stalled one.
+        self.total_bytes = 0
 
     def extend(self, chunk: bytes) -> None:
         self.data.extend(chunk)
+        self.total_bytes += len(chunk)
         overflow = len(self.data) - self.max_bytes
         if overflow > 0:
             del self.data[:overflow]
@@ -9452,6 +9660,12 @@ class AsyncFileCloser:
 def verdict_for(worker: WorkerResult, verify: VerifyResult) -> str:
     if worker.error:
         return "ERROR"
+    # A refused provider call is not a slow worker. Naming it separately keeps
+    # the scoreboard honest: a model that never got to answer has not failed.
+    if (worker.stop_reason or "").startswith("blocked"):
+        return "BLOCKED"
+    if (worker.stop_reason or "").startswith("stalled"):
+        return "STALLED"
     if worker.timed_out or verify.check_timed_out:
         return "TIMEOUT"
     if verify.ok:

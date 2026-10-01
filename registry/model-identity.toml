@@ -98,3 +98,122 @@ lab = "Meta"
 confidence = "verified"
 source = "manifest model field; OpenRouter slug meta-llama/llama-3.3-70b-instruct:free"
 last_verified = 2026-07-10
+
+# ─── EPAM DIAL lane ──────────────────────────────────────────────────────
+# Local site entry, not upstream: these routes reach EPAM's internal DIAL
+# gateway (https://ai-proxy.lab.epam.com) and mean nothing on another machine.
+#
+# HARNESS is OpenCode, not "DIAL". DIAL is the ACCESS path — an Azure-style
+# gateway that routes on the deployment in the URL. It is never a lab and
+# never a model. The engine is named `dial` in config.toml; that name must
+# not leak into the Model or Lab column.
+#
+# WHY EVERY MODEL KEY IS AN ALIAS. The key is the manifest/config model slug,
+# and these slugs deliberately avoid the strings "claude" and "anthropic".
+# OpenCode stamps Anthropic prompt-caching blocks whenever a model id matches
+# those; against an OpenAI-compatible endpoint that emits a raw
+# `cache_control` field, which DIAL rejects with HTTP 400. DIAL ignores the
+# body's model name (it routes on the URL path), so the rename is free and
+# the lineage stays fully established — hence a real display name here rather
+# than an "(alias)" marker. Same pattern as engines.grok's `grok-build` key,
+# which is a CLI name displaying as Grok 4.5.
+#
+# Each provider block in ~/.config/opencode/opencode.json pins exactly one
+# DIAL deployment in its baseURL; that deployment id is the evidence below.
+# Deployment ids confirmed 2026-09-02 against
+# GET https://ai-proxy.lab.epam.com/openai/deployments (143 entitled).
+[engines.dial]
+harness = "OpenCode"
+access = "EPAM DIAL"
+default_model_key = "dial/dial-sonnet-45"
+
+[engines.dial.models."dial/dial-sonnet-45"]
+display = "Claude Sonnet 4.5"
+lab = "Anthropic"
+confidence = "verified"
+source = "DIAL deployment claude-sonnet-4-5@20250929 pinned in the opencode provider baseURL; lab per https://www.anthropic.com/claude"
+last_verified = 2026-09-02
+
+[engines.dial.models."dial-haiku/haiku-45"]
+display = "Claude Haiku 4.5"
+lab = "Anthropic"
+confidence = "verified"
+source = "DIAL deployment claude-haiku-4-5@20251001 pinned in the opencode provider baseURL; lab per https://www.anthropic.com/claude"
+last_verified = 2026-09-02
+
+[engines.dial.models."dial-sonnet5/sonnet-5"]
+display = "Claude Sonnet 5"
+lab = "Anthropic"
+confidence = "verified"
+source = "DIAL deployment claude-sonnet-5@default pinned in the opencode provider baseURL; lab per https://www.anthropic.com/claude"
+last_verified = 2026-09-02
+
+# WITHDRAWN 2026-09-04. The opencode provider `dial-codex` was removed, so this
+# model can no longer be selected. The deployment answers HTTP 429 to a direct
+# call, and OpenCode retries a 429 without emitting an event, so a task on this
+# lane burns its whole timeout with an empty log. Three logged tasks failed that
+# way. The entry stays so those rows keep their identity on the scoreboard.
+# To restore it: confirm a direct call returns 200, then re-add the provider
+# block to ~/.config/opencode/opencode.json.
+[engines.dial.models."dial-codex/gpt-5.2-codex"]
+display = "GPT-5.2 Codex (withdrawn: rate limited)"
+lab = "OpenAI"
+confidence = "verified"
+source = "DIAL deployment gpt-5.2-codex-2026-01-14; withdrawn 2026-09-04 after HTTP 429 on a direct call and three timed-out tasks; lab per https://openai.com"
+last_verified = 2026-09-04
+
+[engines.dial.models."dial-gemini/gemini-3.5-flash"]
+display = "Gemini 3.5 Flash"
+lab = "Google"
+confidence = "verified"
+source = "DIAL deployment gemini-3.5-flash pinned in the opencode provider baseURL; lab per https://deepmind.google/models/gemini/"
+last_verified = 2026-09-02
+
+[engines.dial.models."dial-opus5/opus-5"]
+display = "Claude Opus 5"
+lab = "Anthropic"
+confidence = "verified"
+source = "DIAL deployment claude-opus-5@default pinned in the opencode provider baseURL; listed by GET /openai/deployments on 2026-09-04"
+last_verified = 2026-09-04
+
+[engines.dial.models."dial-sonnet46/sonnet-46"]
+display = "Claude Sonnet 4.6"
+lab = "Anthropic"
+confidence = "verified"
+source = "DIAL deployment claude-sonnet-4-6@default pinned in the opencode provider baseURL; listed by GET /openai/deployments on 2026-09-04"
+last_verified = 2026-09-04
+
+[engines.dial.models."dial-sol/gpt-5.6-sol"]
+display = "GPT-5.6 Sol"
+lab = "OpenAI"
+confidence = "verified"
+source = "DIAL deployment gpt-5.6-sol-2026-07-09 pinned in the opencode provider baseURL; listed by GET /openai/deployments on 2026-09-04"
+last_verified = 2026-09-04
+
+[engines.dial.models."dial-codex53/gpt-5.3-codex"]
+display = "GPT-5.3 Codex"
+lab = "OpenAI"
+confidence = "verified"
+source = "DIAL deployment gpt-5.3-codex-2026-02-24 pinned in the opencode provider baseURL; listed by GET /openai/deployments on 2026-09-04"
+last_verified = 2026-09-04
+
+[engines.dial.models."dial-glm5/glm-5"]
+display = "GLM-5"
+lab = "Z.ai"
+confidence = "verified"
+source = "DIAL deployment zai.glm-5 pinned in the opencode provider baseURL; listed by GET /openai/deployments on 2026-09-04"
+last_verified = 2026-09-04
+
+[engines.dial.models."dial-qwen/qwen3-coder"]
+display = "Qwen3 Coder 480B"
+lab = "Alibaba"
+confidence = "verified"
+source = "DIAL deployment qwen.qwen3-coder-480b-a35b-v1:0 pinned in the opencode provider baseURL; listed by GET /openai/deployments on 2026-09-04"
+last_verified = 2026-09-04
+
+[engines.dial.models."dial-gemini38/gemini-3.8-flash"]
+display = "Gemini 3.8 Flash"
+lab = "Google"
+confidence = "verified"
+source = "DIAL deployment gemini-3.8-flash pinned in the opencode provider baseURL; listed by GET /openai/deployments on 2026-09-04"
+last_verified = 2026-09-04

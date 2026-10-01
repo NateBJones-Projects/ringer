@@ -1,0 +1,20 @@
+{
+  "run_name": "lane-test-dial",
+  "workdir": "/tmp/ringer-lane-test-dial",
+  "max_parallel": 1,
+  "worktrees": false,
+  "repo": null,
+  "tasks": [
+    {
+      "key": "greet",
+      "engine": "dial",
+      "task_type": "probe",
+      "spec": "Create a file named greet.py in the current working directory.\n\nIt must define a function greet(name) that returns the string 'Hello, <name>!' where <name> is the argument.\n\nIt must also run as a script: when executed directly with `python3 greet.py`, it prints exactly `Hello, Ringer!` and nothing else.\n\nUse only the Python standard library. Do not create any other files. Do not print anything on import.",
+      "check": "out=$(python3 greet.py 2>&1); rc=$?; if [ $rc -ne 0 ]; then echo \"FAIL: 'python3 greet.py' exited $rc. Output was:\"; echo \"$out\"; exit 1; fi; if [ \"$out\" != \"Hello, Ringer!\" ]; then echo \"FAIL: expected stdout 'Hello, Ringer!' but got '$out'\"; exit 1; fi; python3 -c \"import greet; r = greet.greet('World'); assert r == 'Hello, World!', 'FAIL: greet(\\\"World\\\") returned %r, expected \\\"Hello, World!\\\"' % r; print('OK: script output and greet() both correct')\" || exit 1",
+      "expect_files": ["greet.py"],
+      "max_attempts": 2,
+      "timeout_s": 300,
+      "verified": "greet.py runs as a script printing exactly 'Hello, Ringer!' and its greet() function returns the right string for a different name too."
+    }
+  ]
+}
