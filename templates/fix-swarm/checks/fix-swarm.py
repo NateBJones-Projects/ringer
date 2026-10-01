@@ -52,6 +52,38 @@ def run_git(args: list[str]) -> subprocess.CompletedProcess[str]:
     )
 
 
+def attempt_patch_path(canonical_patch: Path) -> Path:
+    suffix = canonical_patch.suffix
+    stem = canonical_patch.name[: -len(suffix)] if suffix else canonical_patch.name
+    pattern = re.compile(rf"^{re.escape(stem)}\.attempt([1-9][0-9]*){re.escape(suffix)}$")
+    attempts: list[int] = []
+    if canonical_patch.parent.exists():
+        for sibling in canonical_patch.parent.iterdir():
+            match = pattern.match(sibling.name)
+            if match and sibling.is_file():
+                attempts.append(int(match.group(1)))
+    return canonical_patch.with_name(f"{stem}.attempt{max(attempts, default=0) + 1}{suffix}")
+
+
+def write_patch_archives(canonical_patch: Path, patch_text: str) -> list[str]:
+    failures: list[str] = []
+    attempt_patch = attempt_patch_path(canonical_patch)
+    try:
+        canonical_patch.parent.mkdir(parents=True, exist_ok=True)
+        with attempt_patch.open("x", encoding="utf-8") as fh:
+            fh.write(patch_text)
+    except FileExistsError:
+        failures.append(fail("attempt_patch_exists", f"{attempt_patch} already exists"))
+    except OSError as exc:
+        failures.append(fail("attempt_patch_failed", f"could not write {attempt_patch}: {exc}"))
+
+    try:
+        canonical_patch.write_text(patch_text, encoding="utf-8")
+    except OSError as exc:
+        failures.append(fail("patch_write_failed", f"could not write {canonical_patch}: {exc}"))
+    return failures
+
+
 def parse_owned_files(raw: str) -> list[str]:
     normalized = raw.replace("\\n", "\n").replace(";", "\n").replace(",", "\n")
     paths: list[str] = []
@@ -153,8 +185,7 @@ def main() -> int:
     if patch_result.returncode != 0:
         failures.append(fail("git_diff_failed", output_tail(patch_result.stdout)))
     elif patch_result.stdout.strip() and not has_placeholder(str(args.patch)):
-        args.patch.parent.mkdir(parents=True, exist_ok=True)
-        args.patch.write_text(patch_result.stdout, encoding="utf-8")
+        failures.extend(write_patch_archives(args.patch, patch_result.stdout))
 
     if not has_placeholder(str(args.patch)) and (not args.patch.is_file() or args.patch.stat().st_size == 0):
         failures.append(fail("patch_not_written", f"{args.patch} was not written or is empty"))

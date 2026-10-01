@@ -12,7 +12,7 @@
       "check": "python3 '{{CHECK_SCRIPT_PATH — absolute path to templates/fix-swarm/checks/fix-swarm.py}}' --verify-command '{{BUILD_OR_TEST_COMMAND — exact command that proves the fix and prints useful errors}}' --patch '{{WORKDIR}}/{{FIX_KEY}}.patch' --summary fix-summary.md --exported-summary '{{WORKDIR}}/{{FIX_KEY}}.summary.md' --owned-files '{{OWNED_FILES — every file or directory this task may modify, comma or newline separated}}'",
       "expect_files": [],
       "timeout_s": 1800,
-      "verified": "the validator ran the requested build or test command, exported a non-empty patch, and confirmed the patch only changes declared owned files"
+      "verified": "the validator ran the requested build or test command, exported a non-empty canonical patch plus an attempt-specific patch archive, and confirmed the patch only changes declared owned files"
     }
   ]
 }
