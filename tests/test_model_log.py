@@ -118,6 +118,8 @@ class ModelLogTests(unittest.TestCase):
             self.assertEqual("openrouter/z-ai/glm-5.2", payload["model"])
             self.assertEqual("code-feature", payload["task_type"])
             self.assertIs(payload["retry"], True)
+            self.assertIs(payload["scoreable"], True)
+            self.assertIsNone(payload["failure_kind"])
             self.assertIn("model=openrouter/z-ai/glm-5.2", payload["notes"])
             self.assertIn("task_type=code-feature", payload["notes"])
             self.assertIn("retry=true", payload["notes"])

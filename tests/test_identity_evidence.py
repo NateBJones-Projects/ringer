@@ -161,35 +161,36 @@ access = "OpenRouter API"
             runner._log_attempt(runtime, runtime.task.spec, False, worker, verify, "PASS", 10)
         return [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
 
-    def test_schema_v3_migration_preserves_v2_attempt(self) -> None:
+    def test_schema_v4_migration_preserves_v3_attempt(self) -> None:
         db = self.root / "ringer.db"
         with sqlite3.connect(db) as conn:
             conn.executescript(
                 """
-                PRAGMA user_version = 2;
+                PRAGMA user_version = 3;
                 CREATE TABLE schema_version(version INTEGER NOT NULL);
-                INSERT INTO schema_version VALUES (2);
+                INSERT INTO schema_version VALUES (3);
                 CREATE TABLE attempts (
                     id INTEGER PRIMARY KEY, run_id TEXT, task_key TEXT, logged_at TEXT,
-                    engine TEXT, model TEXT, reasoning_effort TEXT, task_type TEXT,
+                    engine TEXT, model TEXT, reported_model TEXT, expected_model TEXT,
+                    reasoning_effort TEXT, task_type TEXT,
                     retry INTEGER, verdict TEXT, duration_ms INTEGER, worker_tokens INTEGER,
                     orchestrator TEXT
                 );
-                INSERT INTO attempts(model, verdict, reasoning_effort)
-                VALUES ('gpt-5.6-sol', 'PASS', 'high');
+                INSERT INTO attempts(model, reported_model, expected_model, verdict, reasoning_effort)
+                VALUES ('gpt-5.6-sol', 'gpt-5.6-sol', 'gpt-5.6-sol', 'PASS', 'high');
                 """
             )
             create_read_model_schema(conn)
             columns = {row[1] for row in conn.execute("PRAGMA table_info(attempts)")}
-            self.assertTrue({"reported_model", "expected_model"}.issubset(columns))
+            self.assertTrue({"reported_model", "expected_model", "scoreable", "failure_kind"}.issubset(columns))
             self.assertEqual(
-                ("gpt-5.6-sol", "PASS", "high", None, None),
+                ("gpt-5.6-sol", "PASS", "high", "gpt-5.6-sol", "gpt-5.6-sol"),
                 conn.execute(
                     "SELECT model, verdict, reasoning_effort, reported_model, expected_model FROM attempts"
                 ).fetchone(),
             )
-            self.assertEqual(3, conn.execute("PRAGMA user_version").fetchone()[0])
-            self.assertEqual(3, conn.execute("SELECT version FROM schema_version").fetchone()[0])
+            self.assertEqual(4, conn.execute("PRAGMA user_version").fetchone()[0])
+            self.assertEqual(4, conn.execute("SELECT version FROM schema_version").fetchone()[0])
             conn.execute(
                 """
                 INSERT INTO attempts(model, reported_model, expected_model, verdict)

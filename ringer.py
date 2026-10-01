@@ -737,6 +737,7 @@ class EngineConfig:
     sandbox_args: tuple[str, ...]
     token_regex: str | None = DEFAULT_TOKEN_REGEX
     model_report_regex: str | None = None
+    result_parser: str | None = None
     # Fills the {model} placeholder in args_template when a task does not set
     # its own "model" — this is what makes a harness engine (OpenCode) model
     # agnostic instead of hard-coding one model into the command line.
@@ -1698,6 +1699,11 @@ def load_engines(raw: Any) -> dict[str, EngineConfig]:
         model_default = str(
             section.get("model_default", base.model_default if base else "")
         ).strip()
+        result_parser = optional_string(section.get("result_parser"))
+        if result_parser not in {None, "claude-code-json"}:
+            raise ValueError(
+                f"engines.{clean_name}.result_parser must be 'claude-code-json'"
+            )
         engines[clean_name] = EngineConfig(
             name=clean_name,
             bin=bin_path,
@@ -1706,6 +1712,7 @@ def load_engines(raw: Any) -> dict[str, EngineConfig]:
             sandbox_args=sandbox_args,
             token_regex=token_regex,
             model_report_regex=model_report_regex,
+            result_parser=result_parser,
             model_default=model_default,
         )
     return engines
@@ -2205,6 +2212,8 @@ class WorkerResult:
     tokens: int | None
     error: str | None = None
     reported_model: str | None = None
+    scoreable: bool = True
+    failure_kind: str | None = None
 
 
 @dataclass(frozen=True)
@@ -5747,7 +5756,7 @@ class PersistentHudServer:
         url = f"http://127.0.0.1:{self.port}"
         if self.open_viewer:
             with contextlib.suppress(Exception):
-                webbrowser.open(url)
+                open_in_browser(url)
         print(f"Ringside: {url}", flush=True)
         return self.port
 
@@ -6133,6 +6142,7 @@ def aggregate_model_log_rows(
     task_type: str | None = None,
     model: str | None = None,
 ) -> list[dict[str, Any]]:
+    rows = [row for row in rows if row.get("scoreable") is not False]
     groups: dict[tuple[str, str, str, str, bool], dict[str, Any]] = {}
     effort_keys = model_reasoning_effort_keys(rows)
     for task_rows in group_model_log_tasks(rows):
@@ -6694,7 +6704,7 @@ def create_read_model_schema(conn: Any) -> None:
         row = conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
         if row is not None:
             schema_version = int(row[0])
-    needs_stamp = user_version != 3 or schema_version != 3
+    needs_stamp = user_version != 4 or schema_version != 4
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS schema_version (
@@ -6713,6 +6723,8 @@ def create_read_model_schema(conn: Any) -> None:
             reasoning_effort TEXT,
             task_type TEXT,
             retry INTEGER,
+            scoreable INTEGER,
+            failure_kind TEXT,
             verdict TEXT,
             duration_ms INTEGER,
             worker_tokens INTEGER,
@@ -6773,6 +6785,10 @@ def create_read_model_schema(conn: Any) -> None:
         conn.execute("ALTER TABLE attempts ADD COLUMN reported_model TEXT")
     if not read_model_column_exists(conn, "attempts", "expected_model"):
         conn.execute("ALTER TABLE attempts ADD COLUMN expected_model TEXT")
+    if not read_model_column_exists(conn, "attempts", "scoreable"):
+        conn.execute("ALTER TABLE attempts ADD COLUMN scoreable INTEGER")
+    if not read_model_column_exists(conn, "attempts", "failure_kind"):
+        conn.execute("ALTER TABLE attempts ADD COLUMN failure_kind TEXT")
     if not read_model_column_exists(conn, "identity", "lab"):
         conn.execute("ALTER TABLE identity ADD COLUMN lab TEXT")
     if not read_model_column_exists(conn, "identity", "alias"):
@@ -6783,8 +6799,8 @@ def create_read_model_schema(conn: Any) -> None:
         conn.executescript(
             """
             DELETE FROM schema_version;
-            INSERT INTO schema_version(version) VALUES (3);
-            PRAGMA user_version = 3;
+            INSERT INTO schema_version(version) VALUES (4);
+            PRAGMA user_version = 4;
             """
         )
 
@@ -6875,6 +6891,8 @@ def insert_attempt_rows(conn: Any, rows: list[dict[str, Any]]) -> int:
                 model_log_row_reasoning_effort(row),
                 model_log_text(row.get("task_type")),
                 1 if model_log_row_is_retry(row) else 0,
+                0 if row.get("scoreable") is False else 1,
+                model_log_text(row.get("failure_kind")) or None,
                 model_log_text(row.get("verdict")),
                 model_log_int(row.get("duration_ms")),
                 model_log_int(row.get("worker_tokens")),
@@ -6887,9 +6905,9 @@ def insert_attempt_rows(conn: Any, rows: list[dict[str, Any]]) -> int:
             INSERT INTO attempts (
                 run_id, task_key, logged_at, engine, model, reported_model, expected_model,
                 reasoning_effort, task_type, retry,
-                verdict, duration_ms, worker_tokens, orchestrator
+                scoreable, failure_kind, verdict, duration_ms, worker_tokens, orchestrator
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             payloads,
         )
@@ -7202,7 +7220,7 @@ def db_attempt_rows(
     with contextlib.closing(connect_read_model_db_readonly(db_path)) as conn:
         query = """
             SELECT run_id, task_key, logged_at, engine, model, reported_model, expected_model,
-                   reasoning_effort, task_type, retry,
+                   reasoning_effort, task_type, retry, scoreable, failure_kind,
                    verdict, duration_ms, worker_tokens, orchestrator
             FROM attempts
         """
@@ -7223,6 +7241,8 @@ def db_attempt_rows(
                 "reasoning_effort": row["reasoning_effort"],
                 "task_type": row["task_type"],
                 "retry": bool(row["retry"]),
+                "scoreable": row["scoreable"] != 0,
+                "failure_kind": row["failure_kind"],
                 "verdict": row["verdict"],
                 "duration_ms": row["duration_ms"],
                 "worker_tokens": row["worker_tokens"],
@@ -7562,6 +7582,7 @@ def aggregate_model_scoreboard_rows(
     task_type: str | None = None,
     model: str | None = None,
 ) -> list[dict[str, Any]]:
+    rows = [row for row in rows if row.get("scoreable") is not False]
     models: dict[tuple[str, str, str, bool], dict[str, Any]] = {}
     effort_keys = model_reasoning_effort_keys(rows)
     for task_rows in group_model_log_tasks(rows):
@@ -8900,10 +8921,18 @@ class RingerRunner:
                 worker = await self._run_worker(runtime, current_spec, attempt)
                 with self.lock:
                     runtime.worker_pid = None
-                    runtime.status = "verifying"
+                    runtime.status = "verifying" if worker.scoreable else "fail"
                     if worker.tokens is not None:
                         runtime.tokens = (runtime.tokens or 0) + worker.tokens
-                verify = await self.verifier.verify(runtime.task, runtime.taskdir)
+                if worker.scoreable:
+                    verify = await self.verifier.verify(runtime.task, runtime.taskdir)
+                else:
+                    verify = VerifyResult(
+                        ok=False,
+                        check_returncode=None,
+                        check_timed_out=False,
+                        raw_output_excerpt=worker.error or "non-scoreable worker result",
+                    )
                 verdict = verdict_for(worker, verify)
                 with self.lock:
                     runtime.last_check_returncode = verify.check_returncode
@@ -9110,16 +9139,23 @@ class RingerRunner:
 
     async def _run_worker(self, runtime: TaskRuntime, spec: str, attempt: int) -> WorkerResult:
         log_path = runtime.log_path
+
+        def finish(result: WorkerResult) -> WorkerResult:
+            if result.timed_out:
+                append_text(log_path, f"\n[ringer.py] worker timed out after {runtime.task.timeout_s}s\n")
+            append_text(log_path, f"[ringer.py] attempt {attempt} exited rc={result.returncode}\n")
+            return result
+
         engine = self.config.engines.get(runtime.task.engine)
         if engine is None:
-            return WorkerResult(
+            return finish(WorkerResult(
                 returncode=None,
                 timed_out=False,
                 tokens=None,
                 error=f"unknown worker engine: {runtime.task.engine}",
-            )
+            ))
         if runtime.task.full_access and not self.config.allow_full_access:
-            return WorkerResult(
+            return finish(WorkerResult(
                 returncode=None,
                 timed_out=False,
                 tokens=None,
@@ -9127,7 +9163,7 @@ class RingerRunner:
                     f"task requested full_access with engine {runtime.task.engine}, "
                     "but config allow_full_access is false"
                 ),
-            )
+            ))
         cmd = build_worker_command(
             engine,
             taskdir=runtime.taskdir,
@@ -9204,7 +9240,7 @@ class RingerRunner:
         try:
             log_fh = log_path.open("ab")
         except OSError as exc:
-            return WorkerResult(returncode=None, timed_out=False, tokens=None, error=str(exc))
+            return finish(WorkerResult(returncode=None, timed_out=False, tokens=None, error=str(exc)))
         async with AsyncFileCloser(log_fh):
             try:
                 proc = await asyncio.create_subprocess_exec(
@@ -9219,7 +9255,7 @@ class RingerRunner:
                 message = f"[ringer.py] worker spawn failed: {exc}\n"
                 log_fh.write(message.encode("utf-8", errors="replace"))
                 log_fh.flush()
-                return WorkerResult(returncode=None, timed_out=False, tokens=None, error=str(exc))
+                return finish(WorkerResult(returncode=None, timed_out=False, tokens=None, error=str(exc)))
             with self.lock:
                 runtime.worker_pid = proc.pid
             self.active_processes[proc.pid] = proc
@@ -9243,17 +9279,49 @@ class RingerRunner:
                     await reader
             self.active_processes.pop(proc.pid, None)
         output_tail = capture.text()
-        tokens = parse_token_count(output_tail, engine.token_regex)
-        reported_model = parse_reported_model(output_tail, engine.model_report_regex)
-        if timed_out:
-            append_text(log_path, f"\n[ringer.py] worker timed out after {runtime.task.timeout_s}s\n")
-        append_text(log_path, f"[ringer.py] attempt {attempt} exited rc={proc.returncode}\n")
-        return WorkerResult(
+        if engine.result_parser == "claude-code-json":
+            structured = parse_claude_code_json_result(
+                output_tail,
+                runtime.task.model or engine.model_default,
+            )
+            if structured is not None:
+                tokens = structured.tokens
+                reported_model = structured.reported_model
+                if structured.error:
+                    append_text(
+                        log_path,
+                        f"[ringer.py] structured result: {structured.error}\n",
+                    )
+                if structured.failure_kind:
+                    return finish(WorkerResult(
+                        returncode=proc.returncode,
+                        timed_out=timed_out,
+                        tokens=tokens,
+                        error=structured.error,
+                        reported_model=reported_model,
+                        scoreable=structured.scoreable,
+                        failure_kind=structured.failure_kind,
+                    ))
+            else:
+                error = "Claude Code structured output contained no result envelope"
+                append_text(log_path, f"[ringer.py] structured result: {error}\n")
+                return finish(WorkerResult(
+                    returncode=proc.returncode,
+                    timed_out=timed_out,
+                    tokens=None,
+                    error=error,
+                    scoreable=False,
+                    failure_kind="harness",
+                ))
+        else:
+            tokens = parse_token_count(output_tail, engine.token_regex)
+            reported_model = parse_reported_model(output_tail, engine.model_report_regex)
+        return finish(WorkerResult(
             returncode=proc.returncode,
             timed_out=timed_out,
             tokens=tokens,
             reported_model=reported_model,
-        )
+        ))
 
     async def _tee_stream(
         self,
@@ -9314,6 +9382,9 @@ class RingerRunner:
         ]
         if worker.error:
             notes_parts.append(f"worker_error={worker.error}")
+        notes_parts.append(f"scoreable={'true' if worker.scoreable else 'false'}")
+        if worker.failure_kind:
+            notes_parts.append(f"failure_kind={worker.failure_kind}")
         if verify.missing_files:
             notes_parts.append(f"missing_expect_files={json.dumps(list(verify.missing_files))}")
         notes_parts.append("raw_check_output_first_2000_chars:")
@@ -9352,6 +9423,8 @@ class RingerRunner:
                 "reasoning_effort": reasoning_effort,
                 "task_type": runtime.task.task_type,
                 "retry": retrying,
+                "scoreable": worker.scoreable,
+                "failure_kind": worker.failure_kind,
             }
         )
 
@@ -9544,6 +9617,145 @@ def parse_env_file(path: Path) -> dict[str, str]:
             value = value[1:-1]
         values[key.strip()] = value
     return values
+
+
+@dataclass(frozen=True)
+class StructuredResult:
+    tokens: int | None
+    reported_model: str | None
+    error: str | None = None
+    scoreable: bool = True
+    failure_kind: str | None = None
+
+
+def _last_json_result(text: str) -> dict[str, Any] | None:
+    candidates: list[dict[str, Any]] = []
+    for line in reversed(text.splitlines()):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            value = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict) and value.get("type") == "result":
+            candidates.append(value)
+    if candidates:
+        return candidates[0]
+    # Non-streaming `--output-format json` can pretty-print the single result
+    # object across multiple lines. Decode the whole trimmed payload rather
+    # than scanning for a `{` anywhere in the text: a scan can match braces
+    # inside a string field (e.g. the agent quoting JSON in its answer) and
+    # misattribute tokens/model/error to that embedded fragment.
+    stripped_text = text.strip()
+    if stripped_text:
+        try:
+            value = json.loads(stripped_text)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(value, dict) and value.get("type") == "result":
+            return value
+    return None
+
+
+def _claude_model_family(value: str) -> str | None:
+    lowered = value.strip().lower()
+    for family in ("sonnet", "opus", "fable", "haiku"):
+        if family in lowered:
+            return family
+    return None
+
+
+def _claude_reported_model(model_usage: Any, requested_model: str) -> str | None:
+    if not isinstance(model_usage, dict):
+        return None
+    requested = requested_model.strip().lower()
+    requested_family = _claude_model_family(requested)
+    family_matches: list[str] = []
+    for key, value in model_usage.items():
+        key_text = str(key)
+        canonical = value.get("canonicalModel") if isinstance(value, dict) else None
+        candidates = [key_text, str(canonical or "")]
+        if requested in {candidate.lower() for candidate in candidates if candidate}:
+            return str(canonical or key_text)
+        if requested_family and any(
+            _claude_model_family(candidate) == requested_family for candidate in candidates
+        ):
+            family_matches.append(str(canonical or key_text))
+    # No exact match: fall back to family only when every family match agrees
+    # on the same canonical model. modelUsage can list more than one entry of
+    # the same family (e.g. a director and a subagent both on Sonnet, but
+    # different versions) — guessing the first one risks misattributing a
+    # run's identity, which this project treats as an unforgivable bug class.
+    unique_family_matches = set(family_matches)
+    if len(unique_family_matches) == 1:
+        return next(iter(unique_family_matches))
+    return None
+
+
+def parse_claude_code_json_result(
+    text: str, requested_model: str = ""
+) -> StructuredResult:
+    result = _last_json_result(text)
+    if result is None:
+        return StructuredResult(
+            tokens=None,
+            reported_model=None,
+            error="Claude Code structured output contained no result envelope",
+            scoreable=False,
+            failure_kind="harness",
+        )
+    usage = result.get("usage")
+    tokens = None
+    if isinstance(usage, dict):
+        counters = (
+            "input_tokens",
+            "cache_creation_input_tokens",
+            "cache_read_input_tokens",
+            "output_tokens",
+        )
+        values: list[int] = []
+        valid = True
+        for name in counters:
+            if name not in usage:
+                continue
+            value = usage[name]
+            if not isinstance(value, int) or isinstance(value, bool):
+                valid = False
+                break
+            values.append(value)
+        if valid and values:
+            tokens = sum(values)
+    reported_model = _claude_reported_model(result.get("modelUsage"), requested_model)
+    api_error_status = result.get("api_error_status")
+    # Only a transport/API-level failure is "infrastructure" (not the
+    # model's fault, excluded from the scoreboard, no verify/retry). An
+    # agent-level failure (max turns, tool/permission rejection, giving up)
+    # is still scoreable — it's a real quality outcome for that model on
+    # that task, and excluding it would hide it from the scoreboard instead
+    # of just recording a loss.
+    is_api_error = result.get("terminal_reason") == "api_error" or api_error_status is not None
+    if is_api_error:
+        status = api_error_status or result.get("status") or "unknown status"
+        message = result.get("message") or result.get("error") or result.get("result") or "unknown error"
+        return StructuredResult(
+            tokens=tokens,
+            reported_model=reported_model,
+            error=f"Claude Code API error ({status}): {message}",
+            scoreable=False,
+            failure_kind="infrastructure",
+        )
+    if result.get("is_error") is True:
+        subtype = result.get("subtype") or result.get("terminal_reason") or "unknown"
+        message = result.get("message") or result.get("error") or result.get("result") or "unknown error"
+        return StructuredResult(
+            tokens=tokens,
+            reported_model=reported_model,
+            error=f"Claude Code agent error ({subtype}): {message}",
+            scoreable=True,
+            failure_kind="agent",
+        )
+    return StructuredResult(tokens=tokens, reported_model=reported_model)
 
 
 def parse_token_count(text: str, token_regex: str | None = DEFAULT_TOKEN_REGEX) -> int | None:

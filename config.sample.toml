@@ -91,6 +91,19 @@ token_regex = "tokens\\s+used\\s*:?\\s*([0-9][0-9,]*)"
 # default reads the `model:` header; override it here only if that format changes.
 model_report_regex = "(?m)^model:[ \\t]*([^ \\t\\r\\n]+)[ \\t]*\\r?$"
 
+# Claude Code CLI (opt in). Claude Code permissions are not an OS filesystem
+# sandbox; use an OS-level wrapper when filesystem containment is required.
+# [engines.claude]
+# bin = "claude"
+# model_default = "claude-sonnet-5"
+# args_template = [
+#   "-p", "--model", "{model}", "--output-format", "json",
+#   "{access_args}", "{engine_args}", "{spec}",
+# ]
+# sandbox_args = ["--permission-mode", "acceptEdits"]
+# full_access_args = ["--dangerously-skip-permissions"]
+# result_parser = "claude-code-json"
+
 # Grok Build CLI (xAI). Install: curl -fsSL https://x.ai/cli/install.sh | bash
 # (or: npm install -g @xai-official/grok), then `grok login` — OAuth on a
 # SuperGrok or X Premium Plus plan. Headless mode (-p) runs a full agentic
