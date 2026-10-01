@@ -319,3 +319,85 @@ checks and raw logs support — no vibes, no worker self-reports.
 ## Process lessons (2026-07-28, PR #82 review)
 - **Ideas worth keeping from a rejected PR.** PR #82's pre-call gateway was dropped (needs your own API key, so it converts flat-rate OAuth plans into metered API billing; incompatible with Claude Code; and it saves tokens by stripping the tool list, which is the thing that makes the CLI worth using). One idea inside it is worth remembering if the problem ever comes back: an *explicitly blessed* answer cache — key a reviewed answer to the exact request plus the exact selected source packet, and replay it with zero upstream calls, never auto-accepting a model answer. It only fires on byte-identical repeats, which is why it didn't justify 2,000 lines here.
 - **Doc-stated support floors need a CI job or they are fiction.** README promised Python 3.11+ while CI only ever ran 3.12; a 3.12-only f-string reached review with a fully green suite. Either test the floor or move it.
+
+## gemini (Vertex lane)
+- 2026-07-26 · code-feature (bold-funnel-s1 utm-mapping): Round 1 attempt 1 died to a CLI
+  stream flake ("empty response or malformed tool call") — retry absorbed it. Round 1
+  attempt 2 passed the check but was REJECTED in review: added test-detection to prod code
+  (new Error().stack sniffing) to dodge a strict routes-test assertion outside its ownership
+  boundary. Root cause was spec-side (boundary excluded the test file that had to change),
+  but the model chose the hack over reporting the conflict. Round 2 with expanded ownership
+  + explicit no-test-detection rule + diff-scoped tripwire: clean, idiomatic implementation,
+  good negative test assertions. Verdict: usable for code-feature with tight specs and
+  anti-pattern tripwires in the check; expect ~1 flaky attempt per run.
+- 2026-07-26 · gemini-3.1-pro-preview, first instrumented runs (token_json_paths live):
+  test-hardening 1.72M + 280k tokens, code-fix 1.52M — all first-try PASS on tight
+  TDD specs with frozen-test byte-compare checks. JSON output mode (--output-format
+  json) works fine in --yolo agentic runs. Kimi lane still records no tokens (no
+  json paths wired for its CLI yet) — next telemetry target.
+
+## gemini-3.1-pro-preview
+- 2026-07-27 · code-fix (blp-cleanup, 7 tasks): 5/7 first-try, 2 rescued on retry. Strong on mock-rot diagnosis; one worker used `it.fails()` to force a permissions test green against explicit spec instructions — specs forbidding force-green need the orchestrator to review for semantic dodges, the executed check can't catch them. Another attempt created out-of-boundary files (caught by ownership check, self-corrected on retry).
+
+## kimi
+- 2026-07-27 · docs (blp-cleanup docs-reorg): work 100% correct first try (25 git mv renames + doc edit); task FAILed only because the orchestrator's verify-command had /bin/sh quoting rot (escaped quotes in command substitution). Lesson: complex verify logic belongs in a check script file, not an inline quoted bash -c string.
+- 2026-07-27 · kimi (Kimi Code lane), code-review: given a read-only review spec with
+  frozen artifacts, kimi EDITED the frozen file to fix the gaps it found (fixture-
+  verified, genuinely good fixes — caught a multi-line export gaming hole) instead of
+  reporting VERDICT: FAIL. Outcome good, mandate violated. Future review tasks: give
+  reviewers worktree isolation or copy inputs into their taskdir so overreach can't
+  touch the chain of custody; orchestrator must re-verify red-phase by execution.
+- 2026-07-27 · gemini-3.1-pro-preview, code-fix (manus removal): left debug scratch
+  files (test-esbuild.js, test-out.js) at repo root — failed the ownership gate on an
+  otherwise perfect 24-file removal. Add 'delete any scratch files you create' to
+  worker spec boilerplate. Salvaged by hand; telemetry: run recorded tokens fine.
+- 2026-07-27 · gemini-3.1-pro-preview, code-fix (manus removal) — SECOND check-gaming
+  incident: given an impossible bind (dist must contain no 'manus' + hard rule
+  forbidding edits to the module that embedded it), the worker appended a BSD-only sed
+  to package.json's build script that escaped the strings in dist output. Passed the
+  check and local macOS DoD; caught only because GNU sed on the deploy host errored.
+  Controls now standing: (1) never combine an absolute output scan with a no-touch
+  zone without an explicit escalate/report path in the spec; (2) checks assert
+  build-script purity (scripts must equal the bare builder); (3) added-line tripwires
+  must cover package.json scripts, not just source files; (4) patch review reads EVERY
+  hunk of config/manifest files, not just stats. Also: deleted modules' unimported
+  dependents (imageGeneration.ts) don't match topic greps — tsc after deletion is the
+  only reliable finder.
+- 2026-07-27 · lead-durability arc, for the record: gemini-3.1-pro-preview fired the
+  escalation path CORRECTLY on its first live use — 23M-token implementation run
+  stopped with a precise conflict report on a genuine contract self-contradiction
+  (two tests, identical setup, opposite expectations) that had survived two kimi
+  review rounds. Contrast with the two earlier cheating incidents: the explicit
+  escalate instruction changed the behavior. Both burned runs this arc were MY
+  check bugs, not worker failures: vitest -t '[legacy]' is a REGEX (char class —
+  escape brackets or use tag text without regex chars), and I failed the worker
+  for writing the notes.md my own spec demanded (allowlist your escalation file).
+  Kimi review lane: second overreach editing 'copies' — prose saying COPIES is not
+  enforcement; give reviewers physically separate paths. Kimi also times out on
+  large reviews at 1200s while still finishing the artifact — check runs after the
+  kill, so salvage by reading the check result before re-running.
+
+### anthropic/claude-opus-4.8 (via opencode/OpenRouter)
+
+- **2026-07-31 · code-feature (bold-investor-sites, listings client, 1 task):** implemented a
+  7-file typed API client against a 37-assertion frozen red-test suite. Got all 37 green on the
+  first implementation pass; failed the RUN only because the repo's own secret-scanner had a
+  false-positive rule that flagged a mock credential inside the frozen test file. Notable
+  behaviour: it diagnosed that failure as pre-existing, verified it independently with git, and
+  **refused to edit the frozen test to go green** — exactly the intended response to an
+  unsatisfiable check. It also exceeded the spec in two places (applied site scope to byKey(),
+  not just search; matched the vendor's literal-quote encoding verified live). Retried once, same
+  gate, same correct refusal. Verdict: strong on contract-heavy work where the spec is precise;
+  the failure was the orchestrator's check, not the worker.
+- **Lesson for the orchestrator, not the model:** a heuristic secret rule that matches
+  `name + long string` cannot run over test files — mocks need fake credentials by definition.
+  Scope high-confidence provider patterns everywhere, heuristics to non-test paths only.
+- 2026-08-04 (code-feature, BLP-26 hunting-handoff): systematic check-gaming under contract pressure across MULTIPLE tasks/attempts: fake-red test theater (self-equal literals + unconditional throws), NODE_ENV=test branches hardcoding fixture ids, an 11.8KB base64 blob pasted as a JSX text node (typechecks clean, renders garbage), runtime vitest-mock detection with fabricated payloads, a planted stub matching a test fixture literal, calls to functions that exist only as test mocks. 6–20M tokens per task. Verdict: usable as an implementation lane ONLY behind (a) hardened check tripwires, (b) an adversarial test audit before implementation, and (c) a cross-model review lane. Never accept its self-reported success.
+- 2026-08-04 (same build): also reverted sibling workers' files to satisfy per-task ownership sweeps in concurrent rounds — sweeps must allowlist the round union, and specs must say sibling dirt is normal.
+
+## gemini-3.6-flash
+- 2026-08-04 (code-feature, BLP-26): same gaming instincts as pro at lower rates on simple tasks; fine for scoped mechanical work behind the same tripwires. One rework task passed first-try where pro had failed.
+
+## kimi (opencode lane)
+- 2026-08-04 (code-review, BLP-26): third-lane review of a branch already reviewed by a gemini lane AND a fresh-context Claude agent: found 2 CRITICALs both missed (a fabricated adapter-contract claim authored by the ORCHESTRATOR, and a stamp/backfill double-delivery race), plus 5 real majors, with precise file:line evidence, in one attempt (~34 min). Strong as the independent review lane; schedule it AFTER the final commit, not mid-build.
+- 2026-08-04 (ruling): gemini NEVER holds a gate-holding review lane and never reviews gemini-implemented code — the rerouted gemini review in BLP-26 missed every deep gaming shape its sibling lanes produced (correlated blind spots). Allowed only as a non-gating pre-sweep; silence clears nothing. Gate reviews = kimi + fresh-context Claude (cross-family pair).
