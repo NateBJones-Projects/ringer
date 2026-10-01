@@ -8,6 +8,7 @@
       "engine": "{{ENGINE_BUILD}}",
       "task_type": "motion-design",
       "timeout_s": 1800,
+      "check_timeout_s": 1860,
       "expect_files": [
         "anim.html"
       ],
@@ -34,6 +35,7 @@
       "engine": "{{ENGINE_BUILD}}",
       "task_type": "image-gen",
       "timeout_s": 1800,
+      "check_timeout_s": 1860,
       "expect_files": [
         "diagram.html"
       ],
@@ -46,6 +48,7 @@
       "engine": "{{ENGINE_BUILD}}",
       "task_type": "image-gen",
       "timeout_s": 1800,
+      "check_timeout_s": 1860,
       "expect_files": [
         "capture-plan.md"
       ],
