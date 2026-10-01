@@ -5441,6 +5441,11 @@ def send_response_body(
 ) -> None:
     handler.send_response(status)
     handler.send_header("Content-Type", content_type)
+    # The native webview reads only this local HUD. Never expose it to arbitrary sites.
+    origin = handler.headers.get("Origin", "")
+    if origin in {"tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"}:
+        handler.send_header("Access-Control-Allow-Origin", origin)
+        handler.send_header("Vary", "Origin")
     if no_store:
         handler.send_header("Cache-Control", "no-store")
     handler.send_header("Content-Length", str(len(body)))
@@ -5620,6 +5625,23 @@ class PersistentHudServer:
                         content_type="text/html; charset=utf-8",
                     )
                     return
+                frontend_assets = {
+                    "/ringside.css": (RINGSIDE_HTML_PATH.with_name("ringside.css"), "text/css; charset=utf-8"),
+                    "/ringside.js": (RINGSIDE_HTML_PATH.with_name("ringside.js"), "text/javascript; charset=utf-8"),
+                    "/hud.js": (Path(__file__).resolve().parent / "hud" / "frontend" / "hud.js", "text/javascript; charset=utf-8"),
+                    "/assets/ringside-mark.svg": (RINGSIDE_HTML_PATH.parent / "assets" / "ringside-mark.svg", "image/svg+xml"),
+                    "/assets/ringside-live.svg": (RINGSIDE_HTML_PATH.parent / "assets" / "ringside-live.svg", "image/svg+xml"),
+                    "/assets/ringside-attention.svg": (RINGSIDE_HTML_PATH.parent / "assets" / "ringside-attention.svg", "image/svg+xml"),
+                }
+                if path in frontend_assets:
+                    asset_path, content_type = frontend_assets[path]
+                    try:
+                        body = asset_path.read_bytes()
+                    except OSError:
+                        self.send_error(HTTPStatus.NOT_FOUND)
+                        return
+                    send_response_body(self, HTTPStatus.OK, body, content_type=content_type, no_store=True)
+                    return
                 if path == "/api/runs":
                     send_json_response(
                         self,
@@ -5648,8 +5670,8 @@ class PersistentHudServer:
                         }
                     send_json_response(self, payload)
                     return
-                if path.startswith("/api/open-folder"):
-                    query = urllib.parse.urlparse(path).query
+                if path == "/api/open-folder":
+                    query = urllib.parse.urlparse(self.path).query
                     params = urllib.parse.parse_qs(query)
                     name = (params.get("artifact") or [""])[0]
                     run_id = (params.get("run") or [""])[0]
@@ -5666,8 +5688,7 @@ class PersistentHudServer:
                             return
                         if sys.platform == "darwin":
                             subprocess.Popen(["open", str(resolved)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                            self.send_response(HTTPStatus.NO_CONTENT)
-                            self.end_headers()
+                            send_response_body(self, HTTPStatus.NO_CONTENT, b"", content_type="text/plain; charset=utf-8", no_store=True)
                         else:
                             self.send_error(HTTPStatus.NOT_IMPLEMENTED)
                     except Exception:

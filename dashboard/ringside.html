@@ -1,1737 +1,261 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Ringside</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6' fill='%2335d0ff'/%3E%3C/svg%3E">
-  <style>
-    :root {
-      color-scheme: dark;
-      --ground: #0b0e14;
-      --surface: #141a26;
-      --ink: #e9eef7;
-      --muted: #8fa0b6;
-      --hairline: rgba(143, 160, 182, .22);
-      --accent: #35d0ff;
-      --pass: #45d17e;
-      --fail: #ff5f6b;
-      --waiting: #6f7c92;
-      --quote-bg: rgba(255, 95, 107, .08);
-    }
-    @media (prefers-color-scheme: light) {
-      :root {
-        color-scheme: light;
-        --ground: #f2f5f9;
-        --surface: #ffffff;
-        --ink: #17202e;
-        --muted: #5a6a7e;
-        --hairline: rgba(90, 106, 126, .28);
-        --accent: #007fb0;
-        --pass: #178a4c;
-        --fail: #cc3340;
-        --waiting: #7d8ba0;
-        --quote-bg: rgba(204, 51, 64, .07);
-      }
-    }
-    :root[data-theme="dark"] {
-      color-scheme: dark;
-      --ground: #0b0e14; --surface: #141a26; --ink: #e9eef7; --muted: #8fa0b6;
-      --hairline: rgba(143,160,182,.22); --accent: #35d0ff; --pass: #45d17e;
-      --fail: #ff5f6b; --waiting: #6f7c92; --quote-bg: rgba(255,95,107,.08);
-    }
-    :root[data-theme="light"] {
-      color-scheme: light;
-      --ground: #f2f5f9; --surface: #ffffff; --ink: #17202e; --muted: #5a6a7e;
-      --hairline: rgba(90,106,126,.28); --accent: #007fb0; --pass: #178a4c;
-      --fail: #cc3340; --waiting: #7d8ba0; --quote-bg: rgba(204,51,64,.07);
-    }
-
-    * { box-sizing: border-box; }
-    html, body { min-height: 100%; }
-    body {
-      background: var(--ground);
-      color: var(--ink);
-      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-      line-height: 1.5;
-      margin: 0;
-    }
-    button, select {
-      color: inherit;
-      font: inherit;
-    }
-    button { cursor: pointer; }
-    button:focus-visible,
-    select:focus-visible,
-    iframe:focus-visible {
-      outline: 2px solid var(--accent);
-      outline-offset: 2px;
-    }
-    [hidden] { display: none !important; }
-    .page {
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-    }
-    .mono {
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-variant-numeric: tabular-nums;
-    }
-
-    .corner {
-      display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
-      margin-bottom: clamp(14px, 3vw, 26px);
-    }
-    .live-dot {
-      width: 9px; height: 9px; border-radius: 50%;
-      background: var(--waiting); align-self: center; flex: 0 0 9px;
-    }
-    .live-dot.live { background: var(--accent); }
-    @media (prefers-reduced-motion: no-preference) {
-      .live-dot.live { animation: pulse 1.4s ease-in-out infinite; }
-      @keyframes pulse { 50% { opacity: .35; } }
-    }
-    .eyebrow {
-      font-size: 12px; font-weight: 700; letter-spacing: .12em;
-      text-transform: uppercase; color: var(--muted);
-    }
-    .eyebrow b { color: var(--ink); }
-    .clock { margin-left: auto; font-size: 12px; color: var(--muted); }
-
-    .topbar {
-      min-height: 42px;
-      margin: 0;
-      padding: 9px clamp(12px, 2vw, 22px);
-      border-bottom: 1px solid var(--hairline);
-      gap: 10px;
-    }
-    .update-banner {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      min-height: 32px;
-      padding: 5px clamp(12px, 2vw, 22px);
-      border-bottom: 1px solid var(--hairline);
-      background: var(--quote-bg);
-      color: var(--ink);
-      font-size: 12px;
-    }
-    .update-banner span { flex: 1 1 auto; }
-    .update-banner button {
-      border: 0;
-      background: transparent;
-      color: var(--muted);
-      padding: 1px 5px;
-      font-size: 16px;
-      line-height: 1;
-    }
-    .update-banner button:hover { color: var(--ink); }
-    .running-now {
-      display: flex;
-      gap: 7px;
-      align-items: center;
-      min-width: 0;
-      flex: 1 1 auto;
-      overflow-x: auto;
-      scrollbar-width: thin;
-    }
-    .running-now:empty { display: none; }
-    .run-switch {
-      flex: 0 0 auto;
-      min-width: 0;
-      display: inline-flex;
-      align-items: center;
-      gap: 7px;
-      padding: 6px 10px;
-      border: 1px solid var(--hairline);
-      border-radius: 999px;
-      background: var(--surface);
-      color: var(--ink);
-      font-size: 12px;
-      line-height: 1;
-    }
-    .run-switch:hover { border-color: var(--accent); }
-    .run-switch[aria-current="true"] {
-      border-color: var(--accent);
-      color: var(--accent);
-      box-shadow: inset 0 0 0 1px var(--accent);
-    }
-    .run-switch-name {
-      max-width: 18ch;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      font-weight: 700;
-    }
-    .run-switch-progress { color: var(--muted); font-size: 11px; }
-    .run-switch .live-dot { width: 7px; height: 7px; flex-basis: 7px; }
-    .artifact-tools button {
-      padding: 7px 14px;
-      border: 1px solid var(--hairline);
-      border-radius: 7px;
-      background: var(--surface);
-      color: var(--ink);
-      font-size: 13px;
-      cursor: pointer;
-    }
-    .artifact-tools button:hover { border-color: var(--accent); }
-    .artifact-tools button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-    select,
-    .artifact-tools select {
-      appearance: none;
-      -webkit-appearance: none;
-      padding: 7px 30px 7px 12px;
-      border: 1px solid var(--hairline);
-      border-radius: 7px;
-      background-color: var(--surface);
-      background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238fa0b6' stroke-width='1.6'/%3E%3C/svg%3E");
-      background-repeat: no-repeat;
-      background-position: right 11px center;
-      color: var(--ink);
-      font-size: 13px;
-      line-height: 1.3;
-      max-width: 100%;
-    }
-    select:focus-visible,
-    summary.run-head:focus-visible,
-    .run-switch:focus-visible {
-      outline: 2px solid var(--accent);
-      outline-offset: 2px;
-    }
-    .artifact-status { color: var(--ink); opacity: .75; }
-    .wordmark {
-      font-variant-caps: all-small-caps;
-      letter-spacing: .1em;
-    }
-    .topbar-main {
-      min-width: 0;
-      display: flex;
-      align-items: baseline;
-      gap: 12px;
-    }
-    .reconnect {
-      color: var(--muted);
-      font-size: 12px;
-    }
-    .tabs {
-      display: flex;
-      gap: 18px;
-      padding: 8px clamp(12px, 2vw, 22px) 0;
-      border-bottom: 1px solid var(--hairline);
-    }
-    .tab {
-      appearance: none;
-      border: 0;
-      border-bottom: 2px solid transparent;
-      background: transparent;
-      color: var(--muted);
-      padding: 8px 0 10px;
-      font-size: 13px;
-      font-weight: 700;
-    }
-    .tab[aria-selected="true"] {
-      color: var(--ink);
-      border-bottom-color: var(--accent);
-    }
-    main {
-      flex: 1 1 auto;
-      min-height: 0;
-      overflow: auto;
-    }
-    .panel {
-      min-height: 100%;
-    }
-    .empty {
-      color: var(--muted);
-      font-size: 14px;
-      padding: clamp(26px, 6vw, 60px) clamp(12px, 2vw, 22px);
-    }
-
-    .run {
-      padding: clamp(18px, 3vw, 28px) clamp(12px, 2vw, 22px) clamp(20px, 3vw, 30px);
-      border-bottom: 1px solid var(--hairline);
-    }
-    .agents { margin-top: clamp(16px, 3vw, 28px); }
-    summary.run-head { cursor: pointer; list-style: none; }
-    summary.run-head::-webkit-details-marker { display: none; }
-    summary.run-head::before {
-      content: "▸";
-      color: var(--muted);
-      font-size: 11px;
-      margin-right: 2px;
-      transition: transform .15s ease;
-      display: inline-block;
-    }
-    details[open] > summary.run-head::before { transform: rotate(90deg); }
-    .run-head {
-      margin-bottom: clamp(12px, 2vw, 18px);
-    }
-    .run-head .eyebrow {
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .identity {
-      color: var(--muted);
-      font-size: 13px;
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .run-stats {
-      color: var(--muted);
-      font-size: 12px;
-      white-space: nowrap;
-    }
-
-    .rounds { display: flex; gap: 5px; margin-bottom: 8px; }
-    .rounds span { flex: 1; min-width: 10px; height: 7px; border-radius: 4px; background: var(--waiting); opacity: .45; }
-    .rounds .pass { background: var(--pass); opacity: 1; }
-    .rounds .working { background: var(--accent); opacity: 1; }
-    .rounds .retry,
-    .rounds .fail { background: var(--fail); opacity: 1; }
-    @media (prefers-reduced-motion: no-preference) {
-      .rounds .working, .rounds .retry { animation: pulse 1.4s ease-in-out infinite; }
-    }
-    section h2 {
-      font-size: 12px; font-weight: 700; letter-spacing: .1em;
-      text-transform: uppercase; color: var(--muted);
-      margin: 0 0 4px; padding-bottom: 8px;
-      border-bottom: 1px solid var(--hairline);
-    }
-    .workers {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 10px;
-      margin-top: clamp(14px, 2vw, 20px);
-    }
-    .workers > .empty { grid-column: 1 / -1; }
-    .worker-card {
-      min-width: 0;
-      overflow: hidden;
-      border: 1px solid var(--hairline);
-      border-radius: 8px;
-      background: var(--surface);
-    }
-    .worker-card.expanded { grid-column: 1 / -1; }
-    .worker-card-toggle {
-      width: 100%;
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      gap: 7px 12px;
-      align-items: center;
-      padding: 12px;
-      border: 0;
-      background: transparent;
-      text-align: left;
-    }
-    .worker-card-toggle:hover .name,
-    .worker-card-toggle:focus-visible .name,
-    .worker-card-toggle[aria-expanded="true"] .name { color: var(--accent); }
-    .worker-card-toggle:focus-visible {
-      outline: 2px solid var(--accent);
-      outline-offset: -2px;
-    }
-    .worker-card-head {
-      min-width: 0;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .glyph { width: 11px; height: 11px; border-radius: 50%; align-self: center; }
-    .glyph.pass { background: var(--pass); }
-    .glyph.working { background: var(--accent); }
-    .glyph.retry,
-    .glyph.fail { background: var(--fail); }
-    .glyph.waiting { background: transparent; border: 1.5px solid var(--waiting); }
-    @media (prefers-reduced-motion: no-preference) {
-      .glyph.working, .glyph.retry { animation: pulse 1.4s ease-in-out infinite; }
-    }
-    .worker-card .name { font-weight: 650; font-size: 14px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .worker-card .state { font-size: 12px; font-weight: 650; white-space: nowrap; }
-    .state.pass { color: var(--pass); }
-    .state.working { color: var(--accent); }
-    .state.retry,
-    .state.fail { color: var(--fail); }
-    .state.waiting { color: var(--waiting); }
-    .worker-card .meta {
-      grid-column: 1 / -1;
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      color: var(--muted);
-      font-size: 11.5px;
-    }
-    .worker-card .activity {
-      grid-column: 1 / -1;
-      font-size: 12.5px;
-      color: var(--muted);
-      min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    }
-    .stream {
-      padding: 12px;
-      border-top: 1px solid var(--hairline);
-    }
-    .stream-head {
-      display: flex;
-      gap: 12px;
-      align-items: baseline;
-      color: var(--muted);
-      font-size: 12px;
-      padding: 10px 0 8px;
-    }
-    .stream pre {
-      max-height: 45vh;
-      margin: 0;
-      overflow: auto;
-      white-space: pre-wrap;
-      overflow-wrap: anywhere;
-      background: var(--surface);
-      color: var(--ink);
-      border-left: 2px solid var(--accent);
-      padding: 12px;
-      font-size: 12px;
-      line-height: 1.45;
-    }
-    .catch {
-      margin: 8px 0 0; padding: 8px 12px;
-      background: var(--quote-bg);
-      border-left: 2px solid var(--fail);
-      border-radius: 0 6px 6px 0;
-      font-size: 13px; color: var(--muted);
-      overflow-wrap: break-word;
-    }
-    .catch b { color: var(--fail); font-weight: 650; }
-    .stream .brief {
-      margin: 0 0 10px;
-      border-left: 2px solid var(--hairline);
-      background: var(--surface);
-    }
-    .stream .brief summary {
-      cursor: pointer;
-      padding: 8px 12px;
-      font-size: 12.5px;
-      font-weight: 650;
-      color: var(--muted);
-      list-style: none;
-    }
-    .stream .brief summary::-webkit-details-marker { display: none; }
-    .stream .brief summary::before { content: "▸ "; }
-    .stream .brief[open] summary::before { content: "▾ "; }
-    .stream .brief pre {
-      max-height: 32vh;
-      border-left: none;
-      border-top: 1px solid var(--hairline);
-    }
-    .stream .brief .brief-check {
-      margin: 0;
-      padding: 8px 12px;
-      border-top: 1px solid var(--hairline);
-      font-size: 11.5px;
-      color: var(--muted);
-      overflow-wrap: anywhere;
-    }
-    .stream .verdict {
-      margin: 10px 0 0;
-      font-size: 13px;
-      color: var(--muted);
-    }
-    .stream .verdict .how { margin: 0 0 6px; }
-    .stream .verdict .how b { color: var(--pass); font-weight: 650; }
-    .stream .verdict details summary {
-      cursor: pointer;
-      font-size: 12.5px;
-      color: var(--muted);
-    }
-    .stream .verdict pre { max-height: 28vh; margin-top: 6px; }
-
-    .artifact-layout {
-      min-height: calc(100vh - 83px);
-      display: grid;
-      grid-template-columns: minmax(0, 1fr);
-    }
-    .artifact-main,
-    .agents {
-      width: min(100%, 960px);
-      margin-inline: auto;
-    }
-    .artifact-row {
-      width: 100%;
-      display: grid;
-      grid-template-columns: 18px minmax(0, 1fr);
-      gap: 10px;
-      align-items: center;
-      padding: 12px clamp(12px, 2vw, 18px);
-      border: 0;
-      border-bottom: 1px solid var(--hairline);
-      background: transparent;
-      text-align: left;
-    }
-    .artifact-row[aria-current="true"] {
-      background: var(--surface);
-    }
-    .artifact-state-dot {
-      width: 9px;
-      height: 9px;
-      border-radius: 50%;
-      background: var(--waiting);
-    }
-    .artifact-row.live .artifact-state-dot { background: var(--accent); }
-    .artifact-row.pass .artifact-state-dot { background: var(--pass); }
-    .artifact-row.fail .artifact-state-dot,
-    .artifact-row.died .artifact-state-dot { background: var(--fail); }
-    @media (prefers-reduced-motion: no-preference) {
-      .artifact-row.live .artifact-state-dot { animation: pulse 1.4s ease-in-out infinite; }
-    }
-    .artifact-row-main {
-      min-width: 0;
-      display: grid;
-      gap: 1px;
-    }
-    .artifact-name {
-      font-weight: 650;
-      font-size: 14px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .artifact-age {
-      color: var(--muted);
-      font-size: 12px;
-    }
-    .artifact-main {
-      min-width: 0;
-      display: grid;
-      grid-template-rows: auto minmax(0, 1fr);
-    }
-    .artifact-tools {
-      display: grid;
-      grid-template-columns: minmax(220px, max-content) minmax(0, 1fr) minmax(180px, max-content) max-content;
-      gap: 12px;
-      align-items: center;
-      padding: 10px clamp(12px, 2vw, 18px);
-      border-bottom: 1px solid var(--hairline);
-    }
-    .artifact-status {
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      color: var(--muted);
-      font-size: 13px;
-    }
-    .artifact-tools select,
-    .artifact-tools button {
-      min-height: 30px;
-      background: var(--surface);
-      border: 1px solid var(--hairline);
-      border-radius: 6px;
-      color: var(--ink);
-      font-size: 12px;
-    }
-    .artifact-tools select {
-      min-width: 0;
-      padding: 0 8px;
-    }
-    .artifact-tools button {
-      padding: 0 10px;
-      font-weight: 700;
-    }
-    .frame-wrap {
-      min-height: 120px;
-      background: var(--surface);
-      border: 0;
-    }
-    .frame-wrap iframe {
-      display: block;
-      width: 100%;
-      border: 0;
-      background: var(--surface);
-    }
-    .artifact-error {
-      color: var(--muted);
-      font-size: 14px;
-      padding: clamp(22px, 4vw, 42px);
-    }
-
-    @media (max-width: 760px) {
-      .topbar-main { flex-wrap: wrap; gap: 6px 10px; }
-      .running-now { order: 3; flex-basis: 100%; }
-      .run-head .clock { width: 100%; margin-left: 21px; }
-      .artifact-layout {
-        min-height: auto;
-        display: block;
-      }
-      .artifact-rail {
-        border-right: 0;
-        border-bottom: 1px solid var(--hairline);
-        max-height: 34vh;
-        overflow: auto;
-      }
-      .artifact-tools {
-        grid-template-columns: 1fr;
-      }
-      .frame-wrap iframe {
-        min-height: 58vh;
-      }
-    }
-    @media (max-width: 720px) {
-      .workers { grid-template-columns: minmax(0, 1fr); }
-      .worker-card.expanded { grid-column: auto; }
-    }
-  </style>
-</head>
-<body>
-  <div class="page">
-    <aside id="update-banner" class="update-banner" role="status" hidden>
-      <span id="update-message"></span>
-      <button id="dismiss-update" type="button" aria-label="Dismiss update notice">×</button>
-    </aside>
-    <header class="corner topbar">
-      <span id="top-dot" class="live-dot" aria-hidden="true"></span>
-      <div class="topbar-main">
-        <span class="eyebrow wordmark"><b>Ringside</b></span>
-        <span id="reconnect" class="reconnect mono" hidden>reconnecting…</span>
-      </div>
-      <div id="running-now" class="running-now" role="group" aria-label="Running now"></div>
-      <time id="clock" class="clock mono"></time>
-    </header>
-
-    <main>
-      <section id="artifacts-panel" class="panel">
-        <div class="artifact-layout">
-          <section class="artifact-main" aria-label="Artifact preview">
-            <div class="artifact-tools">
-              <select id="artifact-picker" class="mono" aria-label="Artifact"></select>
-              <div id="artifact-status" class="artifact-status">No artifact selected.</div>
-              <select id="artifact-version" class="mono" aria-label="Artifact version"></select>
-              <button id="open-folder" type="button" title="Open this run's files in Finder">Open folder</button>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Ringside</title>
+    <link rel="stylesheet" href="/ringside.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar" aria-label="Workspace">
+        <a class="brand" href="#runs">◉ &nbsp;RINGSIDE</a>
+        <p class="tagline">Your work, in view.</p>
+        <nav class="navigation" aria-label="Ringside views">
+          <button data-view="runs" id="runs-tab" aria-current="page">
+            Live runs</button
+          ><button data-view="outputs" id="outputs-tab">Outputs</button
+          ><button data-view="models" id="models-tab">Models</button>
+        </nav>
+        <p class="section-label">Running now</p>
+        <div id="running-now" class="run-links"></div>
+        <p class="section-label recent-label">Recent</p>
+        <div id="recent-runs" class="run-links"></div>
+        <footer class="sidebar-footer">
+          <p id="connection" role="status">Connecting to local machine…</p>
+          <button id="settings-button">Settings</button>
+        </footer>
+      </aside>
+      <div class="workspace">
+        <header class="topbar" data-tauri-drag-region>
+          <span id="breadcrumb">Workspace / Live runs</span
+          ><label class="search-label"
+            ><span class="sr-only">Search runs or tasks</span
+            ><input
+              id="search"
+              aria-label="Search runs or tasks"
+              type="search"
+              placeholder="Search runs or tasks"
+              autocomplete="off" /></label
+          ><button id="compact-button">Compact view</button
+          ><button id="hud-hide" hidden aria-label="Hide Ringside">×</button>
+        </header>
+        <aside id="update-banner" class="notice" hidden>
+          <span id="update-message"></span
+          ><button id="dismiss-update" aria-label="Dismiss update notice">
+            ×
+          </button>
+        </aside>
+        <main id="main">
+          <section id="runs-panel" aria-labelledby="runs-heading">
+            <h1 id="runs-heading">Live runs</h1>
+            <p class="subtitle">
+              What is moving, what needs attention, and what is ready.
+            </p>
+            <p id="runs-error" class="error" role="status" hidden></p>
+            <div
+              id="run-summary"
+              class="summary"
+              aria-label="Run summary"
+            ></div>
+            <div
+              id="run-picker"
+              class="run-picker"
+              aria-label="Choose a run"
+            ></div>
+            <div class="run-title">
+              <div>
+                <h2 id="run-name"></h2>
+                <p id="run-meta" class="meta"></p>
+              </div>
+              <span id="updated" class="meta"></span>
             </div>
-            <div id="frame-wrap" class="frame-wrap">
-              <div class="artifact-error">No artifacts yet.</div>
+            <div class="run-detail">
+              <div id="task-table" class="panel"></div>
+              <aside
+                id="task-inspector"
+                class="panel inspector"
+                aria-label="Selected task"
+              ></aside>
             </div>
-            <section id="agents" class="agents" aria-label="Agents">
-              <div id="runs"></div>
-            </section>
           </section>
+          <section
+            id="artifacts-panel"
+            hidden
+            aria-labelledby="outputs-heading"
+          >
+            <h1 id="outputs-heading">Outputs</h1>
+            <p class="subtitle">
+              Inspect the work without losing the run it belongs to.
+            </p>
+            <p id="library-error" class="error" role="status" hidden></p>
+            <div class="output-layout">
+              <aside class="panel output-list">
+                <label class="search-label"
+                  ><span class="sr-only">Search outputs</span
+                  ><input
+                    id="output-search"
+                    aria-label="Search outputs"
+                    type="search"
+                    placeholder="Search outputs"
+                /></label>
+                <div id="output-items"></div>
+                <p id="output-count" class="meta"></p>
+              </aside>
+              <section
+                class="panel output-preview"
+                aria-label="Artifact preview"
+              >
+                <div class="output-tools">
+                  <div class="output-title">
+                    <h2 id="artifact-name">No output selected</h2>
+                    <span id="artifact-status" class="badge"></span>
+                  </div>
+                  <div class="output-actions">
+                    <button id="open-folder" disabled>Open folder</button
+                    ><label
+                      ><span class="sr-only">Artifact version</span
+                      ><select
+                        id="artifact-version"
+                        aria-label="Artifact version"
+                        disabled
+                      ></select></label
+                    ><span id="preview-note" class="meta"></span>
+                  </div>
+                </div>
+                <div id="frame-wrap" class="frame-wrap">
+                  <p class="empty">
+                    No outputs yet. Results will appear here when a run
+                    publishes an artifact.
+                  </p>
+                </div>
+              </section>
+            </div>
+          </section>
+          <section id="models-panel" hidden aria-labelledby="models-heading">
+            <h1 id="models-heading">Model performance</h1>
+            <p class="subtitle">
+              Choose by executed checks, task type, and enough evidence.
+            </p>
+            <div class="model-tools">
+              <label
+                ><span class="sr-only">Model task type</span
+                ><select id="task-type" aria-label="Model task type">
+                  <option value="">All task types</option>
+                </select></label
+              ><span class="meta">All recorded results</span
+              ><button id="refresh-models">Refresh</button
+              ><span id="models-status" class="meta" role="status"></span>
+            </div>
+            <div id="models-table-wrap" class="panel table-wrap">
+              <table class="models-table">
+                <thead>
+                  <tr>
+                    <th>Model</th>
+                    <th>Harness</th>
+                    <th>First try pass</th>
+                    <th>Tasks</th>
+                    <th>Attempts</th>
+                    <th>Median time</th>
+                  </tr>
+                </thead>
+                <tbody id="model-rows"></tbody>
+              </table>
+              <p class="table-note">
+                First try pass = tasks that passed their executed check on
+                attempt 1.
+              </p>
+            </div>
+            <details class="signal-details">
+              <summary>View all signals and judgment notes</summary>
+              <div class="panel table-wrap">
+                <table class="models-table" id="model-signals">
+                  <thead>
+                    <tr>
+                      <th>Model</th>
+                      <th>Lab</th>
+                      <th>Harness</th>
+                      <th>API/Plan</th>
+                      <th>Tier</th>
+                      <th>Tasks</th>
+                      <th>First try</th>
+                      <th>Pass</th>
+                      <th>Tokens (median)</th>
+                      <th>Speed (median)</th>
+                      <th>Last used</th>
+                      <th>Notes</th>
+                    </tr>
+                  </thead>
+                  <tbody id="model-signal-rows"></tbody>
+                </table>
+              </div>
+            </details>
+            <aside class="notice evidence-note">
+              <h2>A perfect score can still be weak evidence.</h2>
+              <p>
+                Keep task counts visible and inspect failures before choosing a
+                model. Scores reflect your checks and task mix; they do not
+                prove general model quality.
+              </p>
+            </aside>
+          </section>
+          <section id="logs-panel" hidden aria-labelledby="logs-heading">
+            <div class="run-title">
+              <div>
+                <h1 id="logs-heading">Worker log</h1>
+                <p id="log-meta" class="subtitle"></p>
+              </div>
+              <button id="back-to-run">Back to run</button>
+            </div>
+            <div id="log-check"></div>
+            <h2>Worker output</h2>
+            <p id="log-error" class="error" role="status" hidden></p>
+            <pre id="worker-log" class="log panel" tabindex="0">
+Loading log…</pre
+            >
+          </section>
+        </main>
+        <footer class="workspace-footer">
+          Local results · checks executed by Ringer<span id="clock"></span>
+        </footer>
+      </div>
+      <section id="compact-panel" hidden aria-label="Compact Ringside">
+        <header class="compact-header" data-tauri-drag-region>
+          <span><i class="dot working"></i> RINGSIDE</span
+          ><button id="expand-button">Expand</button>
+        </header>
+        <div class="compact-content">
+          <h1 id="compact-title"></h1>
+          <p id="compact-attention" class="retry"></p>
+          <div id="compact-runs"></div>
+          <p id="compact-connection" class="meta"></p>
+          <button id="open-live-runs" class="primary">Open live runs</button>
         </div>
       </section>
-    </main>
-  </div>
-
-  <script>
-  (() => {
-    const TAB_KEY = "ringside-tab";
-    const ARTIFACT_KEY = "ringside-artifact-selection";
-    const state = {
-      runs: [],
-      active: {},
-      update: null,
-      artifacts: [],
-      runError: null,
-      libraryError: null,
-      tab: normalizeTab(localStorage.getItem(TAB_KEY)) || "live",
-      hasStoredTab: Boolean(normalizeTab(localStorage.getItem(TAB_KEY))),
-      expanded: new Map(),
-      logTimer: null,
-      artifactName: sessionStorage.getItem(ARTIFACT_KEY) || "",
-      artifactManual: Boolean(sessionStorage.getItem(ARTIFACT_KEY)),
-      artifactVersion: "live",
-      frameKey: "",
-      frameContent: "",
-      frameRequest: 0,
-      rendering: false,
-      runOpen: {},
-      focusedRunId: ""
-    };
-
-    const els = {
-      topDot: document.getElementById("top-dot"),
-      reconnect: document.getElementById("reconnect"),
-      clock: document.getElementById("clock"),
-      runningNow: document.getElementById("running-now"),
-      updateBanner: document.getElementById("update-banner"),
-      updateMessage: document.getElementById("update-message"),
-      dismissUpdate: document.getElementById("dismiss-update"),
-      runs: document.getElementById("runs"),
-      artifactPicker: document.getElementById("artifact-picker"),
-      artifactStatus: document.getElementById("artifact-status"),
-      artifactVersion: document.getElementById("artifact-version"),
-      frameWrap: document.getElementById("frame-wrap")
-    };
-
-    function normalizeTab(value) {
-      return value === "live" || value === "artifacts" ? value : "";
-    }
-
-    function updateKey(update) {
-      return update ? `${Number(update.behind) || 0}:${String(update.reason || "")}` : "";
-    }
-
-    function renderUpdateBanner() {
-      const behind = Number(state.update?.behind) || 0;
-      const reason = String(state.update?.reason || "").trim();
-      const key = updateKey(state.update);
-      const dismissed = sessionStorage.getItem("ringside-dismissed-update") === key;
-      if (behind <= 0 || !reason || dismissed) {
-        els.updateBanner.hidden = true;
-        return;
-      }
-      els.updateMessage.textContent = `Ringer update available: ${behind} commit(s) behind — ${reason}`;
-      els.updateBanner.hidden = false;
-    }
-
-    els.dismissUpdate.addEventListener("click", () => {
-      sessionStorage.setItem("ringside-dismissed-update", updateKey(state.update));
-      renderUpdateBanner();
-    });
-
-    function tickClock() {
-      els.clock.textContent = new Date().toLocaleTimeString([], {
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit"
-      });
-    }
-
-    function numberOrZero(value) {
-      const number = Number(value);
-      return Number.isFinite(number) ? number : 0;
-    }
-
-    function parseTime(value) {
-      const stamp = Date.parse(value || "");
-      return Number.isFinite(stamp) ? stamp : 0;
-    }
-
-    function elapsedForRun(run) {
-      const current = Number(run.elapsed_s);
-      if (run.state !== "live" && Number.isFinite(current)) return current;
-      const started = parseTime(run.started_at);
-      if (!started) return Number.isFinite(current) ? current : 0;
-      return Math.max(Number.isFinite(current) ? current : 0, (Date.now() - started) / 1000);
-    }
-
-    function formatDuration(seconds) {
-      const total = Math.max(0, Math.floor(numberOrZero(seconds)));
-      if (!total) return "—";
-      const hours = Math.floor(total / 3600);
-      const minutes = Math.floor((total % 3600) / 60);
-      const secs = total % 60;
-      if (hours) return `${hours}h ${String(minutes).padStart(2, "0")}m`;
-      if (minutes) return `${minutes}m ${String(secs).padStart(2, "0")}s`;
-      return `${secs}s`;
-    }
-
-    function formatTokens(value) {
-      return `${Math.round(numberOrZero(value)).toLocaleString()} tok`;
-    }
-
-    function relativeAgo(value) {
-      const stamp = parseTime(value);
-      if (!stamp) return "unknown";
-      const diff = Math.max(0, Math.floor((Date.now() - stamp) / 1000));
-      if (diff < 60) return `${diff}s ago`;
-      if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-      if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-      return `${Math.floor(diff / 86400)}d ago`;
-    }
-
-    function runId(run, index = 0) {
-      return String(run.run_id || run.id || `${run.identity || "run"}-${run.run_name || "ringer"}-${run.started_at || index}`);
-    }
-
-    function taskKey(task, index = 0) {
-      return String(task.key || task.id || task.name || `task-${index}`);
-    }
-
-    function expansionKey(runIdValue, taskKeyValue) {
-      return JSON.stringify([String(runIdValue), String(taskKeyValue)]);
-    }
-
-    function normalizeRuns(payload) {
-      const raw = Array.isArray(payload) ? payload : (Array.isArray(payload?.runs) ? payload.runs : []);
-      const runs = raw.filter(Boolean).map((run, index) => {
-        const totals = run.totals && typeof run.totals === "object" ? run.totals : {};
-        const summary = run.summary && typeof run.summary === "object" ? run.summary : {};
-        const rawState = String(run.state || "").toLowerCase();
-        const live = rawState === "live" || (!run.finished && rawState !== "finished" && rawState !== "died");
-        const stateName = rawState === "died" ? "died" : (live ? "live" : "finished");
-        const pass = numberOrZero(run.pass ?? summary.pass ?? totals.pass);
-        const fail = numberOrZero(run.fail ?? summary.fail ?? totals.fail);
-        const doneSource = run.done ?? summary.done ?? totals.done;
-        const done = doneSource === undefined || doneSource === null
-          ? pass + fail
-          : numberOrZero(doneSource);
-        const tokens = numberOrZero(run.tokens ?? summary.tokens ?? totals.tokens);
-        return {
-          ...run,
-          __index: index,
-          __id: runId(run, index),
-          state: stateName,
-          run_name: String(run.run_name || "ringer"),
-          identity: String(run.identity || "unknown"),
-          started_at: String(run.started_at || ""),
-          elapsed_s: elapsedForRun({...run, state: stateName}),
-          pass,
-          fail,
-          done,
-          tokens,
-          tasks: Array.isArray(run.tasks) ? run.tasks : []
-        };
-      });
-      runs.sort((left, right) => {
-        const leftLive = left.state === "live" ? 0 : 1;
-        const rightLive = right.state === "live" ? 0 : 1;
-        if (leftLive !== rightLive) return leftLive - rightLive;
-        return parseTime(right.started_at) - parseTime(left.started_at);
-      });
-      return runs.slice(0, 12);
-    }
-
-    function taskKind(task) {
-      const status = String(task?.status || task?.state || "").toLowerCase();
-      const verdict = String(task?.verdict || "").toUpperCase();
-      if (status === "pass" || verdict === "PASS") return "pass";
-      if (status === "retrying" || status === "redoing") return "retry";
-      if (status === "running" || status === "verifying" || status === "working") return "working";
-      if (status === "fail" || status === "failed" || status === "error" || status === "timeout" || status === "died" || verdict === "FAIL") return "fail";
-      return "waiting";
-    }
-
-    function taskStateText(kind) {
-      if (kind === "pass") return "finished & checked";
-      if (kind === "working") return "working";
-      if (kind === "retry") return "sent back — redoing";
-      if (kind === "fail") return "failed";
-      return "waiting";
-    }
-
-    function taskIsRunning(task) {
-      const kind = taskKind(task);
-      return kind === "working" || kind === "retry";
-    }
-
-    function taskActivity(task) {
-      const direct = String(task?.activity || "").trim();
-      if (direct) return direct;
-      const tail = Array.isArray(task?.log_tail) ? task.log_tail : [];
-      return tail.map(line => String(line).trim()).filter(Boolean).slice(-1)[0] || "";
-    }
-
-    function runIsRunningNow(run) {
-      return run.state === "live"
-        && state.active
-        && typeof state.active === "object"
-        && Object.prototype.hasOwnProperty.call(state.active, run.__id);
-    }
-
-    function runningNowRuns() {
-      return state.runs.filter(runIsRunningNow);
-    }
-
-    function setTab(_tab, _persist) { /* unified page — tabs removed */ }
-
-    function preserveScroll(mutate) {
-      const scroller = document.scrollingElement || document.documentElement;
-      const pageY = scroller.scrollTop;
-      mutate();
-      scroller.scrollTop = pageY;
-    }
-
-    // ── Flicker-free rendering ────────────────────────────────────────────
-    // Every poll used to rebuild whole subtrees (and reset the artifact
-    // iframe's srcdoc), which reads as a blink even when nothing changed.
-    // Instead, build the new tree and PATCH the live DOM: touch only nodes
-    // whose content actually differs, keyed by data-key so reordering moves
-    // real nodes instead of rewriting them in place under stale listeners.
-    function morphNode(have, want) {
-      if (have.nodeType === Node.ELEMENT_NODE) {
-        for (const name of [...have.getAttributeNames()]) {
-          // open/closed on a disclosure is the reader's choice; server HTML
-          // always ships it closed, so never sync it back shut.
-          if (name === "open" && have.tagName === "DETAILS") continue;
-          if (!want.hasAttribute(name)) have.removeAttribute(name);
-        }
-        for (const name of want.getAttributeNames()) {
-          if (name === "open" && have.tagName === "DETAILS") continue;
-          const value = want.getAttribute(name);
-          if (have.getAttribute(name) !== value) have.setAttribute(name, value);
-        }
-      }
-      morphChildren(have, want);
-    }
-
-    function morphChildren(have, want) {
-      const oldByKey = new Map();
-      const oldKids = [...have.childNodes];
-      for (const child of oldKids) {
-        const key = child.nodeType === Node.ELEMENT_NODE ? child.getAttribute("data-key") : null;
-        if (key) oldByKey.set(key, child);
-      }
-      let positional = 0;
-      const desired = [...want.childNodes].map(wanted => {
-        const key = wanted.nodeType === Node.ELEMENT_NODE ? wanted.getAttribute("data-key") : null;
-        let existing = null;
-        if (key) {
-          existing = oldByKey.get(key) || null;
-        } else {
-          while (positional < oldKids.length) {
-            const candidate = oldKids[positional];
-            positional += 1;
-            const candidateKey = candidate.nodeType === Node.ELEMENT_NODE ? candidate.getAttribute("data-key") : null;
-            if (candidateKey) continue;
-            existing = candidate;
-            break;
-          }
-        }
-        const compatible = existing
-          && existing.nodeType === wanted.nodeType
-          && (existing.nodeType !== Node.ELEMENT_NODE || existing.tagName === wanted.tagName);
-        if (!compatible) return wanted;
-        if (existing.nodeType === Node.TEXT_NODE || existing.nodeType === Node.COMMENT_NODE) {
-          if (existing.nodeValue !== wanted.nodeValue) existing.nodeValue = wanted.nodeValue;
-        } else if (existing.nodeType === Node.ELEMENT_NODE) {
-          morphNode(existing, wanted);
-        }
-        return existing;
-      });
-      // Re-place only nodes that are out of position; untouched nodes keep
-      // focus, scroll, and hover exactly as they were.
-      let index = 0;
-      for (const node of desired) {
-        const current = have.childNodes[index];
-        if (current !== node) have.insertBefore(node, current || null);
-        index += 1;
-      }
-      while (have.childNodes.length > desired.length) have.lastChild.remove();
-    }
-
-    function syncSelect(select, desired, value) {
-      while (select.options.length > desired.length) select.remove(select.options.length - 1);
-      desired.forEach((want, index) => {
-        let option = select.options[index];
-        if (!option) {
-          option = document.createElement("option");
-          select.add(option);
-        }
-        if (option.value !== want.value) option.value = want.value;
-        if (option.textContent !== want.text) option.textContent = want.text;
-      });
-      if (value !== undefined && select.value !== value) select.value = value;
-    }
-
-    function sizeFrame(frame) {
-      try {
-        const doc = frame.contentDocument;
-        if (!doc || !doc.documentElement) return;
-        // Morphing syncs attributes from server HTML, which never carries
-        // this inline style — re-assert it so the pane owns all scrolling.
-        doc.documentElement.style.overflowY = "hidden";
-        frame.style.height = Math.max(120, doc.documentElement.scrollHeight) + "px";
-      } catch (_e) {}
-    }
-
-    function renderTop() {
-      const anyLive = runningNowRuns().length > 0;
-      els.topDot.classList.toggle("live", anyLive);
-      els.reconnect.hidden = !(state.runError || state.libraryError);
-    }
-
-    function effectiveFocusedRunId(liveRuns) {
-      if (liveRuns.some(run => run.__id === state.focusedRunId)) return state.focusedRunId;
-      return liveRuns.find(run => run.run_name === state.artifactName)?.__id || "";
-    }
-
-    function renderRunningNow() {
-      const liveRuns = runningNowRuns();
-      const staging = document.createElement("div");
-      if (liveRuns.length >= 2) {
-        const activeRunId = effectiveFocusedRunId(liveRuns);
-        liveRuns.forEach(run => {
-          const button = document.createElement("button");
-          button.type = "button";
-          button.className = "run-switch";
-          button.dataset.key = run.__id;
-          button.setAttribute("aria-current", String(run.__id === activeRunId));
-          const total = run.tasks.length;
-          const done = Math.min(total, Math.max(0, run.done));
-          button.setAttribute("aria-label", `${run.run_name}, live, ${done} of ${total} tasks done`);
-          button.addEventListener("click", () => focusRun(run.__id));
-
-          const dot = document.createElement("span");
-          dot.className = "live-dot live";
-          dot.setAttribute("aria-hidden", "true");
-          const name = document.createElement("span");
-          name.className = "run-switch-name";
-          name.textContent = run.run_name;
-          const progress = document.createElement("span");
-          progress.className = "run-switch-progress mono";
-          progress.textContent = `${done}/${total}`;
-          button.append(dot, name, progress);
-          staging.appendChild(button);
-        });
-      }
-      state.rendering = true;
-      morphChildren(els.runningNow, staging);
-      state.rendering = false;
-    }
-
-    function focusRun(runIdValue) {
-      const run = state.runs.find(item => item.__id === runIdValue);
-      if (!run || !runIsRunningNow(run)) return;
-      state.focusedRunId = run.__id;
-      state.artifactName = run.run_name;
-      state.artifactManual = true;
-      state.artifactVersion = "live";
-      state.frameKey = "";
-      state.runOpen[run.__id] = true;
-      sessionStorage.setItem(ARTIFACT_KEY, run.run_name);
-      renderRunningNow();
-      renderArtifacts();
-      renderArtifactControls();
-      renderLive();
-      loadArtifactFrame(true);
-      requestAnimationFrame(() => requestAnimationFrame(() => {
-        const target = [...els.runs.querySelectorAll("details.run")]
-          .find(section => section.dataset.key === run.__id);
-        if (!target) return;
-        target.open = true;
-        state.runOpen[run.__id] = true;
-        target.scrollIntoView({
-          behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
-          block: "start"
-        });
-      }));
-    }
-
-    function renderLive() {
-      const staging = document.createElement("div");
-      if (!state.runs.length) {
-        const empty = document.createElement("div");
-        empty.className = "empty";
-        empty.textContent = "Nothing has run yet. Start something with: ./ringer.py run manifest.json";
-        staging.appendChild(empty);
-        state.rendering = true;
-        preserveScroll(() => { morphChildren(els.runs, staging); });
-        state.rendering = false;
-        syncLogPolling();
-        return;
-      }
-
-      const selectedName = state.artifactName;
-      const visibleRuns = selectedName ? state.runs.filter(run => run.run_name === selectedName) : state.runs;
-      const roundOrder = [...visibleRuns].sort((a, b) => parseTime(a.started_at) - parseTime(b.started_at));
-      const roundOf = run => roundOrder.indexOf(run) + 1;
-      if (!visibleRuns.length) {
-        const note = document.createElement("p");
-        note.className = "empty-note";
-        note.textContent = "No agent activity recorded for this artifact yet.";
-        staging.appendChild(note);
-      }
-      visibleRuns.forEach((run, runIndex) => {
-        const section = document.createElement("details");
-        section.className = `run ${run.state}`;
-        section.dataset.key = run.__id;
-        const preferred = state.runOpen[run.__id];
-        section.open = preferred !== undefined ? preferred : (run.state === "live" || runIndex === 0);
-        section.addEventListener("toggle", () => {
-          if (!state.rendering) state.runOpen[run.__id] = section.open;
-        });
-
-        const head = document.createElement("summary");
-        head.className = "corner run-head";
-        const dot = document.createElement("span");
-        dot.className = `live-dot ${runIsRunningNow(run) ? "live" : ""}`;
-        dot.setAttribute("aria-hidden", "true");
-        const title = document.createElement("span");
-        title.className = "eyebrow";
-        const titleBold = document.createElement("b");
-        titleBold.textContent = run.run_name;
-        title.appendChild(titleBold);
-        const identity = document.createElement("span");
-        identity.className = "identity";
-        identity.textContent = `Round ${roundOf(run)} · ${run.identity}`;
-        const stats = document.createElement("span");
-        stats.className = "clock mono run-stats";
-        const outcome = run.state === "live"
-          ? `${Math.min(run.tasks.length, run.done)}/${run.tasks.length} done`
-          : (run.fail > 0 ? `${run.pass} passed · ${run.fail} failed` : `all ${run.pass} passed`);
-        const tok = run.tokens > 0 ? ` · ${formatTokens(run.tokens)}` : "";
-        stats.textContent = `${outcome} · ${formatDuration(run.elapsed_s)}${tok}`;
-        head.append(dot, title, identity, stats);
-        section.appendChild(head);
-
-        const rounds = document.createElement("div");
-        rounds.className = "rounds";
-        const counts = {pass: 0, working: 0, retry: 0, waiting: 0, fail: 0};
-        run.tasks.forEach((task, index) => {
-          const kind = taskKind(task);
-          counts[kind] += 1;
-          const span = document.createElement("span");
-          span.className = kind;
-          span.setAttribute("aria-hidden", "true");
-          span.dataset.taskKey = taskKey(task, index);
-          rounds.appendChild(span);
-        });
-        rounds.setAttribute("role", "img");
-        rounds.setAttribute(
-          "aria-label",
-          `${run.tasks.length} workers: ${counts.pass} finished, ${counts.working} working, ${counts.retry} sent back, ${counts.waiting} waiting, ${counts.fail} failed`
-        );
-        section.appendChild(rounds);
-
-        const workers = document.createElement("div");
-        workers.className = "workers";
-        if (!run.tasks.length) {
-          const empty = document.createElement("div");
-          empty.className = "empty";
-          empty.textContent = "No workers have reported in yet.";
-          workers.appendChild(empty);
-        }
-        run.tasks.forEach((task, taskIndex) => {
-          const key = taskKey(task, taskIndex);
-          const kind = taskKind(task);
-          const expandedKey = expansionKey(run.__id, key);
-          const expanded = state.expanded.get(expandedKey);
-          const isExpanded = Boolean(expanded);
-          const card = document.createElement("article");
-          card.className = `worker-card${isExpanded ? " expanded" : ""}`;
-          card.dataset.key = `worker:${key}`;
-
-          const toggle = document.createElement("button");
-          toggle.className = "worker-card-toggle";
-          toggle.type = "button";
-          toggle.setAttribute("aria-expanded", String(isExpanded));
-          if (isExpanded) toggle.setAttribute("aria-controls", `stream-${runIndex}-${taskIndex}`);
-          toggle.addEventListener("click", () => toggleWorker(run.__id, key));
-
-          const glyph = document.createElement("span");
-          glyph.className = `glyph ${kind}`;
-          glyph.setAttribute("aria-hidden", "true");
-          const name = document.createElement("span");
-          name.className = "name";
-          name.textContent = key;
-          const cardHead = document.createElement("span");
-          cardHead.className = "worker-card-head";
-          cardHead.append(name, glyph);
-          const taskState = document.createElement("span");
-          taskState.className = `state ${kind}`;
-          taskState.textContent = taskStateText(kind);
-          const engine = String(task.engine || "").trim() || "engine not reported";
-          const model = String(task.model || "").trim();
-          const metaParts = [model ? `${engine} · ${model}` : engine];
-          metaParts.push(kind === "waiting" ? "—" : formatDuration(task.elapsed_s));
-          const attempts = numberOrZero(task.attempts);
-          if (attempts > 1) metaParts.push(`attempt ${attempts}`);
-          if (numberOrZero(task.tokens) > 0) metaParts.push(formatTokens(task.tokens));
-          const meta = document.createElement("span");
-          meta.className = "meta mono";
-          meta.textContent = metaParts.join(" · ");
-          toggle.setAttribute("aria-label", `${key}, ${taskStateText(kind)}, ${metaParts.join(", ")}`);
-          toggle.append(cardHead, taskState, meta);
-          const activityText = taskIsRunning(task) ? (taskActivity(task) || "No activity reported yet.") : "";
-          if (activityText) {
-            const activity = document.createElement("span");
-            activity.className = "activity";
-            activity.textContent = activityText;
-            toggle.appendChild(activity);
-          }
-          card.appendChild(toggle);
-
-          if (expanded) {
-            const stream = renderStream(run, task, taskIndex, expanded, expandedKey);
-            stream.id = `stream-${runIndex}-${taskIndex}`;
-            card.appendChild(stream);
-          }
-          workers.appendChild(card);
-        });
-        section.appendChild(workers);
-        staging.appendChild(section);
-        if (runIndex < state.runs.length - 1) section.setAttribute("aria-label", run.run_name);
-      });
-
-      state.rendering = true;
-      preserveScroll(() => { morphChildren(els.runs, staging); });
-      state.rendering = false;
-      syncLogPolling();
-    }
-
-    function renderStream(run, task, taskIndex, expanded, expandedKey) {
-      const panel = document.createElement("div");
-      panel.className = "stream";
-      panel.dataset.stream = "true";
-      panel.dataset.key = `stream:${taskKey(task, taskIndex)}`;
-      panel.dataset.expansionKey = expandedKey;
-
-      // The brief: the exact prompt this model was handed, plus the pass
-      // test that will judge its work. Watchers should never have to guess
-      // what an agent was asked to do.
-      const brief = document.createElement("details");
-      brief.className = "brief";
-      const briefSummary = document.createElement("summary");
-      briefSummary.textContent = "What it was asked to do";
-      brief.appendChild(briefSummary);
-      const briefPre = document.createElement("pre");
-      briefPre.textContent = String(task.spec || "").trim() || "No brief was recorded for this worker.";
-      brief.appendChild(briefPre);
-      const check = String(task.check || "").trim();
-      if (check) {
-        const checkLine = document.createElement("p");
-        checkLine.className = "brief-check mono";
-        checkLine.textContent = `Pass test: ${check}`;
-        brief.appendChild(checkLine);
-      }
-      panel.appendChild(brief);
-
-      const head = document.createElement("div");
-      head.className = "stream-head mono";
-      const title = document.createElement("span");
-      title.textContent = "Live work stream";
-      const engineTag = document.createElement("span");
-      const model = String(task.model || "").trim();
-      const engineName = String(task.engine || "").trim();
-      engineTag.textContent = model ? `${engineName || "engine"} · ${model}` : engineName;
-      const meta = document.createElement("span");
-      const attempts = numberOrZero(task.attempts);
-      const attemptNote = attempts > 1 ? `attempt ${attempts} · ` : "";
-      meta.textContent = attemptNote + (taskIsRunning(task) ? "polling every 1s" : "final snapshot");
-      head.append(title, engineTag, meta);
-      panel.appendChild(head);
-
-      const pre = document.createElement("pre");
-      pre.className = "stream-log";
-      pre.tabIndex = 0;
-      pre.textContent = expanded.logText || "No log output yet.";
-      pre.addEventListener("scroll", () => {
-        const distance = pre.scrollHeight - pre.scrollTop - pre.clientHeight;
-        if (state.expanded.get(expandedKey) === expanded) {
-          expanded.pinned = distance < 28;
-          expanded.scrollTop = pre.scrollTop;
-        }
-      });
-      panel.appendChild(pre);
-      if (expanded.error) {
-        const error = document.createElement("p");
-        error.className = "catch";
-        const bold = document.createElement("b");
-        bold.textContent = "Log stream unavailable:";
-        error.append(bold, document.createTextNode(` ${expanded.error}`));
-        panel.appendChild(error);
-      }
-
-      // Once the check has run, close the trust loop right here: what the
-      // check proved, and the raw output it printed while proving it.
-      const kind = taskKind(task);
-      if (kind === "pass" || kind === "fail") {
-        const verified = String(task.verified || "").trim();
-        const proofTail = String(task.check_output_tail || "").trim();
-        if (verified || proofTail) {
-          const verdict = document.createElement("div");
-          verdict.className = "verdict";
-          if (verified) {
-            const how = document.createElement("p");
-            how.className = "how";
-            const label = document.createElement("b");
-            label.textContent = kind === "pass" ? "How it was checked:" : "What the check demanded:";
-            how.append(label, document.createTextNode(` ${verified}`));
-            verdict.appendChild(how);
-          }
-          if (proofTail) {
-            const proof = document.createElement("details");
-            const proofSummary = document.createElement("summary");
-            proofSummary.textContent = kind === "pass" ? "See the proof" : "See why it failed";
-            proof.appendChild(proofSummary);
-            const proofPre = document.createElement("pre");
-            proofPre.textContent = proofTail;
-            proof.appendChild(proofPre);
-            verdict.appendChild(proof);
-          }
-          panel.appendChild(verdict);
-        }
-      }
-      requestAnimationFrame(() => {
-        if (expanded.pinned !== false) {
-          pre.scrollTop = pre.scrollHeight;
-        } else {
-          pre.scrollTop = expanded.scrollTop || 0;
-        }
-      });
-      return panel;
-    }
-
-    function toggleWorker(runIdValue, taskKeyValue) {
-      const key = expansionKey(runIdValue, taskKeyValue);
-      if (state.expanded.has(key)) {
-        closeWorker(key);
-        return;
-      }
-      state.expanded.set(key, {
-        runId: runIdValue,
-        taskKey: taskKeyValue,
-        logText: "",
-        error: "",
-        pinned: true,
-        scrollTop: 0,
-        finalFetched: false
-      });
-      renderLive();
-      const found = findExpandedTask(state.expanded.get(key));
-      if (found && taskIsRunning(found.task)) fetchExpandedLog(key);
-    }
-
-    function closeWorker(key) {
-      if (key) state.expanded.delete(key);
-      else state.expanded.clear();
-      if (!hasRunningExpandedTasks() && state.logTimer) {
-        clearInterval(state.logTimer);
-        state.logTimer = null;
-      }
-      renderLive();
-    }
-
-    function findExpandedTask(expanded) {
-      if (!expanded) return null;
-      const run = state.runs.find(item => item.__id === expanded.runId);
-      if (!run) return null;
-      const index = run.tasks.findIndex((task, taskIndex) => taskKey(task, taskIndex) === expanded.taskKey);
-      if (index < 0) return null;
-      return {run, task: run.tasks[index], index};
-    }
-
-    async function fetchExpandedLog(key) {
-      const expanded = state.expanded.get(key);
-      const found = findExpandedTask(expanded);
-      if (!expanded || !found) return;
-      const path = `/logs/${encodeURIComponent(found.run.__id)}/${encodeURIComponent(expanded.taskKey)}`;
-      try {
-        const response = await fetch(path, {cache: "no-store"});
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const raw = await response.text();
-        // Worker logs carry raw terminal output; strip ANSI escapes for the stream view.
-        const text = raw.replace(/\[[0-9;?]*[ -\/]*[@-~]/g, "").replace(/\[[0-9;]{1,6}m/g, "");
-        if (state.expanded.get(key) !== expanded) return;
-        expanded.logText = text || "No log output yet.";
-        expanded.error = "";
-        updateStreamText(key, expanded.logText);
-      } catch (error) {
-        if (state.expanded.get(key) !== expanded) return;
-        expanded.error = error?.message || "could not read log";
-        renderLive();
-      }
-    }
-
-    function updateStreamText(key, text) {
-      const stream = [...els.runs.querySelectorAll(".stream[data-expansion-key]")]
-        .find(item => item.dataset.expansionKey === key);
-      const pre = stream?.querySelector("pre.stream-log");
-      if (!pre) return;
-      const expanded = state.expanded.get(key);
-      if (!expanded) return;
-      const shouldPin = expanded.pinned !== false || pre.scrollHeight - pre.scrollTop - pre.clientHeight < 28;
-      const scrollTop = pre.scrollTop;
-      pre.textContent = text || "No log output yet.";
-      if (shouldPin) {
-        pre.scrollTop = pre.scrollHeight;
-      } else {
-        pre.scrollTop = scrollTop;
-        expanded.scrollTop = scrollTop;
-      }
-    }
-
-    function hasRunningExpandedTasks() {
-      return [...state.expanded.values()].some(expanded => {
-        const found = findExpandedTask(expanded);
-        return found && taskIsRunning(found.task);
-      });
-    }
-
-    function fetchExpandedLogs() {
-      [...state.expanded.entries()].forEach(([key, expanded]) => {
-        const found = findExpandedTask(expanded);
-        if (found && taskIsRunning(found.task)) fetchExpandedLog(key);
-      });
-    }
-
-    function syncLogPolling() {
-      [...state.expanded.entries()].forEach(([key, expanded]) => {
-        const found = findExpandedTask(expanded);
-        if (!found) {
-          state.expanded.delete(key);
-          return;
-        }
-        if (taskIsRunning(found.task)) expanded.finalFetched = false;
-        if (!taskIsRunning(found.task) && !expanded.finalFetched) {
-          expanded.finalFetched = true;
-          fetchExpandedLog(key);
-        }
-      });
-      const hasRunning = hasRunningExpandedTasks();
-      if (hasRunning && !state.logTimer) {
-        state.logTimer = setInterval(fetchExpandedLogs, 1000);
-      }
-      if (!hasRunning && state.logTimer) {
-        clearInterval(state.logTimer);
-        state.logTimer = null;
-      }
-    }
-
-    function normalizeArtifactState(value) {
-      const text = String(value || "").toLowerCase();
-      if (text === "live") return "live";
-      if (text === "pass" || text === "finished") return "pass";
-      if (text === "fail") return "fail";
-      if (text === "died") return "died";
-      return "unknown";
-    }
-
-    function artifactStateClass(value) {
-      const normalized = normalizeArtifactState(value);
-      return normalized === "died" ? "fail" : normalized;
-    }
-
-    function artifactVersionKey(version, index) {
-      return String(version.path || version.run_id || `${version.finished_at || ""}-${version.outcome || ""}-${index}`);
-    }
-
-    function normalizeLibrary(payload) {
-      const artifacts = payload?.artifacts && typeof payload.artifacts === "object" && !Array.isArray(payload.artifacts)
-        ? payload.artifacts
-        : {};
-      return Object.entries(artifacts).map(([name, entry]) => {
-        const item = entry && typeof entry === "object" ? entry : {};
-        const versions = Array.isArray(item.versions) ? item.versions : [];
-        const normalizedVersions = versions.map((version, index) => {
-          const value = version && typeof version === "object" ? version : {};
-          return {
-            key: artifactVersionKey(value, index),
-            run_id: String(value.run_id || ""),
-            path: String(value.path || ""),
-            finished_at: String(value.finished_at || ""),
-            finishedTs: parseTime(value.finished_at),
-            outcome: normalizeArtifactState(value.outcome),
-            tasks_pass: numberOrZero(value.tasks_pass),
-            tasks_fail: numberOrZero(value.tasks_fail)
-          };
-        }).sort((left, right) => right.finishedTs - left.finishedTs);
-        const updatedAt = String(item.updated_at || "");
-        const updatedTs = parseTime(updatedAt) || normalizedVersions[0]?.finishedTs || 0;
-        return {
-          name: String(name || "artifact"),
-          live_path: String(item.live_path || ""),
-          state: normalizeArtifactState(item.state),
-          identity: String(item.identity || "unknown"),
-          current_run_id: String(item.current_run_id || ""),
-          updated_at: updatedAt,
-          updatedTs,
-          versions: normalizedVersions
-        };
-      }).filter(item => item.name).sort((left, right) => {
-        const leftLive = left.state === "live" ? 1 : 0;
-        const rightLive = right.state === "live" ? 1 : 0;
-        if (leftLive !== rightLive) return rightLive - leftLive;
-        // Stable within each group: two live runs must never swap rows as
-        // their "updated Ns ago" leapfrogs every flush (demo-night lesson).
-        return left.name.localeCompare(right.name);
-      });
-    }
-
-    function sanitizeArtifactName(value) {
-      return String(value || "artifact").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[.-]+|[.-]+$/g, "") || "artifact";
-    }
-
-    function artifactLiveHref(name) {
-      return `/artifacts/live/${encodeURIComponent(sanitizeArtifactName(name))}.html`;
-    }
-
-    function artifactPathHref(path) {
-      const text = String(path || "").replace(/\\/g, "/");
-      const marker = "/artifacts/";
-      const index = text.lastIndexOf(marker);
-      const relative = index >= 0
-        ? text.slice(index + marker.length)
-        : text.replace(/^\/+/, "").replace(/^artifacts\//, "");
-      const parts = relative.split("/").filter(Boolean).map(encodeURIComponent);
-      return parts.length ? `/artifacts/${parts.join("/")}` : "";
-    }
-
-    function newestArtifact() {
-      const live = state.artifacts.filter(item => item.state === "live").sort((left, right) => right.updatedTs - left.updatedTs);
-      return live[0] || [...state.artifacts].sort((left, right) => right.updatedTs - left.updatedTs)[0] || null;
-    }
-
-    function selectedArtifact() {
-      return state.artifacts.find(item => item.name === state.artifactName) || null;
-    }
-
-    function syncArtifactSelection() {
-      if (!state.artifacts.length) {
-        state.artifactName = "";
-        state.artifactVersion = "live";
-        return;
-      }
-      const current = selectedArtifact();
-      if (state.artifactManual && current) {
-        if (state.artifactVersion !== "live" && !current.versions.some(version => version.key === state.artifactVersion)) {
-          state.artifactVersion = "live";
-        }
-        return;
-      }
-      if (state.artifactManual && !current) {
-        state.artifactManual = false;
-        sessionStorage.removeItem(ARTIFACT_KEY);
-      }
-      // Only choose FOR the user when nothing is on screen yet. A new live
-      // run must never steal the view mid-review (demo-night lesson).
-      if (current) return;
-      const target = newestArtifact();
-      if (target) {
-        state.artifactName = target.name;
-        state.artifactVersion = "live";
-      }
-    }
-
-    function selectedArtifactTarget() {
-      const artifact = selectedArtifact();
-      if (!artifact) return null;
-      if (state.artifactVersion !== "live") {
-        const version = artifact.versions.find(item => item.key === state.artifactVersion);
-        if (version) {
-          const src = artifactPathHref(version.path);
-          return {
-            artifact,
-            version,
-            src,
-            key: `${src}|version|${version.key}`
-          };
-        }
-      }
-      const src = artifactLiveHref(artifact.name);
-      return {
-        artifact,
-        version: null,
-        src,
-        key: `${src}|current|${artifact.state}`
-      };
-    }
-
-    function renderArtifacts() {
-      syncArtifactSelection();
-      let options;
-      if (!state.artifacts.length) {
-        options = [{value: "", text: state.libraryError ? "Ringside reconnecting…" : "No artifacts yet"}];
-      } else {
-        options = state.artifacts.map(artifact => {
-          const marker = artifact.state === "live" ? "● " : "";
-          return {
-            value: artifact.name,
-            text: `${marker}${artifact.name} — ${artifact.state === "live" ? "live" : artifact.state} · updated ${relativeAgo(artifact.updated_at)}`
-          };
-        });
-      }
-      syncSelect(els.artifactPicker, options, state.artifacts.length ? state.artifactName : "");
-      els.artifactPicker.disabled = !state.artifacts.length;
-    }
-
-    function renderArtifactControls() {
-      const artifact = selectedArtifact();
-      if (!artifact) {
-        els.artifactStatus.textContent = state.libraryError ? "reconnecting…" : "No artifact selected.";
-        syncSelect(els.artifactVersion, []);
-        els.artifactVersion.disabled = true;
-        return;
-      }
-
-      els.artifactStatus.textContent = artifact.state === "live"
-        ? "live — updating"
-        : `finished ${relativeAgo(artifact.updated_at)}`;
-      const options = [{
-        value: "live",
-        text: artifact.state === "live"
-          ? "Now — live, updating"
-          : `Now — finished ${relativeAgo(artifact.updated_at)}`
-      }];
-      const total = artifact.versions.length;
-      artifact.versions.forEach((version, index) => {
-        const outcome = version.tasks_fail > 0
-          ? `${version.tasks_pass} passed, ${version.tasks_fail} failed`
-          : `all ${version.tasks_pass} passed`;
-        options.push({
-          value: version.key,
-          text: `Round ${total - index} — ${outcome} · ${formatVersionTime(version.finished_at)}`
-        });
-      });
-      syncSelect(els.artifactVersion, options, state.artifactVersion);
-      els.artifactVersion.disabled = false;
-    }
-
-    function formatVersionTime(value) {
-      const stamp = parseTime(value);
-      if (!stamp) return "unknown";
-      return new Date(stamp).toLocaleString([], {
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit"
-      });
-    }
-
-    function showArtifactMessage(message) {
-      els.frameWrap.replaceChildren();
-      const line = document.createElement("div");
-      line.className = "artifact-error";
-      line.textContent = message;
-      els.frameWrap.appendChild(line);
-    }
-
-    async function loadArtifactFrame(force) {
-      const target = selectedArtifactTarget();
-      if (!target?.src) {
-        state.frameKey = "";
-        showArtifactMessage(state.artifacts.length ? "Artifact path unavailable." : "No artifacts yet.");
-        return;
-      }
-      const isLive = target.artifact.state === "live" && !target.version;
-      if (!force && state.frameKey === target.key && !isLive) return;
-      const request = ++state.frameRequest;
-      try {
-        const response = await fetch(target.src, {cache: "no-store"});
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const raw = await response.text();
-        if (request !== state.frameRequest) return;
-        // The live page carries a meta refresh for standalone viewing; inside
-        // this pane WE are the refresher — strip it and swap content only on
-        // change, so nothing ever flashes.
-        let html = raw.replace(/<meta[^>]+http-equiv=["']?refresh["']?[^>]*>/gi, "");
-        // srcdoc documents have no base URL: without this, every relative
-        // deliverable/work-log link 404s. Resolve against the fetched URL and
-        // open results in a new tab so the pane never navigates away.
-        const baseHref = new URL(target.src, window.location.href).href;
-        html = html.replace(/<head([^>]*)>/i, `<head$1><base href="${baseHref}" target="_blank">`);
-        if (state.frameKey === target.key && state.frameContent === html) return;
-        let frame = els.frameWrap.querySelector("iframe");
-        const sameDoc = frame && state.frameKey === target.key;
-        if (sameDoc && frame.contentDocument?.documentElement) {
-          // Same artifact, new content: patch the live document in place.
-          // Resetting srcdoc tears the whole page down — that teardown IS
-          // the blink, and it also loses the reader's place and any open
-          // disclosure. Morph touches only what changed.
-          try {
-            const next = new DOMParser().parseFromString(html, "text/html");
-            morphNode(frame.contentDocument.documentElement, next.documentElement);
-            sizeFrame(frame);
-            state.frameContent = html;
-            return;
-          } catch (_e) { /* fall through to a full reload */ }
-        }
-        const keepScroll = sameDoc ? (window.scrollY || 0) : 0;
-        if (!frame || !sameDoc) {
-          frame = document.createElement("iframe");
-          frame.title = `Artifact: ${target.artifact.name}`;
-          els.frameWrap.replaceChildren(frame);
-        }
-        frame.addEventListener("load", () => {
-          try {
-            const doc = frame.contentDocument;
-            sizeFrame(frame);
-            doc.documentElement.style.overflowY = "hidden";
-            if (keepScroll) window.scrollTo(0, keepScroll);
-          } catch (_e) {}
-        }, {once: true});
-        frame.srcdoc = html;
-        state.frameKey = target.key;
-        state.frameContent = html;
-      } catch (_error) {
-        if (request !== state.frameRequest) return;
-        state.frameKey = "";
-        state.frameContent = "";
-        showArtifactMessage("Could not load this artifact.");
-      }
-    }
-
-    async function fetchRuns() {
-      try {
-        const response = await fetch("/api/runs", {cache: "no-store"});
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const payload = await response.json();
-        state.runs = normalizeRuns(payload);
-        state.active = payload?.active || {};
-        state.update = payload?.update || null;
-        state.runError = null;
-      } catch (error) {
-        state.runError = error?.message || "runs unavailable";
-      }
-      renderTop();
-      renderUpdateBanner();
-      renderRunningNow();
-      renderLive();
-    }
-
-    async function fetchLibrary() {
-      try {
-        const response = await fetch("/api/library", {cache: "no-store"});
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const payload = await response.json();
-        state.artifacts = normalizeLibrary(payload);
-        state.libraryError = null;
-      } catch (error) {
-        state.libraryError = error?.message || "library unavailable";
-      }
-      renderTop();
-      renderArtifacts();
-      renderArtifactControls();
-      renderRunningNow();
-      loadArtifactFrame(false);
-    }
-    els.artifactVersion.addEventListener("change", () => {
-      state.artifactVersion = els.artifactVersion.value || "live";
-      state.frameKey = "";
-      renderArtifactControls();
-      loadArtifactFrame(true);
-    });
-    document.getElementById("open-folder").addEventListener("click", () => {
-      const artifact = selectedArtifact();
-      if (!artifact) return;
-      const version = state.artifactVersion !== "live"
-        ? artifact.versions.find(item => item.key === state.artifactVersion)
-        : null;
-      const runId = version ? version.run_id : (artifact.current_run_id || "");
-      fetch(`/api/open-folder?artifact=${encodeURIComponent(artifact.name)}&run=${encodeURIComponent(runId)}`).catch(() => {});
-    });
-
-    els.artifactPicker.addEventListener("change", () => {
-      const name = els.artifactPicker.value;
-      if (!name) return;
-      state.artifactName = name;
-      state.artifactManual = true;
-      state.artifactVersion = "live";
-      state.frameKey = "";
-      sessionStorage.setItem(ARTIFACT_KEY, name);
-      state.focusedRunId = "";
-      renderArtifacts();
-      renderArtifactControls();
-      renderRunningNow();
-      renderLive();
-      loadArtifactFrame(true);
-    });
-    document.addEventListener("keydown", event => {
-      if (event.key === "Escape" && state.expanded.size) closeWorker();
-    });
-
-    tickClock();
-    renderTop();
-    renderRunningNow();
-    renderLive();
-    renderArtifacts();
-    fetchRuns();
-    fetchLibrary();
-    setInterval(tickClock, 1000);
-    setInterval(fetchRuns, 1000);
-    setInterval(fetchLibrary, 2000);
-  })();
-  </script>
-</body>
+    </div>
+    <dialog id="settings">
+      <form method="dialog">
+        <div class="run-title">
+          <h2>Ringside settings</h2>
+          <button aria-label="Close settings">×</button>
+        </div>
+        <label class="setting"
+          ><input id="auto-refresh" type="checkbox" checked /> Automatically
+          refresh local results</label
+        >
+        <p class="meta">
+          Runs refresh every second, outputs every two seconds, and models every
+          fifteen seconds while visible.
+        </p>
+        <p class="meta">
+          Press Escape to return from logs or leave compact view. Task buttons
+          work with Tab and Enter.
+        </p>
+        <button>Done</button>
+      </form>
+    </dialog>
+    <script src="/hud.js"></script>
+    <script src="/ringside.js"></script>
+  </body>
 </html>

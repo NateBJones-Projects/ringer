@@ -3,16 +3,34 @@ use std::{env, fs, path::PathBuf};
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let repo_dir = manifest_dir.parent().expect("hud has a parent repo");
-    let dashboard_html = repo_dir.join("dashboard").join("dashboard.html");
-    let hud_js = manifest_dir.join("frontend").join("hud.js");
+    let dashboard_dir = repo_dir.join("dashboard");
     let dist_dir = manifest_dir.join("dist");
-
-    println!("cargo:rerun-if-changed={}", dashboard_html.display());
-    println!("cargo:rerun-if-changed={}", hud_js.display());
-
-    fs::create_dir_all(&dist_dir).expect("create dist dir");
-    fs::copy(&dashboard_html, dist_dir.join("index.html")).expect("copy dashboard html");
-    fs::copy(&hud_js, dist_dir.join("hud.js")).expect("copy hud bridge");
+    // Direct cargo builds must embed the same frontend as the Tauri sync hook.
+    let sources = [
+        (dashboard_dir.join("ringside.html"), "index.html"),
+        (dashboard_dir.join("ringside.css"), "ringside.css"),
+        (dashboard_dir.join("ringside.js"), "ringside.js"),
+        (
+            dashboard_dir.join("assets/ringside-mark.svg"),
+            "assets/ringside-mark.svg",
+        ),
+        (
+            dashboard_dir.join("assets/ringside-live.svg"),
+            "assets/ringside-live.svg",
+        ),
+        (
+            dashboard_dir.join("assets/ringside-attention.svg"),
+            "assets/ringside-attention.svg",
+        ),
+        (manifest_dir.join("frontend/hud.js"), "hud.js"),
+    ];
+    for (source, target) in sources {
+        println!("cargo:rerun-if-changed={}", source.display());
+        let destination = dist_dir.join(target);
+        fs::create_dir_all(destination.parent().expect("asset has parent"))
+            .expect("create dist dir");
+        fs::copy(source, destination).expect("copy Ringside frontend");
+    }
 
     tauri_build::build();
 }

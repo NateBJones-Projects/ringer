@@ -157,7 +157,9 @@ class HudModelsTabTests(unittest.TestCase):
         with urlopen(f"http://127.0.0.1:{port}/", timeout=5) as response:
             page = response.read().decode("utf-8")
         self.assertIn('id="models-tab"', page)
-        self.assertIn("/api/models", page)
+        self.assertIn('src="/ringside.js"', page)
+        with urlopen(f"http://127.0.0.1:{port}/ringside.js", timeout=5) as response:
+            self.assertIn("/api/models", response.read().decode("utf-8"))
         for column in MODEL_SCOREBOARD_COLUMNS:
             self.assertIn(f">{column}<", page)
         with urlopen(f"http://127.0.0.1:{port}/api/models", timeout=5) as response:
