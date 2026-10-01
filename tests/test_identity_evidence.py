@@ -105,6 +105,14 @@ access = "OpenRouter API"
         output = "OpenAI Codex v0.144.0\n--------\nmodel: gpt-5.6-sol\nprovider: openai\n"
         self.assertEqual("gpt-5.6-sol", parse_reported_model(output, engine.model_report_regex))
 
+    def test_codex_report_regex_captures_ansi_colorized_header(self) -> None:
+        # Real bytes from codex exec run with FORCE_COLOR set (as Claude Code
+        # and most CI systems do): the header is bold-wrapped, so the ^model:
+        # anchor never matches without stripping ANSI first.
+        engine = load_engines(None)["codex"]
+        output = "OpenAI Codex v0.146.0\n--------\n\x1b[1mmodel:\x1b[0m gpt-5.6-sol\nprovider: openai\n"
+        self.assertEqual("gpt-5.6-sol", parse_reported_model(output, engine.model_report_regex))
+
     def test_reported_model_wins_and_resolved_model_is_fallback(self) -> None:
         rows = self.log_attempts(
             WorkerResult(0, False, 12, reported_model="gpt-5.7"),
