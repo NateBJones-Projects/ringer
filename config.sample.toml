@@ -170,6 +170,19 @@ model_report_regex = "(?m)^model:[ \\t]*([^ \\t\\r\\n]+)[ \\t]*\\r?$"
 # full_access_args = ["--no-sandbox"]
 # token_regex = '"tokens":\{"total":([0-9]+)'
 
+# Gemini CLI (Google). Install: npm install -g @google/gemini-cli
+# The gemini CLI reports token usage only in its JSON output format, and stats.models
+# contains multiple models (router + main) that must be summed together.
+# [engines.gemini]
+# bin = "gemini"
+# args_template = [
+#   "run",
+#   "--output-format",
+#   "json",
+#   "{spec}"
+# ]
+# token_json_paths = ["stats.models.*.tokens.total"]
+
 [artifact]
 # Zero-LLM, self-contained HTML artifacts rendered directly from state — no model calls, no
 # network. Three files per config, all pure stdlib templates:
