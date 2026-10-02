@@ -1,0 +1,19 @@
+{
+  "run_name": "claude-worker-smoke",
+  "workdir": "/tmp/ringer-claude-worker-smoke",
+  "max_parallel": 1,
+  "tasks": [
+    {
+      "key": "claude-ready",
+      "engine": "claude",
+      "model": "claude-sonnet-5",
+      "engine_args": ["--effort", "low"],
+      "task_type": "probe",
+      "spec": "You are a one-task Ringer probe worker. Boundary: this is a smoke test, not a general code-editing task. You own only hello.txt in the current task directory. Create hello.txt containing exactly one line: claude worker ready. Do not modify any other file, do not commit, and do not claim success until you have read the file back.",
+      "check": "test -f hello.txt || { echo 'FAIL: hello.txt was not created'; exit 1; }; test \"$(wc -l < hello.txt)\" -eq 1 || { echo 'FAIL: hello.txt must contain exactly one line'; exit 1; }; grep -Fxq 'claude worker ready' hello.txt || { echo 'FAIL: hello.txt does not contain the exact expected text'; exit 1; }",
+      "expect_files": ["hello.txt"],
+      "timeout_s": 300,
+      "verified": "hello.txt exists and contains exactly the expected single line"
+    }
+  ]
+}
