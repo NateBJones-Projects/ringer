@@ -53,6 +53,7 @@ CONFIG_FILE_NAME = "config.toml"
 DEFAULT_ENGINE_NAME = "codex"
 DEFAULT_TIMEOUT_S = 900
 CHECK_TIMEOUT_S = 60
+MAX_CHECK_TIMEOUT_S = 3600
 DEFAULT_DASHBOARD_PORT_BASE = 8787
 DEFAULT_HUD_PORT = 8700
 DEFAULT_CATALOG_SOURCE = "https://openrouter.ai/api/v1/models"
@@ -1738,6 +1739,11 @@ class TaskSpec:
     # engine's {model} placeholder); empty means the engine's model_default.
     model: str = ""
     task_type: str = ""
+    check_timeout_s: int | None = None
+
+    @property
+    def effective_check_timeout_s(self) -> int:
+        return self.check_timeout_s if self.check_timeout_s is not None else CHECK_TIMEOUT_S
 
     @classmethod
     def from_obj(cls, obj: dict[str, Any]) -> "TaskSpec":
@@ -1790,6 +1796,14 @@ class TaskSpec:
         task_type = obj.get("task_type", "")
         if not isinstance(task_type, str):
             raise ValueError(f"task {key}: task_type must be a string")
+        check_timeout_s = None
+        if "check_timeout_s" in obj:
+            value = obj["check_timeout_s"]
+            if not (type(value) is int and 1 <= value <= MAX_CHECK_TIMEOUT_S):
+                raise ValueError(
+                    f"task {key}: check_timeout_s must be a whole number of seconds from 1 to {MAX_CHECK_TIMEOUT_S} (got {value!r})"
+                )
+            check_timeout_s = value
         return cls(
             key=key,
             spec=spec,
@@ -1804,6 +1818,7 @@ class TaskSpec:
             verified=verified.strip(),
             model=model.strip(),
             task_type=task_type.strip(),
+            check_timeout_s=check_timeout_s,
         )
 
 
@@ -2394,6 +2409,7 @@ class StateWriter:
                     "check_output_tail": shorten(runtime.last_check_output, 4000),
                     "setup_error": runtime.setup_error,
                     "timeout_s": runtime.task.timeout_s,
+                    "check_timeout_s": runtime.task.effective_check_timeout_s,
                     "max_attempts": runtime.task.max_attempts,
                     "taskdir": str(runtime.taskdir),
                     "log_path": str(runtime.log_path),
@@ -8724,7 +8740,7 @@ def run_models_command(config: AppConfig, args: argparse.Namespace) -> int:
 
 class Verifier:
     async def verify(self, task: TaskSpec, taskdir: Path) -> VerifyResult:
-        check_returncode, check_timed_out, output = await self._run_check(task.check, taskdir)
+        check_returncode, check_timed_out, output = await self._run_check(task.check, taskdir, task.effective_check_timeout_s)
         missing_files = tuple(
             rel for rel in task.expect_files if not self._is_nonempty_file(self._expect_file_path(taskdir, rel))
         )
@@ -8762,7 +8778,7 @@ class Verifier:
         return candidate if candidate.is_absolute() else taskdir / candidate
 
     @staticmethod
-    async def _run_check(command: str, cwd: Path) -> tuple[int | None, bool, str]:
+    async def _run_check(command: str, cwd: Path, timeout_s: int | None = None) -> tuple[int | None, bool, str]:
         proc = await asyncio.create_subprocess_shell(
             command,
             cwd=str(cwd),
@@ -8772,8 +8788,9 @@ class Verifier:
             start_new_session=True,
         )
         timed_out = False
+        limit = CHECK_TIMEOUT_S if timeout_s is None else timeout_s
         try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=CHECK_TIMEOUT_S)
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=limit)
         except asyncio.TimeoutError:
             timed_out = True
             terminate_process_group(proc)
@@ -8784,7 +8801,7 @@ class Verifier:
                 stdout, _ = await proc.communicate()
         output = stdout.decode("utf-8", errors="replace") if stdout else ""
         if timed_out:
-            output += f"\n[ringer.py] check timed out after {CHECK_TIMEOUT_S}s\n"
+            output += f"\n[ringer.py] check timed out after {limit}s\n"
         return proc.returncode, timed_out, output
 
 
@@ -10172,6 +10189,7 @@ def dry_run(
         print(f"    engine: {task.engine}")
         print(f"    dir: {taskdir}")
         print(f"    timeout_s: {task.timeout_s}")
+        print(f"    check_timeout_s: {task.effective_check_timeout_s}")
         print(f"    max_attempts: {task.max_attempts}")
         if task.full_access:
             print(f"    full_access: true allowed={full_access_allowed}")
