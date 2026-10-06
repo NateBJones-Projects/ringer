@@ -111,6 +111,16 @@ confidence = "verified"
 source = "https://ai.google.dev/gemini-api/docs/models"
 last_verified = 2026-09-02
 
+# 2026-10-06: after upgrading the Gemini CLI to 0.63.0, a `-m gemini-3.5-flash`
+# request is served as gemini-3.8-flash (stats.models self-report), so lane runs
+# resolve here now. 3.5-flash stays registered for older run logs.
+[engines.gemini.models."gemini-3.8-flash"]
+display = "Gemini 3.8 Flash"
+lab = "Google"
+confidence = "verified"     # harness self-report (gemini CLI v0.63.0 stats.models, 2026-10-06); Google Gemini API
+source = "https://ai.google.dev/gemini-api/docs/models"
+last_verified = 2026-10-06
+
 [engines.claude]
 # Claude Code CLI run headless (`-p --model {model} --output-format json`).
 # The per-task manifest "model" field is the CLI's short alias — sonnet, haiku,
