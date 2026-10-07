@@ -372,6 +372,121 @@ When you claim a saving, count the whole job — every call, including your own
 planning and review. Moving tokens from your context into a worker's is only a
 saving if the total came down.
 
+### Parent-context circuit breaker
+
+Ringer can constrain worker spend; it cannot stop the orchestrator from
+replaying a growing transcript. Protect the expensive parent context as an
+explicit part of every long run:
+
+- Before launch, write a compact run ledger outside the conversation: run id,
+  manifest, accepted findings, current artifact, and next gate. Update that
+  ledger only on state changes. It is the restart packet; the chat transcript
+  is not.
+- Wait with the longest bounded tool wait the host permits. Do not open a new
+  model turn merely to report that a worker is still running. Send progress
+  only when state changes, the user asks, or the host's required update
+  interval is reached.
+- Poll compact state first: process status and selected run-JSON fields. Never
+  load `log_tail_full`, a whole worker log, or a whole prior transcript into
+  the parent context. On failure, search for the error and read only the
+  surrounding lines; on success, inspect the declared artifact and diff.
+- Measure the parent's usage window at the start and after each accepted
+  artifact when the host exposes it. Default pause-and-replan threshold: five
+  percentage points spent without producing a newly accepted artifact.
+- When a session has accumulated multiple build/review rounds or a large
+  transcript, offer the human a fresh continuation task backed by the compact
+  ledger. Never create that task without their explicit request.
+
+### Provider and Flash retry discipline
+
+- A zero-token startup/server error is provider evidence, not a worker-quality
+  failure. Allow the manifest's single automatic retry; do not rewrite the
+  brief or inspect repository state before that retry finishes.
+- If the same provider produces two zero-token startup errors within 30
+  minutes, run at most one minimal health probe. If the probe also needs a
+  retry, stop launching substantive work on that provider until a cooldown,
+  an explicit human override, or an approved model change.
+- Do not dispatch the same stalled Flash brief a third time. After one normal
+  run and one materially simplified retry, either split it into smaller
+  independently checked lanes, move it to a stronger approved model, or
+  report the blocker. A shorter timeout or `low` reasoning does not count as a
+  meaningful simplification by itself.
+- If a Flash worker spends most of its attempt inspecting or narrating before
+  the first owned-file write, make the retry action-first and reduce the
+  contract surface. Do not add more explanatory prose to correct hesitation;
+  move nuance into executable checks or a later review lane.
+
+### Run shepherd (optional delegation)
+
+For a sustained run — more than one bounded wait, or several build/review
+rounds — the parent may hand the mechanical supervision to one cheaper
+subagent, the *shepherd*, and keep its own context for judgment. Skip the
+shepherd for `ask` and for any run expected to finish inside a single bounded
+wait; there the hand-off costs more than it saves.
+
+The host's skill wrapper names the shepherd model. Pick the cheapest
+current-generation model that can read run JSON and triage a failed check, pass
+it explicitly on the spawn, and never run the shepherd at the parent's tier.
+
+| Shepherd may | Parent owns |
+|---|---|
+| Check model slugs, routes, availability; read scoreboard and catalog | Scope, pattern choice, and the stop limits |
+| Draft, lint, and dry-run a transient manifest and its checks | Approving the manifest and checks |
+| Launch the approved run, wait, and read compact run state | Reviewing the delivered artifact, diff, or source |
+| Triage a failed check from targeted snippets and recommend retry or stop | Deciding whether a retry is justified |
+| Keep the run ledger current | Reconciling independent lanes, integration, the user-facing result |
+
+**Approval binds to content.** The parent approves a specific manifest and
+check set, recorded in the ledger as a content hash (`shasum -a 256`). The
+shepherd launches only that hash. Any edit after approval — including a lint
+fix — goes back to the parent before launch.
+
+**Writes.** The shepherd edits no shared repository file. It may launch only
+manifests whose writes land in Ringer-managed worktrees or that are read-only.
+Transient manifests live in a temporary location, never in a shared checkout.
+
+**Reports are state changes, with provenance.** Report only when state changes
+or a stop limit is hit: run id, task and model, attempts, elapsed time, check
+verdict, artifact path, and the next decision gate. Every verdict names the
+run-JSON field it came from, so the parent can confirm it with one `jq` call;
+never paraphrase a verdict. Raw logs, `log_tail_full`, and whole run JSON stay
+out of the report, per the circuit breaker above.
+
+**Ledger additions.** On top of the circuit-breaker ledger, record: the
+shepherd's model, the approved manifest hash, attempts per task, the stop
+limits, and the parent's usage at launch. Attempt counts live in the ledger,
+not in the shepherd's memory, so a replacement shepherd inherits them and the
+no-third-stalled-brief rule still holds.
+
+**Stop limits are set before launch** — wall time, attempts per task, and a
+spend ceiling — and the shepherd returns to the parent when any is reached
+rather than extending them.
+
+**Bounded role.** The shepherd does not spawn agents, widen scope, choose a
+different pattern, or substitute a model. If the requested worker model or the
+shepherd's own model is unavailable, it reports that and stops. When it hits
+something that needs judgment, it returns a short decision packet: what
+happened, the evidence (field paths and snippets), and the options.
+
+**Evidence ladder.** Keep these separate in every report: liveness → artifact
+progress → check PASS → code review → PR → merge → live activation. The
+shepherd reports at most the first three. An executed check proves its stated
+contract, not semantic correctness or deployment acceptance.
+
+**Prove it pays.** Record parent usage per accepted artifact for shepherded
+jobs and compare it against comparable unshepherded ones. If three consecutive
+shepherded jobs are not cheaper for the parent and in total, stop defaulting
+to a shepherd until the cause is understood.
+
+**Lane craft the shepherd preserves across retries:**
+- Keep a successful artifact or patch from an earlier round; a retry reruns
+  only the failed lane.
+- Give each artifact check a negative control: an input or state that must
+  FAIL, so a vacuous PASS is caught.
+- Keep source-observed and merely-reachable claims distinct, and carry open
+  uncertainties forward in the ledger rather than resolving them by assumption.
+- Check artifact-level results before widening to more lanes.
+
 ## Baked-in invariants (preserve in any change to ringer.py)
 
 Stdin closed (`< /dev/null`); sandbox mode explicit; verification executes
