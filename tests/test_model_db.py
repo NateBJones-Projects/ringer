@@ -180,8 +180,8 @@ class ModelDbTests(unittest.TestCase):
             conn.commit()
 
         self.assertEqual("wal", str(journal_mode).lower())
-        self.assertEqual(3, user_version)
-        self.assertEqual(3, version)
+        self.assertEqual(4, user_version)
+        self.assertEqual(4, version)
 
     def test_rebuild_ingests_rows_and_counts_skipped_lines(self) -> None:
         write_jsonl(
