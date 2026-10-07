@@ -32,7 +32,7 @@ Use this for narrowly scoped app pages, route additions, component changes, scri
 
 ## Checks
 
-The check verifies four things: `notes.md` exists in the scratch task directory, required repo paths exist, required text appears in owned files, the configured build/test command passes, and `git status --porcelain` contains only owned or allowlisted paths.
+The check first installs any files staged at `output/repo/<repo-relative-path>` into `{{REPO_PATH}}` — owned paths only, fail-closed: a symlinked stage root, a staged symlink or non-regular file, a `.git/` path, a destination that escapes the repo or resolves through a symlink, or an unowned file refuses the whole harvest with nothing copied. An absent or empty `output/repo` is simply ignored; a copy error mid-install is reported by name, and anything installed before it shows up in the repo's git status. This is how write-confined engines (the opencode Seatbelt wrapper confines writes to the task directory) deliver repo changes: the worker edits and verifies in a mirror inside its task directory, stages the finished files, and the check — which runs outside the worker sandbox — installs them. Then it verifies: `notes.md` exists in the scratch task directory, required repo paths exist, required text appears in owned files, the configured build/test command passes, and `git status --porcelain` contains only owned or allowlisted paths. If validation fails before the build, the build is skipped and the failure output says exactly what is missing — plus a staging hint when nothing was staged — so the retry prompt carries the real story.
 
 This cannot be gamed by creating a loose artifact in the task directory because the real repo command executes in `{{REPO_PATH}}` and the git porcelain check catches unrelated edits.
 
@@ -46,7 +46,9 @@ Validate against the current upstream head before merging. A worker can pass aga
 
 Never run `git add -A` in a checkout with untracked scratch files. Stage specific paths after human review; the Ringer check only proves the worker's current diff is confined.
 
-`engine_args` must include the repo in `sandbox_workspace_write.writable_roots`, or the worker will only be able to write its task directory.
+`engine_args` `sandbox_workspace_write.writable_roots` is codex syntax — it does nothing for other engines. Opencode workers run under a Seatbelt wrapper that denies every write outside the task directory no matter what the manifest says; they deliver through the staged-output contract above (2026-08-26 lesson: two correct GLM builds burned both attempts against an untouched repo before the harvest existed — see `docs/MODEL-NOTES.md`).
+
+The staged-output harvest copies whole files; it cannot express deletions or renames. If the feature needs those, use a direct-writing engine (codex) or apply them yourself after review.
 
 The worker's `notes.md` belongs in the task directory, not the repo. The repo check should assert real source changes and git cleanliness; notes are just the build report.
 
