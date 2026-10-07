@@ -98,3 +98,24 @@ lab = "Meta"
 confidence = "verified"
 source = "manifest model field; OpenRouter slug meta-llama/llama-3.3-70b-instruct:free"
 last_verified = 2026-07-10
+
+[engines.opencode.models."ollama-cloud/kimi-k2.7-code"]
+display = "Kimi K2.7 Code (Ollama Cloud)"
+lab = "Moonshot AI"
+confidence = "verified"
+source = "Ollama Cloud slug kimi-k2.7-code; same Moonshot AI model as OpenRouter moonshotai/kimi-k2.7-code (moonshot.ai)"
+last_verified = 2026-07-12
+
+[engines.opencode.models."ollama-cloud/qwen3-coder:480b"]
+display = "Qwen3 Coder 480B (Ollama Cloud)"
+lab = "Alibaba (Qwen)"
+confidence = "verified"
+source = "Ollama Cloud slug qwen3-coder:480b = Qwen3-Coder-480B-A35B (github.com/QwenLM/Qwen3-Coder)"
+last_verified = 2026-07-12
+
+[engines.opencode.models."ollama/qwen3-coder:480b"]
+display = "Qwen3 Coder 480B (Ollama Cloud)"
+lab = "Alibaba (Qwen)"
+confidence = "verified"
+source = "Retired slug from a misconfigured provider id (401 run, 2026-07-12); same model as ollama-cloud/qwen3-coder:480b"
+last_verified = 2026-07-12
