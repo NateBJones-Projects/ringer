@@ -32,6 +32,7 @@ class LintManifestTests(unittest.TestCase):
         *,
         worktrees: bool = False,
         max_parallel: int = 1,
+        repo: bool = False,
     ) -> Manifest:
         temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(temp_dir.cleanup)
@@ -42,7 +43,7 @@ class LintManifestTests(unittest.TestCase):
             "worktrees": worktrees,
             "tasks": tasks,
         }
-        if worktrees:
+        if worktrees or repo:
             obj["repo"] = temp_dir.name
         return Manifest.from_obj(obj)
 
@@ -310,6 +311,56 @@ class LintManifestTests(unittest.TestCase):
                 findings = lint_manifest(manifest)
                 self.assertEqual([], findings, f"{path} should lint clean, got: {findings}")
 
+
+
+    # --- BLP-294(b): grep arms that run before any typecheck ----------------
+    # Condensed from /srv/swarm/blp-252/check.sh: three comment-stripped greps
+    # on the component, then vitest, then `pnpm check`. The real file mentions
+    # "typecheck" in a header COMMENT, which is why comments are stripped
+    # before the scan — reproduced here so a regression would be caught.
+    BLP252_CHECK = (
+        "#!/usr/bin/env bash\n"
+        "# Runs as the orchestrator, which is what makes the typecheck possible at all.\n"
+        "set -uo pipefail\n"
+        'fail() { echo "CHECK FAIL: $*" >&2; exit 1; }\n'
+        "grep -q 'from \"@shared/appointmentSort\"' \"$LIST\" || fail 'no shared import'\n"
+        "sed 's://.*::' \"$LIST\" | grep -q 'sortIndicator' || fail 'no sortIndicator'\n"
+        "sed 's://.*::' \"$LIST\" | grep -q 'aria-sort' || fail 'no aria-sort'\n"
+        "pnpm vitest run shared/appointmentSort.test.ts || fail 'vitest FAILED'\n"
+        "pnpm check || fail 'typecheck FAILED'\n"
+    )
+    GREP_BEFORE_TYPECHECK = (
+        "one: check greps before any typecheck; a corrupted file can pass its greps "
+        "(text pin — weak, review the check)."
+    )
+
+    def test_grep_before_typecheck_fires_on_a_repo_task(self) -> None:
+        findings = lint_manifest(
+            self.manifest([self.task(check=self.BLP252_CHECK)], repo=True)
+        )
+        self.assertHasFinding(findings, self.GREP_BEFORE_TYPECHECK)
+
+    def test_grep_before_typecheck_silent_when_typecheck_runs_first(self) -> None:
+        check = (
+            "set -uo pipefail\n"
+            'fail() { echo "CHECK FAIL: $*" >&2; exit 1; }\n'
+            "pnpm check || fail 'typecheck FAILED'\n"
+            "sed 's://.*::' \"$LIST\" | grep -q 'sortIndicator' || fail 'no sortIndicator'\n"
+        )
+        findings = lint_manifest(self.manifest([self.task(check=check)], repo=True))
+        self.assertNotIn(self.GREP_BEFORE_TYPECHECK, findings)
+
+    def test_grep_before_typecheck_silent_without_a_repo(self) -> None:
+        findings = lint_manifest(self.manifest([self.task(check=self.BLP252_CHECK)]))
+        self.assertNotIn(self.GREP_BEFORE_TYPECHECK, findings)
+
+    def test_grep_before_typecheck_is_a_warning_not_a_refusal(self) -> None:
+        """lint_manifest returns findings; it must not raise on this shape."""
+        findings = lint_manifest(
+            self.manifest([self.task(check=self.BLP252_CHECK)], repo=True)
+        )
+        self.assertIsInstance(findings, list)
+        self.assertHasFinding(findings, self.GREP_BEFORE_TYPECHECK)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
