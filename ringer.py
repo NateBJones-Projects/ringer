@@ -53,6 +53,13 @@ CONFIG_FILE_NAME = "config.toml"
 DEFAULT_ENGINE_NAME = "codex"
 DEFAULT_TIMEOUT_S = 900
 CHECK_TIMEOUT_S = 60
+# The run state file's format. Readers outside Ringer refuse a version they do
+# not know, so bump this whenever a field they read changes meaning or shape.
+STATE_VERSION = 1
+# A manifest may carry `meta` (run level and per task): an opaque JSON object that
+# Ringer copies into the run state untouched, so outside tools can link a work
+# order to where it came from. Capped so a manifest cannot bloat the state file.
+META_MAX_BYTES = 16 * 1024
 DEFAULT_DASHBOARD_PORT_BASE = 8787
 DEFAULT_HUD_PORT = 8700
 DEFAULT_CATALOG_SOURCE = "https://openrouter.ai/api/v1/models"
@@ -1724,6 +1731,19 @@ def require_bool(value: Any, key: str, field: str) -> bool:
     return value
 
 
+def parse_meta(value: Any, where: str) -> dict[str, Any] | None:
+    """Validate a manifest `meta` object and return a deep copy (or None)."""
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError(f"{where}: meta must be a JSON object")
+    encoded = json.dumps(value, ensure_ascii=False)
+    size = len(encoded.encode("utf-8"))
+    if size > META_MAX_BYTES:
+        raise ValueError(f"{where}: meta is larger than {META_MAX_BYTES} bytes ({size})")
+    return json.loads(encoded)
+
+
 @dataclass(frozen=True)
 class TaskSpec:
     key: str
@@ -1741,6 +1761,8 @@ class TaskSpec:
     # engine's {model} placeholder); empty means the engine's model_default.
     model: str = ""
     task_type: str = ""
+    # Passed through to the run state untouched (see META_MAX_BYTES).
+    meta: dict[str, Any] | None = field(default=None, compare=False, hash=False)
 
     @classmethod
     def from_obj(cls, obj: dict[str, Any]) -> "TaskSpec":
@@ -1807,6 +1829,7 @@ class TaskSpec:
             verified=verified.strip(),
             model=model.strip(),
             task_type=task_type.strip(),
+            meta=parse_meta(obj.get("meta"), f"task {key}"),
         )
 
 
@@ -1819,6 +1842,8 @@ class Manifest:
     repo: Path | None
     tasks: tuple[TaskSpec, ...]
     source_path: Path | None = None
+    # Passed through to the run state untouched (see META_MAX_BYTES).
+    meta: dict[str, Any] | None = field(default=None, compare=False, hash=False)
 
     @classmethod
     def from_path(cls, path: Path) -> "Manifest":
@@ -1834,6 +1859,7 @@ class Manifest:
             repo=manifest.repo,
             tasks=manifest.tasks,
             source_path=path,
+            meta=manifest.meta,
         )
 
     @classmethod
@@ -1880,6 +1906,7 @@ class Manifest:
             worktrees=worktrees,
             repo=repo,
             tasks=tasks,
+            meta=parse_meta(obj.get("meta"), "manifest"),
         )
 
     def with_max_parallel(self, value: int | None) -> "Manifest":
@@ -2286,7 +2313,9 @@ class StateWriter:
         max_parallel: int = 1,
         artifact: ArtifactConfig | None = None,
         path: Path | None = None,
+        meta: dict[str, Any] | None = None,
     ) -> None:
+        self.meta = meta
         self.run_id = run_id
         self.run_name = run_name
         self.identity = identity
@@ -2391,6 +2420,7 @@ class StateWriter:
                         else runtime.spec_short
                     ),
                     "verified": runtime.task.verified,
+                    "meta": runtime.task.meta,
                     "check": runtime.task.check,
                     "check_returncode": runtime.last_check_returncode,
                     "check_timed_out": runtime.last_check_timed_out,
@@ -2431,8 +2461,10 @@ class StateWriter:
                 "tokens": sum(int(item["tokens"] or 0) for item in tasks),
             }
             return {
+                "state_version": STATE_VERSION,
                 "run_id": self.run_id,
                 "run_name": self.run_name,
+                "meta": self.meta,
                 "identity": self.identity,
                 "state": "finished" if self.finished else "live",
                 "pid": self.pid,
@@ -8832,6 +8864,7 @@ class RingerRunner:
             self.lock,
             max_parallel=manifest.max_parallel,
             artifact=config.artifact,
+            meta=manifest.meta,
         )
         self.dashboard = (
             Dashboard(

@@ -112,6 +112,9 @@ Each task gets its own directory, its own worker, its own log, and its own verdi
 | `verified` | One plain-English sentence saying what the check proves — shown on the results page next to "finished & checked" |
 | `full_access` | Worker runs unsandboxed — required for workers that spawn their own sub-workers; must also be enabled in config |
 | `worktrees` (run-level) | Give each task an isolated git worktree of `repo` so parallel workers can't collide |
+| `meta` (run-level and per task) | Optional JSON object Ringer copies untouched into the run state (`meta` on the run and on each task), so outside tools can link a work order to where it came from — for example `{"openspec": {"change": "add-sso-login", "task": "2.1"}}`. At most 16 KB each; Ringer never reads it |
+
+The run state file (`~/.ringer/runs/<run_id>.json`) carries `state_version` (now `1`). Tools that read it should refuse a version they do not know; it goes up whenever a field they read changes meaning or shape.
 
 > **Worktree footgun:** on PASS the task's worktree is removed — including anything written inside it. In worktrees mode, worker logs live outside task worktrees in `workdir/logs/`; have workers write deliverables outside the worktree too, or have your `check` copy artifacts out before it exits 0.
 
