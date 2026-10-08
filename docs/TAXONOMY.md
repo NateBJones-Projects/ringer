@@ -16,7 +16,7 @@ Registered models use the lab recorded in `registry/model-identity.toml`. An unr
 
 ## Harness
 
-The harness is the agent shell that invokes the model: Codex CLI, Grok Build CLI, or OpenCode. It runs a model but does not become the model or its lab.
+The harness is the agent shell that invokes the model: Codex CLI, Claude Code, Grok Build CLI, or OpenCode. It runs a model but does not become the model or its lab.
 
 Worked example, because this exact conflation has happened: **"Grok Build" is a harness, never a model and never a lab.** The Grok Build CLI serves exactly two models — Grok 4.5 (lab: xAI) and Composer 2.5 (lab: Cursor/Anysphere). There is no model called "Grok Build"; a scoreboard row named after a harness is a taxonomy bug.
 
