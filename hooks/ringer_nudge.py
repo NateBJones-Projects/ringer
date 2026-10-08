@@ -29,6 +29,8 @@ HARNESS_RE = re.compile(
     r"\.(?:mjs|js|ts|py)\b",
     re.IGNORECASE,
 )
+PATCH_PATH_RE = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+)$", re.MULTILINE)
+PATCH_MOVE_RE = re.compile(r"^\*\*\* Move to: (.+)$", re.MULTILINE)
 
 
 def ringer_home() -> Path:
@@ -38,6 +40,34 @@ def ringer_home() -> Path:
     return Path.home() / ".ringer"
 
 
+def pid_is_alive_windows(pid: int) -> bool:
+    import ctypes
+    from ctypes import wintypes
+
+    synchronize = 0x00100000
+    wait_timeout = 0x00000102
+    error_access_denied = 5
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    open_process = kernel32.OpenProcess
+    open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    open_process.restype = wintypes.HANDLE
+    wait_for_single_object = kernel32.WaitForSingleObject
+    wait_for_single_object.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    wait_for_single_object.restype = wintypes.DWORD
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+    close_handle.restype = wintypes.BOOL
+
+    handle = open_process(synchronize, False, pid)
+    if not handle:
+        return ctypes.get_last_error() == error_access_denied
+    try:
+        return wait_for_single_object(handle, 0) == wait_timeout
+    finally:
+        close_handle(handle)
+
+
 def pid_is_alive(pid: Any) -> bool:
     try:
         parsed = int(pid)
@@ -45,6 +75,9 @@ def pid_is_alive(pid: Any) -> bool:
         return False
     if parsed <= 0:
         return False
+    if os.name == "nt":
+        # Signal 0 is CTRL_C_EVENT on Windows, not a harmless existence probe.
+        return pid_is_alive_windows(parsed)
     try:
         os.kill(parsed, 0)
     except ProcessLookupError:
@@ -178,17 +211,30 @@ def load_post_edit_state(path: Path) -> dict[str, Any]:
     return {"count": count, "file_paths": [str(path) for path in file_paths]}
 
 
+def edited_file_paths(payload: dict[str, Any]) -> set[str]:
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return set()
+
+    file_path = tool_input.get("file_path")
+    if isinstance(file_path, str) and file_path.strip():
+        return {file_path.strip()}
+
+    command = tool_input.get("command")
+    if payload.get("tool_name") != "apply_patch" or not isinstance(command, str):
+        return set()
+    paths = PATCH_PATH_RE.findall(command)
+    paths.extend(PATCH_MOVE_RE.findall(command))
+    return {path.strip() for path in paths if path.strip()}
+
+
 def record_post_edit(payload: dict[str, Any], home: Path) -> tuple[int, int]:
     path = post_edit_state_path(home, payload.get("session_id"))
     state = load_post_edit_state(path)
     count = int(state["count"]) + 1
     files = set(str(item) for item in state["file_paths"])
 
-    tool_input = payload.get("tool_input")
-    if isinstance(tool_input, dict):
-        file_path = tool_input.get("file_path")
-        if isinstance(file_path, str) and file_path.strip():
-            files.add(file_path)
+    files.update(edited_file_paths(payload))
 
     next_state = {"count": count, "file_paths": sorted(files)}
     write_json_atomic(path, next_state)
