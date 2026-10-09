@@ -81,6 +81,13 @@ class MetaParsingTests(unittest.TestCase):
             path.write_text(json.dumps(manifest_obj(meta=OPENSPEC_RUN)), encoding="utf-8")
             self.assertEqual(Manifest.from_path(path).meta, OPENSPEC_RUN)
 
+    def test_max_parallel_keeps_run_meta(self) -> None:
+        # `ringer.py run --max-parallel N` rebuilds the manifest; the run-level meta must survive.
+        manifest = Manifest.from_obj(manifest_obj(meta=OPENSPEC_RUN)).with_max_parallel(3)
+        self.assertEqual(manifest.max_parallel, 3)
+        self.assertEqual(manifest.meta, OPENSPEC_RUN)
+        self.assertEqual(manifest.tasks[0].meta, None)
+
     def test_meta_is_a_copy(self) -> None:
         raw = {"openspec": {"change": "c1"}}
         spec = TaskSpec.from_obj(task_obj(meta=raw))

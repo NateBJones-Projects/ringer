@@ -1914,15 +1914,8 @@ class Manifest:
             return self
         if value <= 0:
             raise ValueError("--max-parallel must be positive")
-        return Manifest(
-            run_name=self.run_name,
-            workdir=self.workdir,
-            max_parallel=value,
-            worktrees=self.worktrees,
-            repo=self.repo,
-            tasks=self.tasks,
-            source_path=self.source_path,
-        )
+        # replace() keeps every other field, including meta, so a new field is never dropped here.
+        return dataclass_replace(self, max_parallel=value)
 
 
 FILE_TEST_OPS = {"-e", "-f", "-s", "-d", "-r", "-w", "-x", "-L"}
