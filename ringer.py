@@ -741,6 +741,7 @@ class EngineConfig:
     # its own "model" — this is what makes a harness engine (OpenCode) model
     # agnostic instead of hard-coding one model into the command line.
     model_default: str = ""
+    effort_flag: str = ""
 
     @property
     def process_name(self) -> str:
@@ -1701,6 +1702,9 @@ def load_engines(raw: Any) -> dict[str, EngineConfig]:
         model_default = str(
             section.get("model_default", base.model_default if base else "")
         ).strip()
+        effort_flag = str(
+            section.get("effort_flag", base.effort_flag if base else "")
+        ).strip()
         engines[clean_name] = EngineConfig(
             name=clean_name,
             bin=bin_path,
@@ -1710,6 +1714,7 @@ def load_engines(raw: Any) -> dict[str, EngineConfig]:
             token_regex=token_regex,
             model_report_regex=model_report_regex,
             model_default=model_default,
+            effort_flag=effort_flag,
         )
     return engines
 
@@ -9322,6 +9327,16 @@ class RingerRunner:
         reasoning_effort = effective_reasoning_effort_from_command(
             runtime.last_worker_command
         )
+        if (
+            reasoning_effort is None
+            and runtime.last_worker_command
+            and engine is not None
+            and engine.effort_flag
+            and "{engine_args}" in engine.args_template
+        ):
+            values = _effort_values_from_command(runtime.task.engine_args, engine.effort_flag)
+            if len(values) == 1:
+                reasoning_effort = values[0] or None
         notes_parts = [
             f"retry={'true' if retrying else 'false'}",
             f"worker_returncode={worker.returncode}",
@@ -9606,7 +9621,9 @@ def effective_model_from_command(command: list[str]) -> str:
     return ""
 
 
-def effective_reasoning_effort_from_command(command: list[str]) -> str | None:
+def effective_reasoning_effort_from_command(
+    command: list[str] | tuple[str, ...],
+) -> str | None:
     """Return an explicitly configured model reasoning effort from worker argv."""
     for item in command:
         match = re.search(
@@ -9617,6 +9634,26 @@ def effective_reasoning_effort_from_command(command: list[str]) -> str | None:
             effort = match.group(1).strip()
             return effort or None
     return None
+
+
+def _effort_values_from_command(
+    command: list[str] | tuple[str, ...], effort_flag: str = "",
+) -> list[str]:
+    flags = {"--variant", "--reasoning-effort", "--effort", effort_flag} - {""}
+    values: list[str] = []
+    for index, item in enumerate(command):
+        flag, separator, value = item.partition("=")
+        if flag in flags:
+            if not separator:
+                value = command[index + 1] if index + 1 < len(command) else ""
+            values.append(value)
+    return values
+
+
+def worker_effort_args(engine: str, effort: str, effort_flag: str = "") -> tuple[str, ...]:
+    if engine == DEFAULT_ENGINE_NAME:
+        return ("-c", f"model_reasoning_effort={effort}")
+    return (effort_flag or "--variant", effort)
 
 
 def resolved_task_model(
@@ -9639,9 +9676,17 @@ def build_worker_command(
     full_access: bool,
     engine_args: tuple[str, ...] = (),
     model: str = "",
+    reasoning_effort: str = "",
 ) -> list[str]:
     access_args = engine.full_access_args if full_access else engine.sandbox_args
     resolved_model = model or engine.model_default
+    if (
+        reasoning_effort
+        and not effective_reasoning_effort_from_command(engine_args)
+        and not _effort_values_from_command(engine_args, engine.effort_flag)
+    ):
+        effort_args = worker_effort_args(engine.name, reasoning_effort, engine.effort_flag)
+        engine_args = (*effort_args, *engine_args)
     command = [engine.bin]
     for item in engine.args_template:
         if item == "{access_args}":
@@ -10313,12 +10358,15 @@ def one_request_manifest(
     reasoning_effort: str,
     model: str | None,
     redact: bool,
+    effort_flag: str = "",
 ) -> Manifest:
-    engine_args: list[str] = []
-    if engine == DEFAULT_ENGINE_NAME:
-        engine_args.extend(("-c", f"model_reasoning_effort={reasoning_effort}"))
-    elif model:
+    if model and engine != DEFAULT_ENGINE_NAME:
         raise ValueError("--model is currently supported only by the codex engine")
+    engine_args = (
+        worker_effort_args(engine, reasoning_effort, effort_flag)
+        if engine == DEFAULT_ENGINE_NAME or effort_flag
+        else ()
+    )
     return Manifest(
         run_name="one-request",
         workdir=workdir,
@@ -10338,7 +10386,7 @@ def one_request_manifest(
                 timeout_s=timeout_s,
                 max_attempts=1,
                 redact_spec=redact,
-                engine_args=tuple(engine_args),
+                engine_args=engine_args,
                 model=model or "",
                 verified=(
                     "answer.md exists and is not empty; this does not prove "
@@ -10439,6 +10487,7 @@ def run_one_request(config: AppConfig, args: argparse.Namespace) -> int:
         print("No model call was made.")
         return 0
 
+    engine = config.engines.get(args.engine)
     manifest = one_request_manifest(
         packet=packet,
         workdir=workdir,
@@ -10447,6 +10496,7 @@ def run_one_request(config: AppConfig, args: argparse.Namespace) -> int:
         reasoning_effort=args.reasoning_effort,
         model=args.model,
         redact=args.redact,
+        effort_flag=engine.effort_flag if engine else "",
     )
     validate_manifest_engines(manifest, config)
     preflight_engine_bins(manifest, config)
@@ -11027,7 +11077,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--reasoning-effort",
         choices=("minimal", "low", "medium", "high"),
         default="low",
-        help="Codex reasoning effort (default: low)",
+        help="reasoning effort for Codex or an engine with effort_flag (default: low)",
     )
     ask_parser.add_argument(
         "--timeout-s",

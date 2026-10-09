@@ -131,6 +131,11 @@ model_report_regex = "(?m)^model:[ \\t]*([^ \\t\\r\\n]+)[ \\t]*\\r?$"
 # also does not self-report a model, so no model_report_regex is configured.
 # token_regex = "\"total_tokens\"\\s*:\\s*([0-9]+)"
 
+# For custom engines, set effort_flag to the CLI option that accepts a
+# reasoning effort value, such as "--effort". Include "{engine_args}" in the
+# args_template so `ringer.py ask --reasoning-effort` can pass the flag.
+# The built-in Codex engine still uses -c model_reasoning_effort=<value>.
+
 # For CI, acceptance evals, and trying Ringer without an API bill.
 # [engines.mock]
 # bin = "python3"
