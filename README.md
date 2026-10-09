@@ -112,6 +112,9 @@ Each task gets its own directory, its own worker, its own log, and its own verdi
 | `verified` | One plain-English sentence saying what the check proves — shown on the results page next to "finished & checked" |
 | `full_access` | Worker runs unsandboxed — required for workers that spawn their own sub-workers; must also be enabled in config |
 | `worktrees` (run-level) | Give each task an isolated git worktree of `repo` so parallel workers can't collide |
+| `meta` (run-level and per task) | Optional JSON object Ringer copies untouched into the run state (`meta` on the run and on each task), so outside tools can link a work order to where it came from — for example `{"openspec": {"change": "add-sso-login", "task": "2.1"}}`. At most 16 KB each; Ringer never reads it |
+
+The run state file (`~/.ringer/runs/<run_id>.json`) carries `state_version` (now `1`). Tools that read it should refuse a version they do not know; it goes up whenever a field they read changes meaning or shape.
 
 > **Worktree footgun:** on PASS the task's worktree is removed — including anything written inside it. In worktrees mode, worker logs live outside task worktrees in `workdir/logs/`; have workers write deliverables outside the worktree too, or have your `check` copy artifacts out before it exits 0.
 
@@ -400,6 +403,7 @@ Every community PR that lands in main is credited here — that's a project rule
 - [@oceanonline](https://github.com/oceanonline) — portable `python3` in template checks + lint quickstart path fix (#24)
 - [@davekopecek](https://github.com/davekopecek) (Dave Kopecek) — committed the design-reference fixture so the design-token guard runs on every machine (#30)
 - [@snapsynapse](https://github.com/snapsynapse) (Sam Rogers) — graceful shutdown on SIGINT/SIGTERM with worker-tree cleanup and finished state, plus the 14-test end-to-end CLI regression suite (#4)
+- [@boydwold](https://github.com/boydwold) (Boyd Wold) — `state_version` in run state and manifest `meta` passed through to run and task state, so outside readers can link work orders and refuse a format they do not know (#151)
 - [@mlava](https://github.com/mlava) (Mark Lavercombe) — named setup failures across every diagnostic surface (#37), `run --baseline`, the no-workers check preflight (#38), guidance on check-writing failure modes (#57), early warnings for missing worker commands (#59), and preserving fix-swarm patches across retries (#56)
 
 Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the philosophy and what gets a PR merged fast. The short version: small and scoped, rebased on current main, every claim backed by an executed test. Authorship is always preserved — where a maintainer pushes a mechanical fix to your branch, you remain the commit author.
