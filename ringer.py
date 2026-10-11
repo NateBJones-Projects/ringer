@@ -10702,9 +10702,34 @@ async def run_manifest(
         shutdown_started = True
         task.cancel()
 
-    for sig in (signal.SIGINT, signal.SIGTERM):
+    # Which outputs are terminals is decided now: after a hangup the tty is gone.
+    tty_fds = [fd for fd in (1, 2) if os.isatty(fd)]
+
+    def request_hangup_shutdown() -> None:
+        # Writes to the vanished terminal fail with EIO, so point only those fds
+        # at /dev/null (files and pipes keep their output); then shut down as usual.
+        try:
+            if tty_fds:
+                devnull = os.open(os.devnull, os.O_WRONLY)
+                try:
+                    for fd in tty_fds:
+                        os.dup2(devnull, fd)
+                finally:
+                    os.close(devnull)
+        except OSError:
+            pass
+        finally:
+            request_shutdown()
+
+    handlers = {signal.SIGINT: request_shutdown, signal.SIGTERM: request_shutdown}
+    # SIGHUP arrives when the terminal hosting the run closes; at Python's default
+    # it kills ringer outright, orphaning workers and leaving state unfinished.
+    # An inherited SIG_IGN (nohup) is respected.
+    if hasattr(signal, "SIGHUP") and signal.getsignal(signal.SIGHUP) is not signal.SIG_IGN:
+        handlers[signal.SIGHUP] = request_hangup_shutdown
+    for sig, handler in handlers.items():
         with contextlib.suppress(NotImplementedError, RuntimeError):
-            loop.add_signal_handler(sig, request_shutdown)
+            loop.add_signal_handler(sig, handler)
             registered_signals.append(sig)
     try:
         return await task
