@@ -379,6 +379,27 @@ The promotion ladder is the point. A model enters as **untested**. You spend a s
 
 The per-user philosophy, stated plainly: every user's workload is different, so the scoreboard learns what works for *your* tasks on *your* machine. A model that's proven in someone else's log is untested in yours until you've run it. The numbers are not portable between users, and the routing recommendations get personal as the log grows — which is exactly why the catalog and the change log stay local and the explore tiers are computed from your own `runs.jsonl`, not from anyone's aggregate.
 
+## Correcting the record: ringer.py amend
+
+Some logged FAILs were never the model's fault: the check was wrong while the work was right, the spec made the task impossible, or the environment broke (revoked login, spent credits). `ringer.py amend` records that without touching the eval log. It appends to `amendments.jsonl` next to the eval JSONL, and every `models` view (text, `--json`, `--explore`, `--html`, Ringside's Models view) applies it on read. The eval log itself is never rewritten.
+
+```bash
+./ringer.py amend RUN_ID TASK_KEY --cause check --note "check grepped the wrong file" [--attempt N]
+./ringer.py amend --from-file fixes.jsonl     # all-or-nothing batch
+./ringer.py amend --list [--run RUN_ID]       # show recorded amendments
+```
+
+Pick the cause:
+
+- **check** — the check was wrong and the work was right.
+- **spec** — the spec made the task impossible.
+- **infra** — auth, billing, interop or other environment failures.
+- **worker** — the model really failed. This counts the attempt against the model again, so it is also how you undo an earlier amendment.
+
+Without `--attempt`, every non-PASS attempt of the task is amended; PASS attempts are never marked. Attempts are numbered from 1 in logged order (retries after the original on a tie). The latest amendment for an attempt wins. `--from-file` takes JSONL with `run_id`, `task_key`, `attempt`, `cause` and `note`; if any line is invalid, nothing is appended. The note must be at least 10 characters.
+
+Excluded attempts are never silent: when anything is excluded, `models` prints `excluded from model stats: N attempt(s) (amended check: C, spec: S, infra: F)`. To undo, run `amend --list` to copy the full run_id, then amend the same task with `--cause worker`.
+
 ## Steering profiles
 
 Ringer can optionally load per-model steering profiles, prepend applicable worker rules to both first-attempt and retry prompts, print driver guidance for the orchestrator, and collect one local observation row per attempt. The feature is fail-open: missing or malformed steering data never blocks a run. Setup, the profile contract, and the observation schema are documented in [`docs/STEERING.md`](docs/STEERING.md).
