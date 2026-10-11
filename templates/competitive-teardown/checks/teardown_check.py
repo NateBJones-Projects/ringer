@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 
-URL_RE = re.compile(r"https?://[^\s)\\]\"'<>]+", re.IGNORECASE)
+URL_RE = re.compile(r"https?://[^\s)\]\"'<>\\]+", re.IGNORECASE)
 NUMBER_RE = re.compile(
     r"(?<![A-Za-z])(?:[$€£]?\d[\d,]*(?:\.\d+)?\s?(?:%|percent|x|k|m|b|million|billion|ms|s|seconds|minutes|hours|days|users|customers|requests|rows|records|gb|mb)?)",
     re.IGNORECASE,
