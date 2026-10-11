@@ -247,7 +247,7 @@ Route with per-task `"engine": "grok"` and pick the model with `"model": "grok-b
 
 `args_template` is an argv array, not a shell string. Ringer replaces `{taskdir}`, `{spec}`, and `{model}` inside each argv element. `{access_args}`, `{sandbox_args}`, `{full_access_args}`, `{model_args}` (becomes `-m <resolved model>` when the task or engine names one), and `{engine_args}` (the task's per-task `engine_args`) expand to multiple argv elements only when they appear as their own array item.
 
-Watch for variadic CLI flags. If an engine has a flag that consumes all following values, put `{spec}` before that flag. For Claude-style CLIs, prefer:
+Watch for variadic CLI flags. If an engine has a flag that consumes all following values, put `{spec}` before that flag. `ringer.py lint` also warns when a Claude task's per-task `engine_args` ends on a list flag such as `--allowedTools` (use `--allowedTools=Read,Write` instead), and `run` refuses to start such a task when the engine's `args_template` puts `{spec}` after `{engine_args}`, since the spec would then be swallowed. For Claude-style CLIs, prefer:
 
 ```toml
 args_template = ["-p", "{spec}", "--allowedTools", "Bash"]

@@ -1924,6 +1924,12 @@ def lint_manifest(
             findings.append(
                 f"{task.key}: deliverable would be deleted with the worktree; write it outside the worktree or export it in the check."
             )
+        findings.extend(lint_check_footguns(task))
+        if not manifest.worktrees:
+            findings.extend(lint_codex_writable_roots(manifest, task))
+        swallow = claude_list_flag_swallow_message(task)
+        if swallow:
+            findings.append(swallow)
         if manifest.worktrees and instructs_git_commit(task.spec):
             findings.append(
                 f"{task.key}: worker commits die with the worktree; have the worker leave changes uncommitted and export the diff in the check."
@@ -2010,6 +2016,108 @@ def check_cannot_fail(check: str) -> bool:
     if stripped in {"true", ":", "exit 0"}:
         return True
     return consists_only_of_echo_commands(stripped)
+
+
+CLAUDE_LIST_FLAGS = frozenset(
+    {
+        "--allowedTools",
+        "--allowed-tools",
+        "--disallowedTools",
+        "--disallowed-tools",
+        "--add-dir",
+        "--mcp-config",
+        "--betas",
+        "--tools",
+    }
+)
+
+
+def claude_list_flag_swallow_message(task: TaskSpec) -> str | None:
+    """Message when a claude task ends engine_args on a bare list flag.
+
+    Ringer appends the spec after engine_args unless the engine's args_template
+    says otherwise; a variadic flag at the end consumes the spec as one more
+    list value and the worker starts with no prompt.
+    """
+    if task.engine != "claude":
+        return None
+    flags = [arg for arg in task.engine_args if arg.startswith("-")]
+    if not flags:
+        return None
+    last = flags[-1]
+    if "=" in last or last not in CLAUDE_LIST_FLAGS:
+        return None
+    return (
+        f"{task.key}: engine_args ends with {last}, which takes a list, so it can swallow the "
+        f"spec Ringer appends after engine_args and the worker starts with no prompt; "
+        f"use the equals form {last}=<values>, or give the engine an args_template that puts "
+        "the spec placeholder before the engine_args placeholder."
+    )
+
+
+def args_template_puts_spec_after_engine_args(args_template: Iterable[str]) -> bool:
+    items = list(args_template)
+    if "{engine_args}" not in items:
+        return False
+    engine_args_index = items.index("{engine_args}")
+    return any("{spec}" in item for item in items[engine_args_index + 1 :])
+
+
+def lint_codex_writable_roots(manifest: Manifest, task: TaskSpec) -> list[str]:
+    if task.engine != "codex" or any("writable_roots" in arg for arg in task.engine_args):
+        return []
+    taskdir = os.path.normpath(str(Path(str(manifest.workdir)).expanduser() / task.key))
+    findings: list[str] = []
+    for raw in task.expect_files:
+        path = Path(raw).expanduser()
+        if not path.is_absolute():
+            continue
+        normal = os.path.normpath(str(path))
+        if normal == taskdir or normal.startswith(taskdir + os.sep):
+            continue
+        parent = os.path.dirname(normal)
+        findings.append(
+            f"{task.key}: codex cannot write outside its task directory, so {raw} will not be "
+            f"created; add engine_args -c 'sandbox_workspace_write.writable_roots=[\"{parent}\"]' "
+            "(a writable_roots entry) or have the check copy the file out."
+        )
+    return findings
+
+
+GIT_STATUS_RE = re.compile(r"\bgit\b[^\n;&|]*?\bstatus\b([^\n;&|]*)")
+QUOTED_STRING_RE = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"", re.DOTALL)
+
+
+def lint_check_footguns(task: TaskSpec) -> list[str]:
+    findings: list[str] = []
+    check = strip_shell_comments(task.check)
+    if "<<" not in check:
+        try:
+            shlex.split(check)
+        except ValueError:
+            findings.append(
+                f"{task.key}: check has an unbalanced quote (an apostrophe inside a "
+                "single-quoted string ends it early); the shell will fail to parse it."
+            )
+    for match in GIT_STATUS_RE.finditer(check):
+        status_args = match.group(1)
+        machine_readable = re.search(r"(?<![\w-])(--porcelain|--short|-s\w*)(?![\w-])", status_args)
+        all_untracked = re.search(
+            r"--untracked-files=all|(?<![\w-])-uall(?![\w-])|(?<![\w-])-u all(?![\w-])", status_args
+        )
+        if machine_readable and not all_untracked:
+            findings.append(
+                f"{task.key}: check runs git status without --untracked-files=all; git collapses an "
+                "untracked directory into one 'dir/' line, so file ownership comparisons fail."
+            )
+            break
+    unquoted = QUOTED_STRING_RE.sub("''", check)
+    if re.search(r"pipefail|(?<![\w\[])\[\[(?=\s)|<<<", unquoted):
+        findings.append(
+            f"{task.key}: check uses bash-only syntax (pipefail, [[ or <<<) but checks run under "
+            "/bin/sh (dash on many systems), which lacks it; wrap the check in bash -c '...' or use POSIX syntax."
+        )
+    return findings
 
 
 def strip_shell_comments(command: str) -> str:
@@ -9750,6 +9858,9 @@ def validate_manifest_engines(manifest: Manifest, config: AppConfig) -> None:
         raise ValueError(f"unknown worker engine(s): {', '.join(missing)}")
     for task in manifest.tasks:
         engine = config.engines[task.engine]
+        swallow = claude_list_flag_swallow_message(task)
+        if swallow and args_template_puts_spec_after_engine_args(engine.args_template):
+            raise ValueError(swallow)
         requires_model = any("{model}" in item for item in engine.args_template)
         accepts_model = requires_model or "{model_args}" in engine.args_template
         if requires_model and not (task.model or engine.model_default):
