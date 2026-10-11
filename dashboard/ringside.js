@@ -77,17 +77,20 @@
       return "pass";
     if (
       ["fail", "failed", "error", "timeout", "died"].includes(s) ||
-      ["FAIL", "ERROR", "TIMEOUT"].includes(task.verdict)
+      ["FAIL", "ERROR", "TIMEOUT", "INFRA"].includes(task.verdict)
     )
       return "fail";
     return "waiting";
   }
+  const neverStarted = (task) => task.verdict === "INFRA";
   const label = (task, run) =>
     run?.state === "died" &&
     ["running", "working", "verifying", "retrying", "redoing"].includes(
       task.status,
     )
       ? "Stopped"
+      : neverStarted(task) && kind(task, run) === "fail"
+      ? "Never started"
       : {
           pass: "Passed",
           retry: "Retrying",
@@ -284,6 +287,8 @@
     if (state.view === "logs") renderLogCheck();
   }
   function checkHTML(task) {
+    if (neverStarted(task))
+      return `<p class="check-label retry">Worker never got to work · check not exercised</p><pre class="check-output">${esc(task.check_output_tail || "No details reported.")}</pre>`;
     const failed =
       (task.check_returncode !== null &&
         task.check_returncode !== undefined &&
