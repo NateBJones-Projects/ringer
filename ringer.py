@@ -9643,6 +9643,7 @@ def build_worker_command(
     access_args = engine.full_access_args if full_access else engine.sandbox_args
     resolved_model = model or engine.model_default
     command = [engine.bin]
+    values = {"taskdir": str(taskdir), "spec": spec, "model": resolved_model}
     for item in engine.args_template:
         if item == "{access_args}":
             command.extend(access_args)
@@ -9660,11 +9661,7 @@ def build_worker_command(
         if item == "{full_access_args}":
             command.extend(engine.full_access_args)
             continue
-        command.append(
-            item.replace("{taskdir}", str(taskdir))
-            .replace("{spec}", spec)
-            .replace("{model}", resolved_model)
-        )
+        command.append(re.sub(r"\{(taskdir|spec|model)\}", lambda m: values[m.group(1)], item))
     return command
 
 
