@@ -71,6 +71,68 @@ access = "OpenRouter API"
 # names. Unlisted slugs are marked unregistered and derive a display name;
 # their complete raw value appears only in scoreboard diagnostics until verified.
 
+[engines.claude]
+harness = "Claude Code CLI"
+access = "Claude subscription"
+default_model_key = "claude-sonnet-5"
+
+[engines.claude.models."claude-sonnet-5"]
+display = "Claude Sonnet 5"
+lab = "Anthropic"
+confidence = "verified"
+source = "https://docs.anthropic.com/en/docs/about-claude/models/overview"
+last_verified = 2026-09-16
+
+[engines.claude.models."sonnet"]
+display = "Claude Sonnet 5 (alias)"
+lab = "Anthropic"
+alias = true
+confidence = "verified"
+source = "https://docs.anthropic.com/en/docs/about-claude/models/overview"
+last_verified = 2026-09-16
+
+[engines.claude.models."claude-opus-5"]
+display = "Claude Opus 5"
+lab = "Anthropic"
+confidence = "verified"
+source = "https://docs.anthropic.com/en/docs/about-claude/models/overview"
+last_verified = 2026-09-16
+
+[engines.claude.models."claude-fable-5-1"]
+display = "Claude Fable 5.1"
+lab = "Anthropic"
+confidence = "verified"
+source = "https://docs.anthropic.com/en/docs/about-claude/models/overview"
+last_verified = 2026-09-16
+
+[engines.claude.models."claude-haiku-4-5"]
+display = "Claude Haiku 4.5"
+lab = "Anthropic"
+confidence = "verified"
+source = "https://docs.anthropic.com/en/docs/about-claude/models/overview"
+last_verified = 2026-09-16
+
+[engines.claude-sonnet]
+# Legacy engine name retained for historical rows; the harness is unchanged.
+harness = "Claude Code CLI"
+access = "Claude subscription"
+default_model_key = "claude-sonnet-5"
+
+[engines.claude-sonnet.models."claude-sonnet-5"]
+display = "Claude Sonnet 5"
+lab = "Anthropic"
+confidence = "verified"
+source = "https://docs.anthropic.com/en/docs/about-claude/models/overview"
+last_verified = 2026-09-16
+
+[engines.claude-sonnet.models."sonnet"]
+display = "Claude Sonnet 5 (alias)"
+lab = "Anthropic"
+alias = true
+confidence = "verified"
+source = "https://docs.anthropic.com/en/docs/about-claude/models/overview"
+last_verified = 2026-09-16
+
 [engines.opencode.models."openrouter/z-ai/glm-5.2"]
 display = "GLM 5.2"
 lab = "Z.ai (Zhipu AI)"

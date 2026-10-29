@@ -296,8 +296,8 @@ source = "fixture"
             self.assertEqual(("gpt-5.5", "PASS", None), conn.execute(
                 "SELECT model, verdict, reasoning_effort FROM attempts"
             ).fetchone())
-            self.assertEqual(3, conn.execute("PRAGMA user_version").fetchone()[0])
-            self.assertEqual(3, conn.execute("SELECT version FROM schema_version").fetchone()[0])
+            self.assertEqual(4, conn.execute("PRAGMA user_version").fetchone()[0])
+            self.assertEqual(4, conn.execute("SELECT version FROM schema_version").fetchone()[0])
 
 
 if __name__ == "__main__":
