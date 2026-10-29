@@ -13,6 +13,10 @@ def has_fail_directive(spec: str) -> bool:
     return any(line.strip() == "MOCK_FAIL" for line in spec.splitlines())
 
 
+def has_engine_down_directive(spec: str) -> bool:
+    return any(line.strip() == "MOCK_ENGINE_DOWN" for line in spec.splitlines())
+
+
 def parse_blocks(spec: str) -> list[tuple[str, str]]:
     lines = spec.splitlines()
     blocks: list[tuple[str, str]] = []
@@ -73,6 +77,9 @@ def main(argv: list[str]) -> int:
         return 2
 
     spec = argv[-1]
+    if has_engine_down_directive(spec):
+        print("mock-worker: 402 Payment Required: usage balance exhausted", file=sys.stderr)
+        return 1
     if has_fail_directive(spec):
         print("mock-worker: simulated failure")
         return 1
