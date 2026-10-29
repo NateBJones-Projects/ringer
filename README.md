@@ -401,6 +401,7 @@ Every community PR that lands in main is credited here — that's a project rule
 - [@davekopecek](https://github.com/davekopecek) (Dave Kopecek) — committed the design-reference fixture so the design-token guard runs on every machine (#30)
 - [@snapsynapse](https://github.com/snapsynapse) (Sam Rogers) — graceful shutdown on SIGINT/SIGTERM with worker-tree cleanup and finished state, plus the 14-test end-to-end CLI regression suite (#4)
 - [@mlava](https://github.com/mlava) (Mark Lavercombe) — named setup failures across every diagnostic surface (#37), `run --baseline`, the no-workers check preflight (#38), guidance on check-writing failure modes (#57), early warnings for missing worker commands (#59), and preserving fix-swarm patches across retries (#56)
+- [@delisma](https://github.com/delisma) (David Elisma) — model identity entries for the Grok lanes and the GLM 5.3 / DeepSeek V4 Flash audition models
 
 Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the philosophy and what gets a PR merged fast. The short version: small and scoped, rebased on current main, every claim backed by an executed test. Authorship is always preserved — where a maintainer pushes a mechanical fix to your branch, you remain the commit author.
 
