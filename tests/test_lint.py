@@ -77,6 +77,42 @@ class LintManifestTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, r"task key must be a string"):
             self.manifest([task])
 
+    def test_check_must_be_parseable_by_a_shell(self) -> None:
+        """A check no shell can parse can never exit 0, so the task can never pass.
+
+        Nesting single quotes inside a single-quoted argument is the common way to
+        write one by accident: the inner quote closes the argument early and the
+        rest is reparsed as bare syntax. Caught here, it costs seconds; uncaught,
+        the manifest lints clean, a worker runs to completion and is paid for, and
+        every retry attempt is burned before the run fails on an opaque
+        `/bin/sh: syntax error near unexpected token` from the check.
+        """
+        unparseable = (
+            "verify.py --pattern 'a && grep -qE '^## Heading (x|y)' out.md' --strict"
+        )
+        findings = lint_manifest(self.manifest([self.task(check=unparseable)]))
+        matching = [f for f in findings if f.startswith("one: check is not valid shell")]
+        self.assertTrue(
+            matching,
+            f"expected an unparseable-check finding\nfindings: {findings}",
+        )
+        # The finding must carry the shell's own diagnosis -- a bare "invalid"
+        # leaves the author hunting for which quote broke it.
+        self.assertRegex(matching[0], r"(?i)syntax error|unexpected")
+
+    def test_valid_checks_are_not_flagged_as_unparseable(self) -> None:
+        for check in (
+            GOOD_CHECK,
+            "test -s out.md && grep -qE '^## Heading' out.md",
+            'verify.py --pattern \'a && grep -qE "^## Heading (x|y)" out.md\' --strict',
+            "python3 check.py --arg \"nested 'quotes' fine\" || { echo 'FAIL'; exit 1; }",
+        ):
+            findings = lint_manifest(self.manifest([self.task(check=check)]))
+            self.assertFalse(
+                [f for f in findings if "not valid shell" in f],
+                f"valid check wrongly flagged as unparseable: {check}\nfindings: {findings}",
+            )
+
     def test_w1_unverifiable_check(self) -> None:
         manifest = self.manifest([self.task(check="echo ok && echo done")])
         self.assertHasFinding(
