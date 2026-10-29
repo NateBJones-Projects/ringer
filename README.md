@@ -105,7 +105,8 @@ Each task gets its own directory, its own worker, its own log, and its own verdi
 | `engine` | Which configured engine runs this task (default `codex`) |
 | `model` | Which model a harness engine runs for this task — fills the engine's `{model}` placeholder (e.g. `"openrouter/moonshotai/kimi-k2.7"`); empty uses the engine's `model_default` |
 | `task_type` | Optional free-form string naming the kind of work this task is, so the model-performance log can slice pass rates by task shape rather than only by model. Suggested vocabulary: `code-feature`, `code-fix`, `code-review`, `test-hardening`, `docs`, `research`, `persona-review`, `copywriting`, `site-build`, `motion-design`, `image-gen`, `data-pipeline`, `format-conversion`, `probe`, `bakeoff`. Empty is allowed; the log just reports it under `(none)`. |
-| `timeout_s` | Per-task kill timer (default 900) |
+| `timeout_s` | Per-task kill timer (default 900) — bounds the worker, not the check |
+| `check_timeout_s` | Per-task budget for the check command itself (default 300, `CHECK_TIMEOUT_S`) — raise this when a check runs a real build/test suite that legitimately takes longer, e.g. `"check_timeout_s": 900` |
 | `max_attempts` | How many times this task may run (default 2 — one try plus one retry with the check's failure output injected). Set `1` for a hard no-retry lane |
 | `redact_spec` | Replace this task's spec with `[redacted request packet]` in the run state, the logged command line, and the eval row, for specs carrying sensitive material. Redacts Ringer's own records only — captured worker output is never rewritten (invariant), so a worker that echoes its request still puts that text in `worker.log` |
 | `engine_args` | Extra CLI flags for this task's worker, spliced in at the engine's `{engine_args}` placeholder — e.g. `["-c", "model_reasoning_effort=low"]` so the orchestrator picks reasoning depth per task |
