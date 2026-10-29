@@ -131,6 +131,27 @@ model_report_regex = "(?m)^model:[ \\t]*([^ \\t\\r\\n]+)[ \\t]*\\r?$"
 # also does not self-report a model, so no model_report_regex is configured.
 # token_regex = "\"total_tokens\"\\s*:\\s*([0-9]+)"
 
+# Claude Code. token_format = "claude-json" reads the top-level usage of the
+# single-line JSON result (input + cache-creation + output tokens; cache reads
+# excluded) because no token_regex can sum fields or skip nested output_tokens.
+# Uncomment to enable.
+# [engines.claude]
+# bin = "claude"
+# model_default = "sonnet"
+# args_template = [
+#   "--print",
+#   "--output-format",
+#   "json",
+#   "--model",
+#   "{model}",
+#   "{access_args}",
+#   "{engine_args}",
+#   "{spec}",
+# ]
+# sandbox_args = ["--permission-mode", "acceptEdits"]
+# full_access_args = ["--dangerously-skip-permissions"]
+# token_format = "claude-json"
+
 # For CI, acceptance evals, and trying Ringer without an API bill.
 # [engines.mock]
 # bin = "python3"
