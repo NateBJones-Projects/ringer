@@ -284,10 +284,35 @@ class RingerCliTests(unittest.TestCase):
         self.assertIn("worker_returncode=-15", rows[0]["notes"])
 
     def test_sigterm_cleans_up_active_worker_and_finishes_state(self) -> None:
+        self.assert_signal_cleans_up_active_worker(signal.SIGTERM, "sigterm")
+
+    @unittest.skipUnless(hasattr(signal, "SIGHUP"), "SIGHUP is POSIX-only")
+    def test_sighup_cleans_up_active_worker_and_finishes_state(self) -> None:
+        # Closing the terminal that hosts `ringer run` sends SIGHUP. Without a
+        # handler Python dies at once: workers are orphaned and the run state is
+        # never finished. Output to a healthy pipe is kept, summary included.
+        stdout = self.assert_signal_cleans_up_active_worker(signal.SIGHUP, "sighup")
+        self.assertIn("Your results:", stdout)
+
+    @unittest.skipUnless(hasattr(signal, "SIGHUP"), "SIGHUP is POSIX-only")
+    def test_terminal_hangup_cleans_up_even_though_output_is_gone(self) -> None:
+        # A real terminal close also removes the tty, so any output written
+        # during shutdown fails with EIO; cleanup must still finish.
+        self.assert_signal_cleans_up_active_worker(signal.SIGHUP, "hangup", hang_up_tty=True)
+
+    @unittest.skipUnless(hasattr(signal, "SIGHUP"), "SIGHUP is POSIX-only")
+    def test_sighup_is_ignored_under_nohup(self) -> None:
+        # `nohup ringer run ...` must keep running through a hangup; SIGTERM still
+        # shuts it down cleanly.
+        self.assert_signal_cleans_up_active_worker(signal.SIGTERM, "nohup", ignore_hup=True)
+
+    def assert_signal_cleans_up_active_worker(
+        self, sig: signal.Signals, name: str, hang_up_tty: bool = False, ignore_hup: bool = False
+    ) -> str:
         manifest = self.write_manifest(
-            "sigterm",
+            name,
             self.manifest(
-                "sigterm",
+                name,
                 {
                     "key": "term",
                     "engine": "sleep_then_write",
@@ -313,23 +338,40 @@ class RingerCliTests(unittest.TestCase):
         env = os.environ.copy()
         env["PYTHONDONTWRITEBYTECODE"] = "1"
         env["RINGER_NO_SELF_UPDATE"] = "1"
-        proc = subprocess.Popen(
-            cmd,
-            cwd=ROOT,
-            env=env,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-        )
-        worker_pid_path = self.root / "work-sigterm" / "term" / "worker.pid"
+        if hang_up_tty:
+            tty_controller, tty_device = os.openpty()
+            proc = subprocess.Popen(
+                cmd, cwd=ROOT, env=env, text=True,
+                stdin=tty_device, stdout=tty_device, stderr=tty_device,
+            )
+            os.close(tty_device)
+        else:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=ROOT,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                preexec_fn=(lambda: signal.signal(signal.SIGHUP, signal.SIG_IGN)) if ignore_hup else None,
+            )
+        worker_pid_path = self.root / f"work-{name}" / "term" / "worker.pid"
         try:
             deadline = time.time() + 10
             while time.time() < deadline and not worker_pid_path.exists():
                 time.sleep(0.05)
             self.assertTrue(worker_pid_path.exists())
             worker_pid = int(worker_pid_path.read_text(encoding="utf-8").strip())
-            proc.send_signal(signal.SIGTERM)
+            if hang_up_tty:
+                os.close(tty_controller)  # the window is gone: further writes fail
+            if ignore_hup:
+                proc.send_signal(signal.SIGHUP)
+                time.sleep(1)
+                self.assertIsNone(proc.poll(), "an ignored SIGHUP must not stop the run")
+                self.assertTrue(self.pid_is_alive(worker_pid), "an ignored SIGHUP must not start cleanup")
+            proc.send_signal(sig)
             stdout, _ = proc.communicate(timeout=10)
+            stdout = stdout or ""
         finally:
             if proc.poll() is None:
                 proc.kill()
@@ -342,6 +384,7 @@ class RingerCliTests(unittest.TestCase):
         self.assertEqual(state["state"], "finished")
         self.assertEqual(state["summary"]["fail"], 1)
         self.assertEqual(state["tasks"][0]["status"], "fail")
+        return stdout
 
     def test_second_signal_during_shutdown_does_not_cancel_cleanup(self) -> None:
         manifest = self.write_manifest(
