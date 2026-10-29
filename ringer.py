@@ -41,7 +41,7 @@ from html import escape as html_escape
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 
 TOOL_NAME = "ringer"
@@ -2208,6 +2208,8 @@ class WorkerResult:
     tokens: int | None
     error: str | None = None
     reported_model: str | None = None
+    infra_reason: str | None = None
+    output_tail: str = ""
 
 
 @dataclass(frozen=True)
@@ -4465,14 +4467,25 @@ def final_briefing_html(state: dict[str, Any]) -> str:
     total = counts["total"]
     pass_n = counts["pass"]
     fail_n = counts["fail"]
+    infra_n = sum(
+        1
+        for task in state_tasks(state)
+        if task_state_bucket(str(task.get("status", "queued"))) == "fail" and task_never_started(task)
+    )
+    fail_n -= infra_n
     elapsed = fmt_compact_duration(state.get("elapsed_s"))
     first = f"Ringer finished {total} {task_word(total)} in {elapsed}."
-    if fail_n == 0:
+    if fail_n == 0 and infra_n == 0:
         return f"{html_escape(first)} <span class=\"n-pass\">All {total} finished and checked.</span>"
-    return (
-        f"{html_escape(first)} <span class=\"n-pass\">{pass_n} finished and checked</span>, "
-        f"<span class=\"n-fail\">{fail_n} failed after retry.</span>"
-    )
+    parts = [f"<span class=\"n-pass\">{pass_n} finished and checked</span>"]
+    if fail_n:
+        parts.append(f"<span class=\"n-fail\">{fail_n} failed after retry</span>")
+    if infra_n:
+        parts.append(
+            f"<span class=\"n-fail\">{infra_n} never got to work "
+            "(environment failure, not retried)</span>"
+        )
+    return f"{html_escape(first)} " + ", ".join(parts) + "."
 
 
 def join_plain_html_parts(parts: list[str]) -> str:
@@ -4526,6 +4539,8 @@ def plain_transition_event(
             return {"line": f"{task_key} passed on the second try, {fmt_compact_duration(task.get('elapsed_s'))}"}
         return {"line": f"{task_key} finished and checked, {fmt_compact_duration(task.get('elapsed_s'))}"}
     if status == "fail":
+        if task_never_started(task):
+            return {"line": f"{task_key} never got to work — the environment failed, not the task"}
         if timed_out:
             return {"line": f"{task_key} timed out"}
         if check_excerpt:
@@ -4560,8 +4575,15 @@ def task_state_bucket(status: str) -> str:
     return "waiting"
 
 
-def task_state_word(status: str) -> str:
+def task_never_started(task: dict[str, Any]) -> bool:
+    """INFRA: the worker never got to work, so the spec and check were not exercised."""
+    return str(task.get("verdict") or "").upper() == "INFRA"
+
+
+def task_state_word(status: str, task: dict[str, Any] | None = None) -> str:
     bucket = task_state_bucket(status)
+    if bucket == "fail" and task is not None and task_never_started(task):
+        return "failed to start"
     if bucket == "pass":
         return "finished & checked"
     if bucket == "working":
@@ -4582,7 +4604,7 @@ def render_progress_bar(tasks: list[dict[str, Any]], counts: dict[str, int]) -> 
     for task in tasks:
         key = html_escape(str(task.get("key", "task")))
         bucket = task_state_bucket(str(task.get("status", "queued")))
-        state_word = html_escape(task_state_word(str(task.get("status", "queued"))))
+        state_word = html_escape(task_state_word(str(task.get("status", "queued")), task))
         css_class = "" if bucket == "waiting" else f' class="{bucket}"'
         segments.append(
             f'<span{css_class} aria-label="{key}: {state_word}"></span>'
@@ -4664,7 +4686,7 @@ def render_work_group(
     status = str(task.get("status", "queued"))
     bucket = task_state_bucket(status)
     css_bucket = "working" if bucket == "working" else bucket
-    state_word = html_escape(task_state_word(status))
+    state_word = html_escape(task_state_word(status, task))
     elapsed = html_escape(fmt_compact_duration(task.get("elapsed_s")))
 
     activity = task_activity_line(task, bucket)
@@ -4690,6 +4712,11 @@ def render_work_group(
         items_html = "".join(rows)
     elif bucket == "pass":
         items_html = '<p class="empty-note">Finished and checked — this worker filed nothing to the shelf.</p>'
+    elif bucket == "fail" and task_never_started(task):
+        items_html = (
+            '<p class="empty-note">The worker never got to work — nothing was delivered '
+            "and the check was not exercised.</p>"
+        )
     elif bucket == "fail":
         items_html = '<p class="empty-note">Failed its check — nothing was delivered.</p>'
     elif bucket in {"working", "retry"}:
@@ -4705,11 +4732,17 @@ def render_work_group(
     if bucket in {"pass", "fail"}:
         verified_text = str(task.get("verified") or "").strip()
         proof_tail = str(task.get("check_output_tail") or "").strip()
+        never_started = bucket == "fail" and task_never_started(task)
         if verified_text:
             how_label = "How it was checked" if bucket == "pass" else "What the check demanded"
             verified_html += f'<span class="verified">{how_label}: {html_escape(verified_text)}</span>'
         if proof_tail:
-            proof_label = "See the proof" if bucket == "pass" else "See why it failed"
+            if bucket == "pass":
+                proof_label = "See the proof"
+            elif never_started:
+                proof_label = "See why the worker never started"
+            else:
+                proof_label = "See why it failed"
             verified_html += (
                 f'<details class="proof"><summary>{proof_label}</summary>'
                 f"<pre>{html_escape(shorten(proof_tail, 1200))}</pre></details>"
@@ -6143,12 +6176,18 @@ def read_model_log_rows(
     return rows, skipped
 
 
+def drop_infra_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """INFRA attempts never reached the model, so they never count against it."""
+    return [row for row in rows if model_log_text(row.get("verdict")).upper() != "INFRA"]
+
+
 def aggregate_model_log_rows(
     rows: list[dict[str, Any]],
     *,
     task_type: str | None = None,
     model: str | None = None,
 ) -> list[dict[str, Any]]:
+    rows = drop_infra_rows(rows)
     groups: dict[tuple[str, str, str, str, bool], dict[str, Any]] = {}
     effort_keys = model_reasoning_effort_keys(rows)
     for task_rows in group_model_log_tasks(rows):
@@ -7578,6 +7617,7 @@ def aggregate_model_scoreboard_rows(
     task_type: str | None = None,
     model: str | None = None,
 ) -> list[dict[str, Any]]:
+    rows = drop_infra_rows(rows)
     models: dict[tuple[str, str, str, bool], dict[str, Any]] = {}
     effort_keys = model_reasoning_effort_keys(rows)
     for task_rows in group_model_log_tasks(rows):
@@ -8847,6 +8887,12 @@ class RingerRunner:
         self.verifier = Verifier()
         self.semaphore = asyncio.Semaphore(manifest.max_parallel)
         self.active_processes: dict[int, asyncio.subprocess.Process] = {}
+        self.infra_lane_counts: dict[tuple[str, str], int] = {}
+        self.infra_lane_reasons: dict[tuple[str, str], str] = {}
+
+    def _lane_for(self, task: TaskSpec) -> tuple[str, str]:
+        engine = self.config.engines.get(task.engine)
+        return task.engine, task.model or (engine.model_default if engine else "")
 
     async def run(self) -> int:
         self.manifest.workdir.mkdir(parents=True, exist_ok=True)
@@ -8877,7 +8923,12 @@ class RingerRunner:
             if self.dashboard is not None:
                 self.dashboard.stop()
             self.logger.close()
-            print_summary(self.run_id, self.runtimes)
+            print_summary(
+                self.run_id,
+                self.runtimes,
+                lane_for=lambda runtime: self._lane_for(runtime.task),
+                lane_reasons=dict(self.infra_lane_reasons),
+            )
             print("Model log updated; run './ringer.py models' for the per-model scoreboard.")
             # The post-run journey: tell a human exactly where the results live.
             with contextlib.suppress(Exception):
@@ -8901,6 +8952,20 @@ class RingerRunner:
         async with self.semaphore:
             with self.lock:
                 runtime.started_at_monotonic = time.monotonic()
+                lane = self._lane_for(runtime.task)
+                lane_count = self.infra_lane_counts.get(lane, 0)
+                if lane_count >= INFRA_LANE_TRIP:
+                    # Skip, not fail: no worker, no taskdir, no eval row.
+                    runtime.status = "fail"
+                    runtime.final_verdict = "INFRA"
+                    runtime.ended_at_monotonic = time.monotonic()
+                    runtime.last_check_output = (
+                        f"[ringer] INFRA: skipped - lane {lane[0]}/{lane[1] or 'default'} is down "
+                        f"({lane_count} INFRA attempts this run; first: "
+                        f"{self.infra_lane_reasons.get(lane, 'unknown')}). "
+                        "No worker was started for this task."
+                    )
+                    return
             prepared, prepare_error = await self._prepare_taskdir(runtime)
             if not prepared:
                 await self._record_prepare_error(runtime, prepare_error or "taskdir preparation failed")
@@ -8925,6 +8990,13 @@ class RingerRunner:
                     runtime.last_check_returncode = verify.check_returncode
                     runtime.last_check_timed_out = verify.check_timed_out
                     runtime.last_check_output = verify.raw_output_excerpt
+                    if verdict == "INFRA":
+                        lane = self._lane_for(runtime.task)
+                        self.infra_lane_counts[lane] = self.infra_lane_counts.get(lane, 0) + 1
+                        self.infra_lane_reasons.setdefault(lane, worker.infra_reason or "")
+                        runtime.last_check_output = infra_headline(
+                            worker.infra_reason or "", verify.raw_output_excerpt
+                        )
                 duration_ms = int((time.monotonic() - attempt_started) * 1000)
                 self._log_attempt(runtime, current_spec, retrying, worker, verify, verdict, duration_ms)
                 if verdict == "PASS":
@@ -9222,6 +9294,7 @@ class RingerRunner:
         except OSError as exc:
             return WorkerResult(returncode=None, timed_out=False, tokens=None, error=str(exc))
         async with AsyncFileCloser(log_fh):
+            worker_started = time.monotonic()
             try:
                 proc = await asyncio.create_subprocess_exec(
                     *cmd,
@@ -9264,11 +9337,16 @@ class RingerRunner:
         if timed_out:
             append_text(log_path, f"\n[ringer.py] worker timed out after {runtime.task.timeout_s}s\n")
         append_text(log_path, f"[ringer.py] attempt {attempt} exited rc={proc.returncode}\n")
+        infra_reason = classify_infra(
+            proc.returncode, timed_out, time.monotonic() - worker_started, output_tail
+        )
         return WorkerResult(
             returncode=proc.returncode,
             timed_out=timed_out,
             tokens=tokens,
             reported_model=reported_model,
+            infra_reason=infra_reason,
+            output_tail=output_tail,
         )
 
     async def _tee_stream(
@@ -9332,8 +9410,13 @@ class RingerRunner:
             notes_parts.append(f"worker_error={worker.error}")
         if verify.missing_files:
             notes_parts.append(f"missing_expect_files={json.dumps(list(verify.missing_files))}")
+        if verdict == "INFRA" and worker.infra_reason:
+            notes_parts.append(f"infra_reason={worker.infra_reason}")
         notes_parts.append("raw_check_output_first_2000_chars:")
         notes_parts.append(verify.raw_output_excerpt)
+        if verdict != "PASS":
+            notes_parts.append("worker_output_last_1500_chars:")
+            notes_parts.append(ANSI_RE.sub("", worker.output_tail)[-1500:])
         with contextlib.suppress(Exception):
             self._write_steering_observation(
                 runtime,
@@ -9493,6 +9576,8 @@ def verdict_for(worker: WorkerResult, verify: VerifyResult) -> str:
         return "TIMEOUT"
     if verify.ok:
         return "PASS"
+    if worker.infra_reason:
+        return "INFRA"
     return "FAIL"
 
 
@@ -9815,6 +9900,82 @@ def tail_text(path: Path, max_bytes: int = 6000, line_count: int = 40) -> str:
 
 
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+INFRA_LANE_TRIP = 2
+INFRA_TAIL_LINES = 20
+INFRA_WEAK_MAX_S = 60.0
+INFRA_EXCERPT_CHARS = 200
+
+# (category, pattern) in check order; the first category with a hit wins.
+INFRA_STRONG_SIGNATURES: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
+    (category, re.compile(pattern, re.IGNORECASE))
+    for category, pattern in (
+        (
+            "auth",
+            r"refresh_token_invalidated|refresh_token_reused|refresh_token_expired"
+            r"|invalid[ _-]?api[ _-]?key|authentication_error|please run /login"
+            r"|not logged in|XAI_API_KEY|run `?(?:codex|grok|claude) login",
+        ),
+        ("billing", r"can only afford|insufficient (?:credits|balance|funds)|credit balance is too low"),
+        (
+            "rate-limit",
+            r"usage limit reached|hit your limit|rate_limit_error"
+            r"|exceeded your current quota|overloaded_error",
+        ),
+        ("model-unavailable", r"no endpoints found|model_not_found"),
+        ("interop", r"exec format error|UtilBindVsock"),
+        ("cli", r"input must be provided either through stdin or as a prompt argument"),
+    )
+)
+INFRA_WEAK_SIGNATURES: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
+    (category, re.compile(pattern, re.IGNORECASE))
+    for category, pattern in (
+        ("auth", r"\b401\b|unauthori[sz]ed"),
+        ("billing", r"\b402\b|payment required"),
+        ("rate-limit", r"\b429\b|too many requests|rate.?limit"),
+        ("model-unavailable", r"\b404\b.{0,40}model|model\b.{0,40}not found"),
+    )
+)
+
+
+def _infra_excerpt(line: str, match: re.Match[str]) -> str:
+    if len(line) <= INFRA_EXCERPT_CHARS:
+        return line
+    start = max(0, match.start() - (INFRA_EXCERPT_CHARS - (match.end() - match.start())) // 2)
+    end = max(start + INFRA_EXCERPT_CHARS, match.end())
+    return line[start:end]
+
+
+def classify_infra(returncode: int | None, timed_out: bool, duration_s: float, output: str) -> str | None:
+    """Name an environment failure ('<category>: <excerpt>') or None.
+
+    Only a nonzero exit that was not a timeout can be INFRA. Strong signatures
+    count at any duration; weak ones (bare 401/429/...) only on fast exits.
+    """
+    if not isinstance(returncode, int) or isinstance(returncode, bool) or returncode == 0 or timed_out:
+        return None
+    clean = ANSI_RE.sub("", output or "")
+    lines = [line.strip() for line in clean.splitlines() if line.strip()][-INFRA_TAIL_LINES:]
+    signature_sets = [INFRA_STRONG_SIGNATURES]
+    if duration_s <= INFRA_WEAK_MAX_S:
+        signature_sets.append(INFRA_WEAK_SIGNATURES)
+    for signatures in signature_sets:
+        for category, pattern in signatures:
+            for line in lines:
+                match = pattern.search(line)
+                if match:
+                    return f"{category}: {_infra_excerpt(line, match)}"
+    return None
+
+
+def infra_headline(infra_reason: str, check_output: str) -> str:
+    return (
+        f"[ringer] INFRA: the worker never got to work ({infra_reason}). "
+        "Fix the environment (login, credits, quota, interop) and re-run; "
+        "the spec and check were not exercised.\n\n"
+        f"{check_output}"
+    )
+
 CMD_JSON_DOUBLE_RE = re.compile(
     r'"(?:cmd|command)"\s*:\s*"(?P<cmd>(?:\\.|[^"\\])*)"',
     re.IGNORECASE,
@@ -10208,7 +10369,12 @@ def print_lint_findings(findings: list[str]) -> None:
         print(f"lint: {finding}")
 
 
-def print_summary(run_id: str, runtimes: list[TaskRuntime]) -> None:
+def print_summary(
+    run_id: str,
+    runtimes: list[TaskRuntime],
+    lane_for: Callable[[TaskRuntime], tuple[str, str]] | None = None,
+    lane_reasons: dict[tuple[str, str], str] | None = None,
+) -> None:
     print("\nSummary")
     print(f"run_id: {run_id}")
     header = f"{'task':<24} {'status':<8} {'verdict':<8} {'attempts':>8} {'tokens':>10} {'elapsed_s':>10}"
@@ -10227,6 +10393,21 @@ def print_summary(run_id: str, runtimes: list[TaskRuntime]) -> None:
         print("\nsetup failures (no worker was spawned):")
         for runtime in setup_failures:
             print(f"  {runtime.task.key}: {runtime.setup_error}")
+    infra_lanes: dict[tuple[str, str], list[str]] = {}
+    for runtime in runtimes:
+        if runtime.final_verdict == "INFRA":
+            lane = lane_for(runtime) if lane_for else (runtime.task.engine, runtime.task.model or "")
+            infra_lanes.setdefault(lane, []).append(runtime.task.key)
+    if infra_lanes:
+        print("\nINFRA: these tasks never got to work (the worker could not run):")
+        for lane, keys in infra_lanes.items():
+            reason = (lane_reasons or {}).get(lane, "see worker log")
+            print(f"  {lane[0]} / {lane[1] or 'default'}: {len(keys)} task(s) ({', '.join(keys)})")
+            print(f"    first infra_reason: {reason}")
+        print(
+            "Nothing about the spec or check was tested. "
+            "Fix the environment (login, credits, quota, interop) and re-run."
+        )
 
 
 def create_demo_manifest() -> Path:

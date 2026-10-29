@@ -306,6 +306,17 @@ check_interval_s = 3600
 
 Every worker attempt — pass, fail, timeout, retry — is logged with its spec, engine, duration, token count, and the raw check output. Local JSONL by default; point `[eval.postgres]` at a database to aggregate across machines. Failure rows are the point: they tell you which spec styles, engines, and task shapes actually work, so the swarm gets better on evidence instead of vibes.
 
+### The INFRA verdict: the worker never got to work
+
+Some attempts fail before the model does anything: an expired login, exhausted credits, a usage or rate limit, a model with no tool-use endpoint, broken WSL interop, a CLI flag that swallowed the prompt. Scoring those as `FAIL` ("missing expected files") blames the spec and the model for an environment problem.
+
+When a worker exits nonzero (not a timeout) and the tail of its output matches a known environment signature, the attempt is `INFRA`, not `FAIL`, and its reason (`auth: ...`, `billing: ...`, `rate-limit: ...`, `model-unavailable: ...`, `interop: ...`, `cli: ...`) is logged as `infra_reason=` in the row's notes. Precise signatures count at any duration; bare `401`/`429`-style hits count only on exits within 60 seconds. An unrecognised failure stays `FAIL`. A passing check always wins.
+
+- **Never retried.** Retrying cannot fix a login or a quota, whatever the task's `max_attempts`.
+- **Lane breaker.** A lane is an engine plus its model. After 2 `INFRA` attempts in one run, remaining tasks on that lane are skipped without starting a worker: verdict `INFRA`, 0 attempts, no eval row. Running tasks are not interrupted.
+- **Excluded from the scoreboard.** `INFRA` rows are dropped from `ringer.py models` and the per-model aggregates, so an outage never counts against a model.
+- **Evidence kept.** Every non-passing eval row ends with the last 1500 characters of the worker's output, and the run summary lists the `INFRA` tasks per lane with the first reason. Fix the environment and re-run; the spec and check were not exercised.
+
 ## Model performance log
 
 ### Model identity taxonomy
