@@ -1,0 +1,237 @@
+
+ RUN  v2.1.9 /repo
+
+ ❯ shared/appointmentSort.test.ts (23 tests | 15 failed) 16ms
+   × sortAppointments — date key (APT-S1, APT-S9) > orders soonest-first ascending 6ms
+     → desc is not defined
+   × sortAppointments — date key (APT-S1, APT-S9) > orders latest-first descending 0ms
+     → desc is not defined
+   × sortAppointments — date key (APT-S1, APT-S9) > compares Date objects and ISO strings interchangeably 0ms
+     → desc is not defined
+   × sortAppointments — status key (APT-S1) > orders alphabetically ascending 0ms
+     → desc is not defined
+   × sortAppointments — status key (APT-S1) > orders alphabetically descending 0ms
+     → desc is not defined
+   × sortAppointments — status key (APT-S1) > orders the full status vocabulary alphabetically 1ms
+     → desc is not defined
+   × tie-breaking is total and direction-stable (APT-S6) > breaks status ties by start time ascending, ascending direction 0ms
+     → desc is not defined
+   × tie-breaking is total and direction-stable (APT-S6) > breaks status ties by start time ascending, DESCENDING direction too 0ms
+     → desc is not defined
+   × tie-breaking is total and direction-stable (APT-S6) > breaks date ties by id, never by status 0ms
+     → desc is not defined
+   × tie-breaking is total and direction-stable (APT-S6) > is a total order — identical key and start time fall back to id 0ms
+     → desc is not defined
+   × unparseable start dates (APT-S7) > sorts unparseable dates last, ascending 0ms
+     → desc is not defined
+   × unparseable start dates (APT-S7) > sorts unparseable dates last, descending — NOT first 0ms
+     → desc is not defined
+   × unparseable start dates (APT-S7) > sorts unparseable dates last within their status group 0ms
+     → desc is not defined
+   × unparseable start dates (APT-S7) > keeps a total order when every date is unparseable 0ms
+     → desc is not defined
+   × purity (APT-S8) > returns a new array and leaves the input untouched 0ms
+     → desc is not defined
+
+⎯⎯⎯⎯⎯⎯ Failed Tests 15 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  shared/appointmentSort.test.ts > sortAppointments — date key (APT-S1, APT-S9) > orders soonest-first ascending
+ReferenceError: desc is not defined
+ ❯ Module.sortAppointments shared/appointmentSort.ts:96:26
+     94| 
+     95|   const { key, dir } = sort;
+     96|   const isDesc = dir === desc;
+       |                          ^
+     97|   const flip = isDesc ? -1 : 1;
+     98| 
+ ❯ shared/appointmentSort.test.ts:55:16
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/15]⎯
+
+ FAIL  shared/appointmentSort.test.ts > sortAppointments — date key (APT-S1, APT-S9) > orders latest-first descending
+ReferenceError: desc is not defined
+ ❯ Module.sortAppointments shared/appointmentSort.ts:96:26
+     94| 
+     95|   const { key, dir } = sort;
+     96|   const isDesc = dir === desc;
+       |                          ^
+     97|   const flip = isDesc ? -1 : 1;
+     98| 
+ ❯ shared/appointmentSort.test.ts:59:16
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/15]⎯
+
+ FAIL  shared/appointmentSort.test.ts > sortAppointments — date key (APT-S1, APT-S9) > compares Date objects and ISO strings interchangeably
+ReferenceError: desc is not defined
+ ❯ Module.sortAppointments shared/appointmentSort.ts:96:26
+     94| 
+     95|   const { key, dir } = sort;
+     96|   const isDesc = dir === desc;
+       |                          ^
+     97|   const flip = isDesc ? -1 : 1;
+     98| 
+ ❯ shared/appointmentSort.test.ts:78:16
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/15]⎯
+
+ FAIL  shared/appointmentSort.test.ts > sortAppointments — status key (APT-S1) > orders alphabetically ascending
+ReferenceError: desc is not defined
+ ❯ Module.sortAppointments shared/appointmentSort.ts:96:26
+     94| 
+     95|   const { key, dir } = sort;
+     96|   const isDesc = dir === desc;
+       |                          ^
+     97|   const flip = isDesc ? -1 : 1;
+     98| 
+ ❯ shared/appointmentSort.test.ts:85:16
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/15]⎯
+
+ FAIL  shared/appointmentSort.test.ts > sortAppointments — status key (APT-S1) > orders alphabetically descending
+ReferenceError: desc is not defined
+ ❯ Module.sortAppointments shared/appointmentSort.ts:96:26
+     94| 
+     95|   const { key, dir } = sort;
+     96|   const isDesc = dir === desc;
+       |                          ^
+     97|   const flip = isDesc ? -1 : 1;
+     98| 
+ ❯ shared/appointmentSort.test.ts:89:16
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/15]⎯
+
+ FAIL  shared/appointmentSort.test.ts > sortAppointments — status key (APT-S1) > orders the full status vocabulary alphabetically
+ReferenceError: desc is not defined
+ ❯ Module.sortAppointments shared/appointmentSort.ts:96:26
+     94| 
+     95|   const { key, dir } = sort;
+     96|   const isDesc = dir === desc;
+       |                          ^
+     97|   const flip = isDesc ? -1 : 1;
+     98| 
+ ❯ shared/appointmentSort.test.ts:96:24
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/15]⎯
+
+ FAIL  shared/appointmentSort.test.ts > tie-breaking is total and direction-stable (APT-S6) > breaks status ties by start time ascending, ascending direction
+ReferenceError: desc is not defined
+ ❯ Module.sortAppointments shared/appointmentSort.ts:96:26
+     94| 
+     95|   const { key, dir } = sort;
+     96|   const isDesc = dir === desc;
+       |                          ^
+     97|   const flip = isDesc ? -1 : 1;
+     98| 
+ ❯ shared/appointmentSort.test.ts:114:16
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/15]⎯
+
+ FAIL  shared/appointmentSort.test.ts > tie-breaking is total and direction-stable (APT-S6) > breaks status ties by start time ascending, DESCENDING direction too
+ReferenceError: desc is not defined
+ ❯ Module.sortAppointments shared/appointmentSort.ts:96:26
+     94| 
+     95|   const { key, dir } = sort;
+     96|   const isDesc = dir === desc;
+       |                          ^
+     97|   const flip = isDesc ? -1 : 1;
+     98| 
+ ❯ shared/appointmentSort.test.ts:118:16
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/15]⎯
+
+ FAIL  shared/appointmentSort.test.ts > tie-breaking is total and direction-stable (APT-S6) > breaks date ties by id, never by status
+ReferenceError: desc is not defined
+ ❯ Module.sortAppointments shared/appointmentSort.ts:96:26
+     94| 
+     95|   const { key, dir } = sort;
+     96|   const isDesc = dir === desc;
+       |                          ^
+     97|   const flip = isDesc ? -1 : 1;
+     98| 
+ ❯ shared/appointmentSort.test.ts:131:16
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/15]⎯
+
+ FAIL  shared/appointmentSort.test.ts > tie-breaking is total and direction-stable (APT-S6) > is a total order — identical key and start time fall back to id
+ReferenceError: desc is not defined
+ ❯ Module.sortAppointments shared/appointmentSort.ts:96:26
+     94| 
+     95|   const { key, dir } = sort;
+     96|   const isDesc = dir === desc;
+       |                          ^
+     97|   const flip = isDesc ? -1 : 1;
+     98| 
+ ❯ shared/appointmentSort.test.ts:140:18
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[10/15]⎯
+
+ FAIL  shared/appointmentSort.test.ts > unparseable start dates (APT-S7) > sorts unparseable dates last, ascending
+ReferenceError: desc is not defined
+ ❯ Module.sortAppointments shared/appointmentSort.ts:96:26
+     94| 
+     95|   const { key, dir } = sort;
+     96|   const isDesc = dir === desc;
+       |                          ^
+     97|   const flip = isDesc ? -1 : 1;
+     98| 
+ ❯ shared/appointmentSort.test.ts:158:16
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[11/15]⎯
+
+ FAIL  shared/appointmentSort.test.ts > unparseable start dates (APT-S7) > sorts unparseable dates last, descending — NOT first
+ReferenceError: desc is not defined
+ ❯ Module.sortAppointments shared/appointmentSort.ts:96:26
+     94| 
+     95|   const { key, dir } = sort;
+     96|   const isDesc = dir === desc;
+       |                          ^
+     97|   const flip = isDesc ? -1 : 1;
+     98| 
+ ❯ shared/appointmentSort.test.ts:162:16
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[12/15]⎯
+
+ FAIL  shared/appointmentSort.test.ts > unparseable start dates (APT-S7) > sorts unparseable dates last within their status group
+ReferenceError: desc is not defined
+ ❯ Module.sortAppointments shared/appointmentSort.ts:96:26
+     94| 
+     95|   const { key, dir } = sort;
+     96|   const isDesc = dir === desc;
+       |                          ^
+     97|   const flip = isDesc ? -1 : 1;
+     98| 
+ ❯ shared/appointmentSort.test.ts:171:16
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[13/15]⎯
+
+ FAIL  shared/appointmentSort.test.ts > unparseable start dates (APT-S7) > keeps a total order when every date is unparseable
+ReferenceError: desc is not defined
+ ❯ Module.sortAppointments shared/appointmentSort.ts:96:26
+     94| 
+     95|   const { key, dir } = sort;
+     96|   const isDesc = dir === desc;
+       |                          ^
+     97|   const flip = isDesc ? -1 : 1;
+     98| 
+ ❯ shared/appointmentSort.test.ts:176:16
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[14/15]⎯
+
+ FAIL  shared/appointmentSort.test.ts > purity (APT-S8) > returns a new array and leaves the input untouched
+ReferenceError: desc is not defined
+ ❯ Module.sortAppointments shared/appointmentSort.ts:96:26
+     94| 
+     95|   const { key, dir } = sort;
+     96|   const isDesc = dir === desc;
+       |                          ^
+     97|   const flip = isDesc ? -1 : 1;
+     98| 
+ ❯ shared/appointmentSort.test.ts:187:17
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[15/15]⎯
+
+ Test Files  1 failed (1)
+      Tests  15 failed | 8 passed (23)
+   Start at  22:17:38
+   Duration  385ms (transform 62ms, setup 59ms, collect 42ms, tests 16ms, environment 0ms, prepare 78ms)
+
