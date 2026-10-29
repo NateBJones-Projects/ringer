@@ -222,6 +222,28 @@ checks and raw logs support — no vibes, no worker self-reports.
 - First to choke on long conversational or multi-turn harness tasks —
   watch retry counts before scaling them into a batch (2026-07-05 focus
   group lesson).
+- 2026-09-07 — ATTRIBUTION CORRECTION, gemini-flash-latest, code-feature
+  (task `appointments-sort`, evidence at /srv/swarm/blp-252). Four FAIL rows
+  stand against this model for this task in `~/.ringer/runs.jsonl`. They are
+  real failures — the code genuinely did not pass — but they are not clean
+  capability signal, because two harness defects shaped both attempts.
+  First, the worker was denied read access to every repo path it was told to
+  edit; its own log records, for all five files including the frozen test
+  file that was the contract:
+  `Error executing tool read_file: Path not in workspace: ... resolves
+  outside the allowed workspace directories`. It then wrote through the
+  shell regardless, and its notes say it reasoned through the assertions
+  "by hand" instead. Second, the attempt-2 retry prompt opened with the
+  engine's `--output-format json` accounting (`"durationMs": 894`) rather
+  than the check output, and never stated that the tree already carried
+  attempt 1's edits; attempt 2 spent effort removing a stray line it had
+  itself written. Attempt 1 failed 6 of 23 assertions on one typo
+  (`isisNaNB`); attempt 2 rewrote the module and failed 15. Read this run as
+  a measurement of the harness, not of the model. Note this is a different
+  class from the check-bug annotations above: the verdicts were correct, the
+  attribution is not. The machine-readable form of corrections like this is
+  upstream issue #65 (amendment rows); until that exists the scoreboard
+  still counts all four rows.
 
 ## Process lessons (cross-model)
 
