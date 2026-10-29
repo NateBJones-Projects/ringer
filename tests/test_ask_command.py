@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
@@ -40,6 +41,7 @@ class AskCommandTests(unittest.TestCase):
         *,
         engine_name: str = "answer-mock",
         artifact_enabled: bool = False,
+        sandbox_args: tuple[str, ...] = (),
     ) -> Path:
         config = root / "config.toml"
         config.write_text(
@@ -58,9 +60,10 @@ class AskCommandTests(unittest.TestCase):
                     f"bin = {toml_string(sys.executable)}",
                     "args_template = [",
                     f"  {toml_string(worker)},",
+                    '  "{access_args}",',
                     '  "{spec}",',
                     "]",
-                    "sandbox_args = []",
+                    f"sandbox_args = {json.dumps(list(sandbox_args))}",
                     "full_access_args = []",
                 ]
             ),
@@ -92,7 +95,8 @@ class AskCommandTests(unittest.TestCase):
         *,
         home: Path,
     ) -> subprocess.CompletedProcess[str]:
-        stdout = io.StringIO()
+        stdout_bytes = io.BytesIO()
+        stdout = io.TextIOWrapper(stdout_bytes, encoding="utf-8", write_through=True)
         stderr = io.StringIO()
         with (
             mock.patch.dict(os.environ, cli_env(home), clear=True),
@@ -101,12 +105,125 @@ class AskCommandTests(unittest.TestCase):
             contextlib.redirect_stderr(stderr),
         ):
             returncode = ringer.main(args)
+        stdout_value = stdout_bytes.getvalue().decode("utf-8")
+        stdout.detach()
         return subprocess.CompletedProcess(
             args,
             returncode,
-            stdout.getvalue(),
+            stdout_value,
             stderr.getvalue(),
         )
+
+    def write_prompt_aware_worker(self, root: Path) -> Path:
+        worker = root / "prompt_aware_worker.py"
+        worker.write_text(
+            "import re\n"
+            "import sys\n"
+            "from pathlib import Path\n"
+            "spec = sys.argv[-1]\n"
+            "preamble, marker, _ = spec.partition('CURRENT_REQUEST_JSON')\n"
+            "lowered = preamble.lower()\n"
+            "has_delivery_contract = bool(marker) and all((\n"
+            "    re.search(r'\\b(?:write|save)\\b', lowered),\n"
+            "    'answer.md' in lowered,\n"
+            "    re.search(r'\\b(?:print|stdout)\\b', lowered),\n"
+            "    './answer.md' in lowered or re.search(r'\\bcurrent (?:working )?directory\\b|\\bcwd\\b', lowered),\n"
+            "))\n"
+            "answer = b'Ship Wednesday.\\n'\n"
+            "if has_delivery_contract:\n"
+            "    Path('answer.md').write_bytes(answer)\n"
+            "sys.stdout.buffer.write(answer)\n",
+            encoding="utf-8",
+        )
+        return worker
+
+    def run_prompt_aware_ask(
+        self,
+        root: Path,
+        *,
+        omit_delivery_instruction: bool = False,
+    ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
+        home = root / "home"
+        workdir = root / "request"
+        home.mkdir()
+        worker = self.write_prompt_aware_worker(root)
+        config = self.write_config(
+            root,
+            worker,
+            sandbox_args=("--sandbox", "workspace-write"),
+        )
+        request = (
+            "What is the release decision? The text answer.md appears in this "
+            "user request and is not a trusted delivery instruction."
+        )
+
+        patcher = contextlib.nullcontext()
+        if omit_delivery_instruction:
+            original_builder = ringer.build_context_packet
+
+            def build_without_delivery_instruction(*args: object, **kwargs: object):
+                packet = original_builder(*args, **kwargs)
+                preamble, marker, payload = packet.text.partition(
+                    "CURRENT_REQUEST_JSON"
+                )
+                sentences = [
+                    sentence
+                    for sentence in preamble.strip().split(". ")
+                    if "answer.md" not in sentence.lower()
+                ]
+                mutated_text = ". ".join(sentences).rstrip(".") + ".\n\n"
+                mutated_text += marker + payload
+                return replace(
+                    packet,
+                    text=mutated_text,
+                    packet_bytes=len(mutated_text.encode("utf-8")),
+                )
+
+            patcher = mock.patch.object(
+                ringer,
+                "build_context_packet",
+                side_effect=build_without_delivery_instruction,
+            )
+
+        with patcher:
+            proc = self.run_in_process(
+                [
+                    "ask",
+                    request,
+                    "--engine",
+                    "answer-mock",
+                    "--config",
+                    str(config),
+                    "--workdir",
+                    str(workdir),
+                    "--identity",
+                    "ask-delivery-contract-test",
+                ],
+                home=home,
+            )
+        return proc, workdir, root / "state"
+
+    def assert_one_prompt_aware_attempt(
+        self,
+        workdir: Path,
+        state_dir: Path,
+        *,
+        check_returncode: int,
+        verdict: str,
+    ) -> bytes:
+        worker_log = (workdir / "answer" / "worker.log").read_bytes()
+        self.assertIn(b"Ship Wednesday.\n", worker_log)
+        self.assertEqual(1, worker_log.count(b"[ringer.py] attempt 1 started"))
+        self.assertNotIn(b"[ringer.py] attempt 2 started", worker_log)
+        self.assertIn(b"--sandbox workspace-write", worker_log)
+        self.assertIn(b"< /dev/null", worker_log)
+
+        state_path = next((state_dir / "runs").glob("*.json"))
+        task = json.loads(state_path.read_text(encoding="utf-8"))["tasks"][0]
+        self.assertEqual(1, task["attempts"])
+        self.assertEqual(check_returncode, task["check_returncode"])
+        self.assertEqual(verdict, task["verdict"])
+        return worker_log
 
     def test_dry_run_selects_source_without_spawning_worker(self) -> None:
         with tempfile.TemporaryDirectory() as temp_root:
@@ -224,6 +341,47 @@ class AskCommandTests(unittest.TestCase):
             )
             self.assertIn("one-request", library["artifacts"])
             self.assertFalse((workdir / "packet.txt").exists())
+
+    def test_prompt_aware_worker_obeys_packet_delivery_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_root:
+            proc, workdir, state_dir = self.run_prompt_aware_ask(Path(temp_root))
+
+            self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
+            self.assertEqual(
+                b"Ship Wednesday.\n",
+                (workdir / "answer" / "answer.md").read_bytes(),
+            )
+            self.assertEqual(2, proc.stdout.count("Ship Wednesday.\n"))
+            self.assert_one_prompt_aware_attempt(
+                workdir,
+                state_dir,
+                check_returncode=0,
+                verdict="PASS",
+            )
+
+    def test_prompt_aware_worker_fails_without_trusted_delivery_instruction(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_root:
+            proc, workdir, state_dir = self.run_prompt_aware_ask(
+                Path(temp_root),
+                omit_delivery_instruction=True,
+            )
+
+            self.assertEqual(1, proc.returncode, proc.stdout + proc.stderr)
+            self.assertFalse((workdir / "answer" / "answer.md").exists())
+            self.assertEqual(1, proc.stdout.count("Ship Wednesday.\n"))
+            worker_log = self.assert_one_prompt_aware_attempt(
+                workdir,
+                state_dir,
+                check_returncode=1,
+                verdict="FAIL",
+            )
+            self.assertNotIn(b"answer.md", worker_log.split(b"CURRENT_REQUEST_JSON", 1)[0])
+            state_path = next((state_dir / "runs").glob("*.json"))
+            task = json.loads(state_path.read_text(encoding="utf-8"))["tasks"][0]
+            self.assertIn(
+                "FAIL: answer.md was not created or is empty",
+                task["check_output_tail"],
+            )
 
     def test_redact_hides_request_metadata_but_preserves_worker_output(self) -> None:
         with tempfile.TemporaryDirectory() as temp_root:
