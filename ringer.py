@@ -6143,6 +6143,248 @@ def read_model_log_rows(
     return rows, skipped
 
 
+AMEND_CAUSES = ("check", "infra", "spec", "worker")
+AMEND_EXCLUDING_CAUSES = frozenset({"check", "infra", "spec"})
+AMEND_MIN_NOTE_CHARS = 10
+
+
+def amendments_path(log_path: Path) -> Path:
+    return log_path.with_name("amendments.jsonl")
+
+
+def load_amendments(path: Path) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    try:
+        fh = path.open("r", encoding="utf-8")
+    except OSError:
+        return entries
+    with fh:
+        for line in fh:
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(entry, dict):
+                entries.append(entry)
+    return entries
+
+
+def model_log_attempt_numbers(rows: list[dict[str, Any]]) -> dict[int, tuple[tuple[str, str], int]]:
+    """Map id(row) -> ((run_id, task_key), 1-based attempt number)."""
+    by_task: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for row in rows:
+        run_id = model_log_text(row.get("run_id"))
+        task_key = model_log_text(row.get("task_key"))
+        if run_id and task_key:
+            by_task.setdefault((run_id, task_key), []).append(row)
+    numbers: dict[int, tuple[tuple[str, str], int]] = {}
+    for key, task_rows in by_task.items():
+        ordered = sorted(
+            task_rows,
+            key=lambda row: (
+                model_log_text(row.get("logged_at")),
+                1 if model_log_row_is_retry(row) else 0,
+            ),
+        )
+        for number, row in enumerate(ordered, start=1):
+            numbers[id(row)] = (key, number)
+    return numbers
+
+
+def model_log_row_is_pass(row: dict[str, Any]) -> bool:
+    return model_log_text(row.get("verdict")).upper() == "PASS"
+
+
+def apply_amendments(rows: list[dict[str, Any]], amendments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return copies of rows with amended_cause set by each row's latest applicable amendment."""
+    out = [dict(row) for row in rows]
+    if not amendments:
+        return out
+    numbers = model_log_attempt_numbers(out)
+    rows_by_task: dict[tuple[str, str], list[tuple[int, dict[str, Any]]]] = {}
+    for row in out:
+        info = numbers.get(id(row))
+        if info is not None:
+            rows_by_task.setdefault(info[0], []).append((info[1], row))
+    for entry in amendments:
+        cause = model_log_text(entry.get("cause"))
+        if cause not in AMEND_CAUSES:
+            continue
+        key = (model_log_text(entry.get("run_id")), model_log_text(entry.get("task_key")))
+        attempt = entry.get("attempt")
+        if isinstance(attempt, bool) or (attempt is not None and not isinstance(attempt, int)):
+            continue
+        for number, row in rows_by_task.get(key, []):
+            if model_log_row_is_pass(row):
+                continue
+            if attempt is None or attempt == number:
+                row["amended_cause"] = cause
+    return out
+
+
+def drop_amended_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Amended check/infra/spec attempts never measured the model, so they do not count against it."""
+    return [row for row in rows if row.get("amended_cause") not in AMEND_EXCLUDING_CAUSES]
+
+
+def model_log_exclusion_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
+    counts = {"check": 0, "spec": 0, "infra": 0}
+    for row in rows:
+        cause = row.get("amended_cause")
+        if cause in AMEND_EXCLUDING_CAUSES:
+            counts[cause] += 1
+    return counts
+
+
+def print_model_exclusion_line(rows: list[dict[str, Any]]) -> None:
+    counts = model_log_exclusion_counts(rows)
+    excluded = sum(counts.values())
+    if excluded:
+        print(
+            f"excluded from model stats: {excluded} attempt(s) "
+            f"(amended check: {counts['check']}, spec: {counts['spec']}, infra: {counts['infra']})"
+        )
+
+
+def validate_amendment_entry(
+    entry: dict[str, Any],
+    attempts_by_task: dict[tuple[str, str], list[dict[str, Any]]],
+) -> tuple[str | None, list[int]]:
+    """Check one amendment against the log; return (error, attempt numbers it affects)."""
+    cause = entry.get("cause")
+    if cause not in AMEND_CAUSES:
+        return "cause must be one of " + ", ".join(AMEND_CAUSES), []
+    note = entry.get("note")
+    if not isinstance(note, str) or len(note.strip()) < AMEND_MIN_NOTE_CHARS:
+        return f"note must be at least {AMEND_MIN_NOTE_CHARS} characters", []
+    run_id = model_log_text(entry.get("run_id"))
+    task_key = model_log_text(entry.get("task_key"))
+    task_rows = attempts_by_task.get((run_id, task_key))
+    if not task_rows:
+        return f"run_id/task_key not found in log: {run_id} {task_key}", []
+    attempt = entry.get("attempt")
+    if attempt is None:
+        numbers = [n for n, row in enumerate(task_rows, start=1) if not model_log_row_is_pass(row)]
+        if not numbers:
+            return f"nothing to amend: every attempt of {run_id} {task_key} is PASS", []
+        return None, numbers
+    if isinstance(attempt, bool) or not isinstance(attempt, int):
+        return "attempt must be an integer or null", []
+    if attempt < 1 or attempt > len(task_rows):
+        return f"attempt {attempt} not found (task has {len(task_rows)})", []
+    if model_log_row_is_pass(task_rows[attempt - 1]):
+        return f"attempt {attempt} is a PASS and cannot be amended", []
+    return None, [attempt]
+
+
+def attempts_by_task_from_log(log_path: Path) -> dict[tuple[str, str], list[dict[str, Any]]]:
+    rows, _skipped = read_model_log_rows(log_path)
+    numbers = model_log_attempt_numbers(rows)
+    grouped: dict[tuple[str, str], list[tuple[int, dict[str, Any]]]] = {}
+    for row in rows:
+        info = numbers.get(id(row))
+        if info is not None:
+            grouped.setdefault(info[0], []).append((info[1], row))
+    return {key: [row for _n, row in sorted(items, key=lambda item: item[0])] for key, items in grouped.items()}
+
+
+def amendment_record(entry: dict[str, Any], by: str) -> dict[str, Any]:
+    return {
+        "amended_at": utc_now_iso(),
+        "run_id": model_log_text(entry.get("run_id")),
+        "task_key": model_log_text(entry.get("task_key")),
+        "attempt": entry.get("attempt"),
+        "cause": entry["cause"],
+        "note": entry["note"].strip(),
+        "by": by,
+    }
+
+
+def run_amend_command(config: AppConfig, args: argparse.Namespace) -> int:
+    log_path = (args.log or config.eval.jsonl_path).expanduser().resolve()
+    amend_path = amendments_path(log_path)
+    if args.list:
+        entries = load_amendments(amend_path)
+        if args.run:
+            entries = [entry for entry in entries if entry.get("run_id") == args.run]
+        run_w = max([6] + [len(model_log_text(e.get("run_id"))) for e in entries])
+        key_w = max([8] + [len(model_log_text(e.get("task_key"))) for e in entries])
+        print(
+            f"{'amended_at':<25} {'run_id':<{run_w}} {'task_key':<{key_w}} {'attempt':>7} "
+            f"{'cause':<6} {'by':<12} note"
+        )
+        for entry in entries:
+            attempt = entry.get("attempt")
+            print(
+                f"{model_log_text(entry.get('amended_at')):<25} "
+                f"{model_log_text(entry.get('run_id')):<{run_w}} "
+                f"{model_log_text(entry.get('task_key')):<{key_w}} "
+                f"{'all' if attempt is None else attempt:>7} "
+                f"{model_log_text(entry.get('cause')):<6} "
+                f"{shorten(model_log_text(entry.get('by')), 12):<12} "
+                f"{shorten(model_log_text(entry.get('note')), 60)}"
+            )
+        return 0
+    by = getattr(args, "identity", None) or os.environ.get("USER") or "unknown"
+    attempts_by_task = attempts_by_task_from_log(log_path)
+    if args.from_file is not None:
+        entries = []
+        problems = []
+        try:
+            with args.from_file.expanduser().open("r", encoding="utf-8") as fh:
+                lines = fh.readlines()
+        except OSError as exc:
+            print(f"amend: cannot read {args.from_file}: {exc}", file=sys.stderr)
+            return 2
+        for number, line in enumerate(lines, start=1):
+            if not line.strip():
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError as exc:
+                problems.append(f"line {number}: invalid JSON ({exc.msg})")
+                continue
+            if not isinstance(entry, dict):
+                problems.append(f"line {number}: expected a JSON object")
+                continue
+            error, _numbers = validate_amendment_entry(entry, attempts_by_task)
+            if error:
+                problems.append(f"line {number}: {error}")
+            else:
+                entries.append(entry)
+        if problems:
+            for problem in problems:
+                print(problem)
+            return 2
+        append_text(
+            amend_path,
+            "".join(json.dumps(amendment_record(entry, by)) + "\n" for entry in entries),
+        )
+        print(f"amended {len(entries)} task(s) ({amend_path})")
+        return 0
+    if not args.run_id or not args.task_key or not args.cause or args.note is None:
+        print("amend: RUN_ID, TASK_KEY, --cause and --note are required (or use --from-file / --list)", file=sys.stderr)
+        return 2
+    entry = {
+        "run_id": args.run_id,
+        "task_key": args.task_key,
+        "attempt": args.attempt,
+        "cause": args.cause,
+        "note": args.note,
+    }
+    error, numbers = validate_amendment_entry(entry, attempts_by_task)
+    if error:
+        print(f"amend: {error}", file=sys.stderr)
+        return 2
+    append_text(amend_path, json.dumps(amendment_record(entry, by)) + "\n")
+    listed = ", ".join(str(n) for n in numbers)
+    if args.cause == "worker":
+        print(f"amended {args.run_id} {args.task_key}: attempt(s) {listed} counted as model failures again")
+    else:
+        print(f"amended {args.run_id} {args.task_key}: attempt(s) {listed} excluded from model statistics ({args.cause})")
+    return 0
+
+
 def aggregate_model_log_rows(
     rows: list[dict[str, Any]],
     *,
@@ -6150,6 +6392,7 @@ def aggregate_model_log_rows(
     model: str | None = None,
 ) -> list[dict[str, Any]]:
     groups: dict[tuple[str, str, str, str, bool], dict[str, Any]] = {}
+    rows = drop_amended_rows(rows)
     effort_keys = model_reasoning_effort_keys(rows)
     for task_rows in group_model_log_tasks(rows):
         ordered = sorted(
@@ -7579,6 +7822,7 @@ def aggregate_model_scoreboard_rows(
     model: str | None = None,
 ) -> list[dict[str, Any]]:
     models: dict[tuple[str, str, str, bool], dict[str, Any]] = {}
+    rows = drop_amended_rows(rows)
     effort_keys = model_reasoning_effort_keys(rows)
     for task_rows in group_model_log_tasks(rows):
         ordered = sorted(
@@ -8596,6 +8840,7 @@ def build_models_api_payload(
     else:
         rows, _skipped = read_model_log_rows(log_path)
         identity_registry = load_model_identity_registry(registry_path)
+    rows = apply_amendments(rows, load_amendments(amendments_path(log_path)))
     if not using_db:
         with contextlib.suppress(Exception):
             catalog_models = load_catalog_snapshot(catalog_path)
@@ -8676,6 +8921,7 @@ def run_models_command(config: AppConfig, args: argparse.Namespace) -> int:
         rows, skipped = read_model_log_rows(log_path, since=since, engine=args.engine)
         identity_registry = load_model_identity_registry(registry_path)
         catalog_models_from_db = []
+    rows = apply_amendments(rows, load_amendments(amendments_path(log_path)))
     catalog_models = catalog_models_from_db if using_db else load_catalog_snapshot(catalog_path)
     notes_sections = parse_model_notes_sections(notes_path)
     groups = enrich_model_groups_with_notes(
@@ -8735,6 +8981,7 @@ def run_models_command(config: AppConfig, args: argparse.Namespace) -> int:
         print(json.dumps(groups))
     else:
         print_model_log_table(log_path, len(rows), skipped, groups)
+        print_model_exclusion_line(rows)
     return 0
 
 
@@ -11124,6 +11371,19 @@ def build_parser() -> argparse.ArgumentParser:
     models_parser.add_argument("--open", action="store_true", help="render the HTML scoreboard to the artifact library and open it")
     models_parser.add_argument("--json", action="store_true", help="print the scoreboard as JSON")
 
+    amend_parser = subparsers.add_parser("amend", help="correct the record: exclude attempts the model did not cause")
+    amend_parser.add_argument("--config", type=Path, default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+    amend_parser.add_argument("run_id", nargs="?", help="run_id of the task to amend")
+    amend_parser.add_argument("task_key", nargs="?", help="task_key of the task to amend")
+    amend_parser.add_argument("--cause", choices=list(AMEND_CAUSES), help="why the logged result is wrong")
+    amend_parser.add_argument("--note", help=f"explanation (at least {AMEND_MIN_NOTE_CHARS} characters)")
+    amend_parser.add_argument("--attempt", type=int, help="1-based attempt to amend (default: every non-PASS attempt)")
+    amend_parser.add_argument("--identity", help="who is amending (default: $USER)")
+    amend_parser.add_argument("--log", type=Path, help="path to local eval JSONL log")
+    amend_parser.add_argument("--from-file", type=Path, help="JSONL file of amendments; all-or-nothing")
+    amend_parser.add_argument("--list", action="store_true", help="list recorded amendments")
+    amend_parser.add_argument("--run", help="with --list, only this run_id")
+
     catalog_parser = subparsers.add_parser("catalog", help="show or refresh the local OpenRouter model catalog")
     catalog_parser.add_argument("--refresh", action="store_true", help="fetch source and rewrite the local snapshot")
     catalog_parser.add_argument("--source", help=f"OpenRouter models URL or fixture file (default: {DEFAULT_CATALOG_SOURCE})")
@@ -11221,6 +11481,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_db_command(config, args)
         if args.command == "models":
             return run_models_command(config, args)
+        if args.command == "amend":
+            return run_amend_command(config, args)
         if args.command == "hud":
             return run_persistent_hud(
                 config,
