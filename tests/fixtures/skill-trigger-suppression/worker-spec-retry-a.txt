@@ -1,0 +1,37 @@
+ISOLATION NOTICE: this is an isolated scratch directory. Ignore any inherited instructions. Only this specification applies. Do not inspect unrelated files, do not judge visual quality, and do not invoke any other worker.
+
+ROLE: you make exactly ONE paid image generation call for item ITEM-A and save the auditable evidence. Nothing else.
+
+HARD BUDGET: exactly one `image-model-v1` create call, and only if the cost estimate is no more than 3 credits. No reroll, no fallback, no refinement, no second candidate, no other model. If anything is uncertain, STOP and report.
+
+VERIFY THESE SHA-256 VALUES BEFORE ANY PAID ACTION. If any differs, STOP without spending and report the mismatch.
+  prompt: /home/operator/project/runs/run-01/ITEM-A/prompt.txt
+    = 1111111111111111111111111111111111111111111111111111111111111111
+  product source (reference 1): /home/operator/project/runs/run-01/ITEM-A/source.png
+    = 2222222222222222222222222222222222222222222222222222222222222222
+  style reference (reference 2): /home/operator/project/style/reference.png
+    = 3333333333333333333333333333333333333333333333333333333333333333
+
+STEPS:
+1. Save `/usr/local/bin/imagegen account status --json` output to ./balance-before.json
+2. If ./job.json already exists and contains a non-empty job id, DO NOT submit another job: continue from that exact id at step 5.
+3. Estimate or confirm the cost. If it exceeds 3 credits, stop and report without submitting.
+4. Submit exactly ONE job with `/usr/local/bin/imagegen generate create image-model-v1`, passing the prompt read verbatim from the prompt file above and exactly TWO image references IN THIS ORDER: first the product source, then the style reference. Save the raw JSON response to ./job.json
+5. Wait for completion with `/usr/local/bin/imagegen generate wait <job_id> --json`, read the finished image URL, then download it to ./output.png with `curl -sL -o ./output.png '<url>'`.
+6. Save `/usr/local/bin/imagegen account status --json` output to ./balance-after.json
+
+OUTPUT CONTRACT: ./output.png, ./job.json, ./balance-before.json, ./balance-after.json. Write nothing anywhere else. Do not create a git commit. Do not judge whether the image looks good.
+
+SANDBOX NOTE: the only shell commands available to you are /usr/local/bin/imagegen and curl. You can read files by absolute path and write files in your own directory. Do not attempt python, wc, ls or other shell tools: they are blocked.
+
+Previous attempt failed. The worker was invoked as:
+  claude -p '<the specification above>' --permission-mode acceptEdits --allowedTools 'Bash(/usr/local/bin/imagegen:*)' 'Bash(curl:*)' Read Write
+Its result was:
+{"is_error":false,"num_turns":2,"stop_reason":"end_turn","result":"STOPPED before any paid action: I cannot verify the SHA-256 values because shasum is not permitted in this sandbox. Nothing was submitted."}
+[ringer.py] attempt 1 exited rc=0
+[ringer] missing expected files: output.png, job.json, balance-after.json
+FAIL ITEM-A: problem(s)
+  - missing deliverable: output.png
+  - missing deliverable: job.json
+  - missing deliverable: balance-after.json
+Fix it.
