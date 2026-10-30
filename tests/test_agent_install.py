@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -23,6 +24,7 @@ class AgentInstallTests(unittest.TestCase):
     def run_cli(self, *args: str, cwd: Path = ROOT) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
         env["HOME"] = str(self.home)
+        env["USERPROFILE"] = str(self.home)
         env["RINGER_HOME"] = str(self.ringer_home)
         return subprocess.run(
             [sys.executable, "ringer.py", *args],
@@ -54,13 +56,20 @@ class AgentInstallTests(unittest.TestCase):
                         handlers.append(handler)
         return handlers
 
-    def test_fresh_install_creates_skill_copy_and_hook_entries(self) -> None:
+    def test_fresh_install_creates_codex_and_claude_skills_plus_claude_hooks(self) -> None:
         result = self.run_cli("install-agent")
         self.assertEqual(0, result.returncode, result.stderr)
 
         skill = self.home / ".claude" / "skills" / "ringer" / "SKILL.md"
         self.assertTrue(skill.exists())
         self.assertEqual((ROOT / ".claude" / "skills" / "ringer" / "SKILL.md").read_text(), skill.read_text())
+        codex_skill = self.home / ".agents" / "skills" / "ringer" / "SKILL.md"
+        self.assertTrue(codex_skill.exists())
+        self.assertEqual(
+            (ROOT / ".agents" / "skills" / "ringer" / "SKILL.md").read_text(),
+            codex_skill.read_text(),
+        )
+        self.assertIn("gpt-5.6-sol", result.stdout)
 
         settings = self.read_settings()
         hooks = settings["hooks"]
@@ -153,21 +162,41 @@ class AgentInstallTests(unittest.TestCase):
         ]
         self.assertEqual(["echo keep-me"], kept)
         self.assertFalse((self.home / ".claude" / "skills" / "ringer").exists())
+        self.assertFalse((self.home / ".agents" / "skills" / "ringer").exists())
+
+    def test_codex_target_does_not_write_claude_settings(self) -> None:
+        install = self.run_cli("install-agent", "--target", "codex")
+        self.assertEqual(0, install.returncode, install.stderr)
+        self.assertTrue((self.home / ".agents" / "skills" / "ringer" / "SKILL.md").exists())
+        self.assertFalse((self.home / ".claude").exists())
+
+        uninstall = self.run_cli("uninstall-agent", "--target", "codex")
+        self.assertEqual(0, uninstall.returncode, uninstall.stderr)
+        self.assertFalse((self.home / ".agents" / "skills" / "ringer").exists())
+        self.assertFalse((self.home / ".claude").exists())
 
     def test_project_variant_writes_under_temp_cwd(self) -> None:
         project = Path(self.tmp.name) / "project"
         project.mkdir()
-        os.symlink(ROOT / "ringer.py", project / "ringer.py")
+        shutil.copy2(ROOT / "ringer.py", project / "ringer.py")
+        shutil.copytree(ROOT / ".claude" / "skills", project / ".claude" / "skills")
+        shutil.copytree(ROOT / ".agents" / "skills", project / ".agents" / "skills")
+        shutil.copytree(ROOT / "hooks", project / "hooks")
 
         install = self.run_cli("install-agent", "--project", cwd=project)
         self.assertEqual(0, install.returncode, install.stderr)
         self.assertTrue((project / ".claude" / "skills" / "ringer" / "SKILL.md").exists())
+        self.assertTrue((project / ".agents" / "skills" / "ringer" / "SKILL.md").exists())
         self.assertTrue((project / ".claude" / "settings.json").exists())
         self.assertFalse((self.home / ".claude").exists())
+        self.assertFalse((self.home / ".agents").exists())
 
         uninstall = self.run_cli("uninstall-agent", "--project", cwd=project)
         self.assertEqual(0, uninstall.returncode, uninstall.stderr)
-        self.assertFalse((project / ".claude" / "skills" / "ringer").exists())
+        # The checked-in source skills are already the project targets. Uninstall
+        # removes generated hooks but must not delete repository source files.
+        self.assertTrue((project / ".claude" / "skills" / "ringer").exists())
+        self.assertTrue((project / ".agents" / "skills" / "ringer").exists())
         settings = self.read_settings(project)
         self.assertEqual([], self.ringer_handlers(settings))
 
