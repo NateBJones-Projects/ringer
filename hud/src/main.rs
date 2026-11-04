@@ -52,6 +52,23 @@ fn hide_window<R: Runtime>(window: WebviewWindow<R>) -> Result<(), String> {
     window.hide().map_err(|err| err.to_string())
 }
 
+/// Local browser HUD address for the shared frontend's models and folder actions.
+#[tauri::command]
+fn hud_server_url() -> String {
+    let port = fs::read_to_string(config_path())
+        .ok()
+        .and_then(|data| data.parse::<toml::Value>().ok())
+        .and_then(|value| {
+            value
+                .get("hud")
+                .and_then(|hud| hud.get("port"))
+                .and_then(|port| port.as_integer())
+        })
+        .filter(|port| (1..=65535).contains(port))
+        .unwrap_or(8700);
+    format!("http://127.0.0.1:{port}")
+}
+
 #[tauri::command]
 fn toggle_collapse<R: Runtime>(
     window: WebviewWindow<R>,
@@ -205,6 +222,7 @@ fn main() {
         .manage(Mutex::new(LayoutState::default()))
         .invoke_handler(tauri::generate_handler![
             hide_window,
+            hud_server_url,
             toggle_collapse,
             resize_main_window,
             read_artifact_library,

@@ -28,7 +28,7 @@ EXCLUDED_AUTHORS = {
     "nate jones",
     "github",
 }
-EXCLUDED_AUTHOR_PREFIXES = ("claude",)
+EXCLUDED_AUTHOR_PREFIXES = ("claude", "cursor")
 EXCLUDED_HANDLES = {
     "justfinethanku",
     "natebjones-projects",

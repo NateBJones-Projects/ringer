@@ -31,7 +31,7 @@ manifest.json ──▶ ringer.py ──▶ N parallel workers (codex exec, each
 
 ## Quickstart
 
-Ringer runs on macOS and Linux (Windows via WSL) and needs Python 3.11+.
+Ringer runs on macOS and Linux (Windows via WSL) and needs Python 3.12+.
 
 1. Install a worker CLI and sign in (Codex is the built-in default engine):
 
@@ -76,8 +76,8 @@ Run your own batch:
   "tasks": [
     {
       "key": "alpha",
-      "spec": "Create alpha.txt containing exactly: alpha ready",
-      "check": "test \"$(cat alpha.txt)\" = \"alpha ready\"",
+      "spec": "Create alpha.txt containing exactly one line: alpha ready\nEnd the file with exactly one newline. Do not add punctuation.",
+      "check": "printf 'alpha ready\\n' | diff -u - alpha.txt || { echo 'FAIL: alpha.txt must contain exactly alpha ready followed by one newline'; exit 1; }",
       "expect_files": ["alpha.txt"]
     }
   ]
@@ -87,6 +87,10 @@ Run your own batch:
 Each task gets its own directory, its own worker, its own log, and its own verdict. `check` is any shell command — exit 0 is the only thing Ringer believes.
 
 > **Write checks that print why they fail.** A silent `exit 1` (the `git diff --quiet` style) costs you twice: the retry prompt gets no failure context to fix against, and the eval log records an undiagnosable row. `diff` beats `diff -q`; an assert with a message beats a bare test.
+
+> **A check cannot demand evidence the spec never supplied.** Before failing a worker for missing evidence or input, re-read the task inputs. If the spec didn't provide a value, the check must not invent one and fail on its absence — an honest UNVERIFIABLE answer is not a failure. Reserve hard failure for what the spec actually asserted.
+
+> **Executed checks catch laziness, not subtle wrongness.** A check that *runs* the artifact catches a plausible-but-wrong change far less often than it catches a missing one. Whenever a swarm touches a dogfood artifact (Ringer's own docs, config, or checks), add an "our own artifact passes our own validator" test so the checker exercises what it preaches. And keep orchestrator patch review mandatory regardless of PASS status — a green check is not proof of semantic correctness.
 
 **Identity**: runs are stamped with an orchestrator identity (shown in Ringside and eval rows). Resolution order: `--identity` > `FLEET_IDENTITY`/`RINGER_IDENTITY` env > a `.fleet-agent` file found walking up from the working directory (drop one in a repo root to give that repo's swarms their own name) > `identity_default` in config > short hostname.
 
@@ -102,6 +106,8 @@ Each task gets its own directory, its own worker, its own log, and its own verdi
 | `model` | Which model a harness engine runs for this task — fills the engine's `{model}` placeholder (e.g. `"openrouter/moonshotai/kimi-k2.7"`); empty uses the engine's `model_default` |
 | `task_type` | Optional free-form string naming the kind of work this task is, so the model-performance log can slice pass rates by task shape rather than only by model. Suggested vocabulary: `code-feature`, `code-fix`, `code-review`, `test-hardening`, `docs`, `research`, `persona-review`, `copywriting`, `site-build`, `motion-design`, `image-gen`, `data-pipeline`, `format-conversion`, `probe`, `bakeoff`. Empty is allowed; the log just reports it under `(none)`. |
 | `timeout_s` | Per-task kill timer (default 900) |
+| `max_attempts` | How many times this task may run (default 2 — one try plus one retry with the check's failure output injected). Set `1` for a hard no-retry lane |
+| `redact_spec` | Replace this task's spec with `[redacted request packet]` in the run state, the logged command line, and the eval row, for specs carrying sensitive material. Redacts Ringer's own records only — captured worker output is never rewritten (invariant), so a worker that echoes its request still puts that text in `worker.log` |
 | `engine_args` | Extra CLI flags for this task's worker, spliced in at the engine's `{engine_args}` placeholder — e.g. `["-c", "model_reasoning_effort=low"]` so the orchestrator picks reasoning depth per task |
 | `verified` | One plain-English sentence saying what the check proves — shown on the results page next to "finished & checked" |
 | `full_access` | Worker runs unsandboxed — required for workers that spawn their own sub-workers; must also be enabled in config |
@@ -110,6 +116,39 @@ Each task gets its own directory, its own worker, its own log, and its own verdi
 > **Worktree footgun:** on PASS the task's worktree is removed — including anything written inside it. In worktrees mode, worker logs live outside task worktrees in `workdir/logs/`; have workers write deliverables outside the worktree too, or have your `check` copy artifacts out before it exits 0.
 
 Not sure what your tasks even are yet? [`docs/interview-prompt.md`](docs/interview-prompt.md) is a prompt you paste into any chatbot; it interviews you about the job and hands back a brief your orchestrating agent can turn into a manifest. Ready-made skeletons for the patterns that work live in [`templates/`](templates/).
+
+## `ask` — one bounded question, one clean worker
+
+Not every question deserves a manifest. When you want a read-only answer over
+source you can already point at, `ask` selects the passages that match the
+request, caps the packet, and runs a single worker on it:
+
+```bash
+./ringer.py ask "Why did the Wednesday release slip?" --source notes/status.md
+./ringer.py ask "..." --source src/ --source docs/ --dry-run   # show the packet, spend nothing
+```
+
+Repeat `--source` for more files or directories. `--state` takes a small file
+of settled decisions and is preferred over ordinary sources when the packet is
+tight. `--max-packet-bytes` sets the budget (default 16,000). `--dry-run`
+prints the selection report and stops before any model call. `--redact` keeps
+the request out of the run state and eval row. The run appears on Ringside and
+in the artifact library like any other.
+
+If everything that matches is too big for the packet, `ask` says so — naming the
+budget you'd need — and stops **before** calling a model. It never sends an
+empty packet. A source small enough to fit whole is included whole, whether or
+not it looks relevant, so pointing `ask` at unrelated material still costs one
+call: the packet is only as good as the sources you name.
+
+Directory scans stay inside the tree you named. A symlink pointing out of it, or
+one resolving to a sensitive filename, is skipped and reported. A file you name
+explicitly is always read — naming it is consent.
+
+> `ask` verifies only that an answer was produced and is non-empty. There is
+> nothing to execute against free-form prose, so this is the one lane in Ringer
+> where the check does not prove the result is right. Read the answer. Anything
+> whose output a check could actually execute belongs in a manifest.
 
 ## Lint
 
@@ -233,11 +272,15 @@ Ringside is a local web page — no install, no account, nothing leaves your mac
 ./ringer.py hud                 # or open it any time → http://127.0.0.1:8700
 ```
 
-The top of the page is the run's live results document: what the job is, a progress bar of rounds, and "The work" — every deliverable each worker filed, with a plain-English line saying what the check proved and the raw check output one click away. Below it, the agents: expand a worker to see the exact brief it was handed, which engine and model are typing, and its live work stream. Past runs stay in a versioned library, and a swarm whose orchestrator *died* without finishing gets its own unmissable state — the failure mode every dashboard forgets.
+`./ringer.py hud` reuses an open Ringside tab when it has pinged the server within the last 15 seconds. Use `./ringer.py hud --force-open` to open a new tab anyway, or set `reuse_open_tab = false` under `[hud]` in your config to always open one.
+
+**Live runs** shows every swarm, its progress, and a searchable task table. Select a task to inspect its brief, model, harness, attempts, last executed check and raw worker log. A failed check stays visible while its task retries; stopped workers are marked explicitly. **Outputs** keeps each run's result and saved versions together, with a live preview and access to its folder. **Models** shows first-try pass rates alongside task/attempt counts, task-type filtering and a low-sample warning. Expand all signals for the full scoreboard and judgment notes. Compact view keeps live runs and runs needing attention in a small window.
 
 Multiple swarms at once is the designed-for case: run three batches under three identities and Ringside shows all three, live. `--browser` opens a simpler per-run fallback dashboard, and `--no-dashboard` runs headless.
 
-A native desktop build (Tauri, under `hud/`) exists as a v0.1.1 prototype; the web dashboard is currently ahead of it — start there.
+A native desktop build (Tauri, under `hud/`) exists as a v0.1.1 prototype. It shares `dashboard/ringside.html`, `ringside.css` and `ringside.js` with the browser, plus the native transport in `hud/frontend/hud.js`. The browser remains the primary interface. Native Models and folder actions need the local `ringer.py hud` server; runs and artifact reads also have native transports. Build assets under `hud/dist/` are generated by `hud/scripts/sync-dist.sh`, never edited directly. The older `dashboard/dashboard.html` remains the per-run `--browser` fallback.
+
+The visual direction is recorded in [the Ringside Figma design](https://www.figma.com/design/iG6yecFGAcwTH4rUos3Juk?node-id=5-2). Verification and a disposable preview fixture are documented in [tests/TESTING.md](tests/TESTING.md).
 
 ## Self-update
 
@@ -353,20 +396,22 @@ Four rules are baked into every worker invocation. They all cost us real debuggi
 
 Every community PR that lands in main is credited here — that's a project rule, enforced by a test. Thank you:
 
+- [@Fiddlehead-MB](https://github.com/Fiddlehead-MB) (Melinda Byerley) — exact-byte demo checks, explicit newline instructions, and regression coverage (#101)
 - [@oceanonline](https://github.com/oceanonline) — portable `python3` in template checks + lint quickstart path fix (#24)
 - [@davekopecek](https://github.com/davekopecek) (Dave Kopecek) — committed the design-reference fixture so the design-token guard runs on every machine (#30)
 - [@snapsynapse](https://github.com/snapsynapse) (Sam Rogers) — graceful shutdown on SIGINT/SIGTERM with worker-tree cleanup and finished state, plus the 14-test end-to-end CLI regression suite (#4)
-- [@mlava](https://github.com/mlava) (Mark Lavercombe) — named setup failures across every diagnostic surface (#37) and `run --baseline`, the no-workers check preflight (#38)
+- [@mlava](https://github.com/mlava) (Mark Lavercombe) — named setup failures across every diagnostic surface (#37), `run --baseline`, the no-workers check preflight (#38), guidance on check-writing failure modes (#57), early warnings for missing worker commands (#59), and preserving fix-swarm patches across retries (#56)
 
 Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the philosophy and what gets a PR merged fast. The short version: small and scoped, rebased on current main, every claim backed by an executed test. Authorship is always preserved — where a maintainer pushes a mechanical fix to your branch, you remain the commit author.
 
 ## License
 
-[PolyForm Shield 1.0.0](LICENSE.md) — free to use, modify, and share, including inside your own commercial work. The one thing you can't do is offer Ringer or Ringside (or a derivative that competes with them) as a product or service of your own. Commercial rights to the tool itself belong to Nate Jones Media LLC.
+[PolyForm Shield 1.0.0](LICENSE.md) — free to use, modify, and share, including inside your own commercial work. The one thing you can't do is offer Ringer or Ringside (or a derivative that competes with them) as a product or service of your own. Commercial rights to the tool itself belong to Nate B Jones Media LLC.
 
 ## Requirements
 
-- Python 3.11+ (stdlib only; `psycopg` needed only for the optional Postgres eval backend)
+- Python 3.12+ (stdlib only; `psycopg` needed only for the optional Postgres eval backend)
+  - **Changed:** the supported floor moved from 3.11 to 3.12. CI has only ever run 3.12, so 3.11 was a promise nothing enforced — the honest fix is to state the version we actually test. Today's code still happens to run on 3.11; that is no longer guaranteed, and 3.11 breakage won't be treated as a bug.
 - At least one agent CLI (Codex works out of the box)
 - Rust toolchain, only if you're building Ringside from source
 
