@@ -362,22 +362,28 @@
         : {};
     return Object.entries(entries)
       .filter(([, v]) => v && typeof v === "object")
-      .map(([name, a]) => ({
-        ...a,
-        name,
-        versions: (Array.isArray(a.versions) ? a.versions : [])
+      .map(([name, a]) => {
+        const versions = (Array.isArray(a.versions) ? a.versions : [])
           .map((v, i) => ({ ...v, key: String(v.path || v.run_id || i) }))
           .sort(
             (a, b) =>
               (Date.parse(b.finished_at) || 0) -
               (Date.parse(a.finished_at) || 0),
-          ),
-      }))
-      .sort(
-        (a, b) =>
-          (a.state === "live" ? 0 : 1) - (b.state === "live" ? 0 : 1) ||
-          a.name.localeCompare(b.name),
-      );
+          );
+        const updatedTs =
+          Date.parse(a.updated_at) || Date.parse(versions[0]?.finished_at) || 0;
+        return { ...a, name, versions, updatedTs };
+      })
+      .sort((a, b) => {
+        const aLive = a.state === "live";
+        const bLive = b.state === "live";
+        if (aLive !== bLive) return aLive ? -1 : 1;
+        // Live outputs stay name-ordered so polling never reorders their rows;
+        // everything else is newest first, with name as the stable tiebreak.
+        if (!aLive && b.updatedTs !== a.updatedTs)
+          return b.updatedTs - a.updatedTs;
+        return a.name.localeCompare(b.name);
+      });
   }
   const artifact = () =>
     state.artifacts.find((a) => a.name === state.artifactName);
