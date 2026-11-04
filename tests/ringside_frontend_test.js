@@ -207,6 +207,16 @@ const data = {
   },
   "/api/library": {
     artifacts: {
+      // Non-live outputs sort newest first; live outputs lead, name-ordered.
+      Alpha: { state: "pass", updated_at: "2026-01-01T00:00:00Z" },
+      Undated: { state: "pass" },
+      Zulu: {
+        state: "fail",
+        versions: [{ path: "/tmp/z.html", finished_at: "2026-03-01T00:00:00Z" }],
+      },
+      Beta: { state: "pass", updated_at: "2026-02-01T00:00:00Z" },
+      Aardvark: { state: "pass", updated_at: "2026-02-01T00:00:00Z" },
+      Zebra: { state: "live", updated_at: "2026-01-01T00:00:00Z" },
       Release: {
         current_run_id: "release",
         live_path: "/tmp/artifacts/live/Release.html",
@@ -258,6 +268,13 @@ const data = {
   env.click({ run: "dead" });
   assert.match(env.el("task-table").innerHTML, /Stopped/);
   assert.doesNotMatch(env.el("task-table").innerHTML, />Working</);
+  env.click({ view: "outputs" });
+  assert.deepEqual(
+    [...env.el("output-items").innerHTML.matchAll(/data-output="([^"]+)"/g)].map(
+      (m) => m[1],
+    ),
+    ["Release", "Zebra", "Zulu", "Aardvark", "Beta", "Alpha", "Undated"],
+  );
   env.click({ output: "Release" });
   env.change("artifact-version", "/tmp/artifacts/versions/release-v1.html");
   await settle();
