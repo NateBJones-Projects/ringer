@@ -22,6 +22,11 @@ dashboard_port_base = 8787
 # still fail unless this is true.
 allow_full_access = false
 
+[hud]
+port = 8700
+# Reuse an open Ringside tab instead of opening another; --force-open overrides this.
+reuse_open_tab = true
+
 [update]
 # Check origin/main before command dispatch and let a long-running HUD check
 # again on this interval. Updates apply only as a clean ff-only move on main.

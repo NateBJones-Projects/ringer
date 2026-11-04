@@ -1,0 +1,32 @@
+{
+  "claims": [
+    {
+      "claim_id": "claim-01",
+      "status": "supported",
+      "source": "travel-policy.md",
+      "quote": "All flights must be booked in premium economy through the approved travel portal.",
+      "explanation": "This invented quotation does not appear in the cited source."
+    },
+    {
+      "claim_id": "claim-02",
+      "status": "supported",
+      "source": "expense-handbook.md",
+      "quote": "An itemized receipt is required for any single travel expense of $75 or more.",
+      "explanation": "The named source file does not exist."
+    },
+    {
+      "claim_id": "claim-03",
+      "status": "not-found",
+      "source": null,
+      "quote": null,
+      "explanation": "This status is outside the allowed set."
+    },
+    {
+      "claim_id": "claim-04",
+      "status": "unclear",
+      "source": "security-note.md",
+      "quote": "Report a lost or stolen device to the service desk promptly.",
+      "explanation": "The source does not establish a one-hour deadline."
+    }
+  ]
+}

@@ -1,0 +1,2 @@
+case_type,exact_model_id,lab,harness,provider_or_plan,ringer_commit,first_try_acceptance,acceptance_after_retry,human_repair_minutes,total_duration,reported_tokens,provider_charge,tool_and_infrastructure_cost,failure_type
+research,example/model-id,Example Lab,opencode,example provider or plan,<RINGER-COMMIT>,yes,yes,3,00:06:42,18250,0.21,0.00,none

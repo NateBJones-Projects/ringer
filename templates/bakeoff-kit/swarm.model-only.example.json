@@ -1,0 +1,41 @@
+{
+  "run_name": "chinese-model-research-bakeoff",
+  "workdir": "/tmp/chinese-model-research-bakeoff-2026-07-25-01",
+  "max_parallel": 1,
+  "tasks": [
+    {
+      "key": "frontier--claims-01",
+      "spec": "Read the requested claims in /ABSOLUTE/PATH/TO/ringer-bakeoff-kit/source-packet/claims.json and only the Markdown files in /ABSOLUTE/PATH/TO/ringer-bakeoff-kit/source-packet/sources. Classify every requested claim exactly once as supported, unsupported, or unclear. Write result.json in the current task directory as a JSON object with a claims array. Every row must contain claim_id, status, source, quote, and explanation. For supported claims, source must name an allowed source file and quote must reproduce an exact supporting passage. For unsupported claims, set source and quote to null. For unclear claims, explain exactly what the sources do not establish; if you cite evidence, provide both the allowed source filename and an exact passage. Do not use outside knowledge or network access. Do not modify the source packet or validator.",
+      "check": "python3 '/ABSOLUTE/PATH/TO/ringer-bakeoff-kit/check_result.py' result.json --claims '/ABSOLUTE/PATH/TO/ringer-bakeoff-kit/source-packet/claims.json' --sources '/ABSOLUTE/PATH/TO/ringer-bakeoff-kit/source-packet/sources'",
+      "expect_files": [
+        "result.json"
+      ],
+      "engine": "opencode",
+      "model": "openrouter/<CURRENT-FRONTIER-MODEL-ID>",
+      "engine_args": [
+        "--variant",
+        "high"
+      ],
+      "task_type": "research",
+      "timeout_s": 900,
+      "verified": "the result includes each requested claim exactly once, uses the required fields and statuses, and any included citations match files in the allowed source directory"
+    },
+    {
+      "key": "candidate--claims-01",
+      "spec": "Read the requested claims in /ABSOLUTE/PATH/TO/ringer-bakeoff-kit/source-packet/claims.json and only the Markdown files in /ABSOLUTE/PATH/TO/ringer-bakeoff-kit/source-packet/sources. Classify every requested claim exactly once as supported, unsupported, or unclear. Write result.json in the current task directory as a JSON object with a claims array. Every row must contain claim_id, status, source, quote, and explanation. For supported claims, source must name an allowed source file and quote must reproduce an exact supporting passage. For unsupported claims, set source and quote to null. For unclear claims, explain exactly what the sources do not establish; if you cite evidence, provide both the allowed source filename and an exact passage. Do not use outside knowledge or network access. Do not modify the source packet or validator.",
+      "check": "python3 '/ABSOLUTE/PATH/TO/ringer-bakeoff-kit/check_result.py' result.json --claims '/ABSOLUTE/PATH/TO/ringer-bakeoff-kit/source-packet/claims.json' --sources '/ABSOLUTE/PATH/TO/ringer-bakeoff-kit/source-packet/sources'",
+      "expect_files": [
+        "result.json"
+      ],
+      "engine": "opencode",
+      "model": "openrouter/<CURRENT-QWEN-MODEL-ID>",
+      "engine_args": [
+        "--variant",
+        "high"
+      ],
+      "task_type": "research",
+      "timeout_s": 900,
+      "verified": "the result includes each requested claim exactly once, uses the required fields and statuses, and any included citations match files in the allowed source directory"
+    }
+  ]
+}
