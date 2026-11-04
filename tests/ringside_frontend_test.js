@@ -179,6 +179,17 @@ const models = {
       tasks: 2,
       attempts: 2,
       first_try_pass_rate: 1,
+      invalidated_rows: 7,
+    },
+    {
+      model_display: "Model C",
+      harness: "Codex",
+      tasks: 0,
+      attempts: 0,
+      first_try_pass_rate: 0,
+      invalidated_rows: 37,
+      invalidated_only: true,
+      tier: "unranked",
     },
   ],
   groups: [
@@ -251,6 +262,12 @@ const data = {
   assert.match(
     env.el("model-signal-rows").innerHTML,
     /Fresh note &lt;b&gt;escaped&lt;\/b&gt;/,
+  );
+  // Invalidated rows are visible in the signals table but never ranked.
+  assert.match(env.el("model-signal-rows").innerHTML, /<td>7<\/td>/);
+  assert.match(
+    env.el("model-signal-rows").innerHTML,
+    /Model C.*all evidence invalidated.*<td>Not ranked<\/td><td>0<\/td><td>37<\/td>/,
   );
   env.change("task-type", "research");
   assert.match(env.el("model-rows").innerHTML, /33%/);

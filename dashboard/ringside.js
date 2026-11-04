@@ -578,12 +578,13 @@
           (r) => r.task_type === state.taskType,
         )
       : state.models?.rollup || [];
-    // Keep the API's evidence-based routing order and quarantine misrouted data.
+    // Keep the API's evidence-based routing order and quarantine unranked data.
+    const unranked = (r) =>
+      Boolean(r.misrouted || r.unattributed || r.invalidated_only);
     const sorted = state.taskType
       ? [...rows].sort(
           (a, b) =>
-            num(Boolean(a.misrouted || a.unattributed)) -
-              num(Boolean(b.misrouted || b.unattributed)) ||
+            num(unranked(a)) - num(unranked(b)) ||
             num(b.first_try_pass_rate) - num(a.first_try_pass_rate) ||
             num(b.tasks) - num(a.tasks),
         )
@@ -606,7 +607,7 @@
     );
     $("task-type").value = state.taskType;
     const modelName = (r) =>
-      `${esc(r.model_display || r.model || "Unknown")}${num(r.tasks) < 5 ? '<span class="meta retry">Low sample</span>' : ""}${r.misrouted || r.unattributed ? '<span class="meta retry">Not ranked · quarantined data</span>' : r.unregistered ? '<span class="meta retry">Unregistered</span>' : ""}`;
+      `${esc(r.model_display || r.model || "Unknown")}${num(r.tasks) < 5 ? '<span class="meta retry">Low sample</span>' : ""}${r.invalidated_only ? '<span class="meta retry">Not ranked · all evidence invalidated</span>' : r.misrouted || r.unattributed ? '<span class="meta retry">Not ranked · quarantined data</span>' : r.unregistered ? '<span class="meta retry">Unregistered</span>' : ""}`;
     const speed = (r) =>
       r.median_duration_ms == null
         ? "—"
@@ -626,7 +627,7 @@
       sorted
         .map(
           (r) =>
-            `<tr><td>${modelName(r)}</td><td>${esc(r.lab || "Unknown")}</td><td>${esc(r.harness || r.engine || "Unknown")}</td><td>${esc(r.access || "Unknown")}</td><td>${r.misrouted || r.unattributed ? "Not ranked" : esc(r.tier || "Unranked")}</td><td>${num(r.tasks)}</td><td>${Math.round(num(r.first_try_pass_rate) * 100)}%</td><td>${Math.round(num(r.pass_rate) * 100)}%</td><td>${r.median_tokens == null ? "—" : num(r.median_tokens).toLocaleString()}</td><td>${speed(r)}</td><td>${esc(age(r.last_seen))}</td><td class="judgment-notes">${esc(r.latest_note || (r.notes || []).join("\n"))}</td></tr>`,
+            `<tr><td>${modelName(r)}</td><td>${esc(r.lab || "Unknown")}</td><td>${esc(r.harness || r.engine || "Unknown")}</td><td>${esc(r.access || "Unknown")}</td><td>${unranked(r) ? "Not ranked" : esc(r.tier || "Unranked")}</td><td>${num(r.tasks)}</td><td>${num(r.invalidated_rows).toLocaleString()}</td><td>${Math.round(num(r.first_try_pass_rate) * 100)}%</td><td>${Math.round(num(r.pass_rate) * 100)}%</td><td>${r.median_tokens == null ? "—" : num(r.median_tokens).toLocaleString()}</td><td>${speed(r)}</td><td>${esc(age(r.last_seen))}</td><td class="judgment-notes">${esc(r.latest_note || (r.notes || []).join("\n"))}</td></tr>`,
         )
         .join(""),
     );

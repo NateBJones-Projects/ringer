@@ -236,6 +236,9 @@ class ModelInvalidationTests(unittest.TestCase):
         api_by_model = {row["model"]: row for row in payload["rollup"]}
         self.assertEqual(1, api_by_model["openrouter/acme/live"]["invalidated_rows"])
         self.assertEqual(0, api_by_model["openrouter/acme/invalid-only"]["attempts"])
+        # Ringside quarantines on this flag; the API must carry it through.
+        self.assertTrue(api_by_model["openrouter/acme/invalid-only"]["invalidated_only"])
+        self.assertEqual("unranked", api_by_model["openrouter/acme/invalid-only"]["tier"])
 
         with contextlib.redirect_stdout(io.StringIO()) as out:
             self.assertEqual(0, run_models_command(self.config, self.model_args(json=True)))
