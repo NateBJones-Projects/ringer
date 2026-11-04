@@ -1,0 +1,25 @@
+#!/bin/sh
+
+launcher=$0
+case $launcher in
+    */*) launcher_dir=${launcher%/*} ;;
+    *) launcher_dir=. ;;
+esac
+
+script_dir=$(CDPATH= cd "$launcher_dir" 2>/dev/null && pwd -P)
+if [ -z "$script_dir" ]; then
+    printf '%s\n' "ringer: cannot resolve launcher directory" >&2
+    exit 1
+fi
+
+ringer_py=$script_dir/ringer.py
+
+for candidate in python3.13 python3.12 python3.11 python3; do
+    command -v "$candidate" >/dev/null 2>&1 || continue
+    if "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' >/dev/null 2>&1; then
+        exec "$candidate" "$ringer_py" "$@"
+    fi
+done
+
+printf '%s\n' "ringer: Python 3.11+ is required; install Python 3.11 or newer and ensure python3.11, python3.12, python3.13, or python3 is on PATH." >&2
+exit 1
