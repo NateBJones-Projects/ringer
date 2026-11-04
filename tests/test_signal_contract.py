@@ -187,8 +187,8 @@ source = "fixture"
         self.assertEqual(sorted(positions), positions)
 
         ringside = ringer.read_ringside_html()
-        ringside_header = ringside[ringside.index("'<th>Model") :]
-        ringside_header = ringside_header[: ringside_header.index("</tr></thead>")]
+        ringside_header = ringside[ringside.index('id="model-signals"') :]
+        ringside_header = ringside_header[: ringside_header.index("</thead>")]
         positions = [ringside_header.index(f">{column}<") for column in MODEL_SCOREBOARD_COLUMNS]
         self.assertEqual(sorted(positions), positions)
         self.assertEqual(list(MODEL_SCOREBOARD_COLUMNS), self.payload()["columns"])

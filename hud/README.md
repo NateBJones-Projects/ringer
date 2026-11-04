@@ -10,7 +10,7 @@ cargo tauri build                  # bundle lands in target/release/bundle/
 cargo tauri dev                    # live-reload dev mode
 ```
 
-The frontend is synced from the repo's shared `dashboard/dashboard.html` plus `frontend/hud.js` by `scripts/sync-dist.sh`, which runs automatically before every build. Edit those sources, never `dist/`.
+The frontend is shared with the browser: `dashboard/ringside.html`, `dashboard/ringside.css`, `dashboard/ringside.js`, and `dashboard/assets/`, plus the native transport in `frontend/hud.js`. Both `scripts/sync-dist.sh` and `build.rs` copy these sources before embedding them. Edit the sources, never `dist/`. Native Models and Open folder use the local browser HUD; keep `ringer.py hud` running for those actions.
 
 ## Behavior
 

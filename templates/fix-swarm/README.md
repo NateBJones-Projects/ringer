@@ -29,9 +29,9 @@ Use it after the orchestrator has already decided what should be fixed. It is a 
 
 ## Checks
 
-The manifest invokes `checks/fix-swarm.py`. The validator runs the filled build/test command, validates `fix-summary.md`, stages the worktree, rejects patches that touch files outside the ownership list, and writes a non-empty patch plus summary into the run workdir.
+The manifest invokes `checks/fix-swarm.py`. The validator runs the filled build/test command, validates `fix-summary.md`, stages the worktree, rejects patches that touch files outside the ownership list, and writes a non-empty patch plus summary into the run workdir. For compatibility it updates the canonical `<key>.patch` path on each invocation. It also writes a sibling attempt archive, such as `<key>.attempt1.patch` or `<key>.attempt2.patch`, so retries do not destroy earlier patch output.
 
-`expect_files` is intentionally empty because worktrees mode deletes passing task worktrees. The durable deliverables are check-produced files at the filled patch and summary paths in `WORKDIR`; review those before applying anything.
+`expect_files` is intentionally empty because worktrees mode deletes passing task worktrees. The durable deliverables are check-produced files at the filled patch and summary paths in `WORKDIR`; review those before applying anything. When a task is retried, inspect the attempt-specific patch archives if you need to compare attempts.
 
 ## Mix with
 
@@ -42,6 +42,7 @@ The manifest invokes `checks/fix-swarm.py`. The validator runs the filled build/
 ## Gotchas
 
 - Worktrees that pass are deleted. Anything not exported by the check is gone.
+- The canonical `<key>.patch` is always the latest validator output. Earlier outputs are preserved as `<key>.attemptN.patch` siblings, with the next number chosen from existing attempt archives.
 - `git add -A` cannot stage ignored build outputs. If a fix must preserve ignored files, extend the validator to copy them outside the worktree.
 - The ownership list is the safety rail. If a fix needs more files, stop and make a new task boundary.
 - Workers do not commit. The orchestrator applies patches after review.
