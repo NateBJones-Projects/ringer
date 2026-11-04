@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<!--
+  Design token reference for tests/test_design_reference.py.
+
+  This is the frozen source of truth for ringer.py's ARTIFACT_BASE_CSS custom
+  properties. test_renderer_tokens_match_design_reference asserts the two stay
+  in sync, so if you change a --token value in ARTIFACT_BASE_CSS, update the
+  matching block here in the same commit.
+-->
+<head>
+<meta charset="utf-8">
+<title>ringer design reference</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --ground: #0b0e14;
+    --surface: #141a26;
+    --ink: #e9eef7;
+    --muted: #8fa0b6;
+    --hairline: rgba(143, 160, 182, .22);
+    --accent: #35d0ff;
+    --pass: #45d17e;
+    --fail: #ff5f6b;
+    --waiting: #6f7c92;
+    --quote-bg: rgba(255, 95, 107, .08);
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      color-scheme: light;
+      --ground: #f2f5f9;
+      --surface: #ffffff;
+      --ink: #17202e;
+      --muted: #5a6a7e;
+      --hairline: rgba(90, 106, 126, .28);
+      --accent: #007fb0;
+      --pass: #178a4c;
+      --fail: #cc3340;
+      --waiting: #7d8ba0;
+      --quote-bg: rgba(204, 51, 64, .07);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --ground: #0b0e14; --surface: #141a26; --ink: #e9eef7; --muted: #8fa0b6;
+    --hairline: rgba(143,160,182,.22); --accent: #35d0ff; --pass: #45d17e;
+    --fail: #ff5f6b; --waiting: #6f7c92; --quote-bg: rgba(255,95,107,.08);
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --ground: #f2f5f9; --surface: #ffffff; --ink: #17202e; --muted: #5a6a7e;
+    --hairline: rgba(90,106,126,.28); --accent: #007fb0; --pass: #178a4c;
+    --fail: #cc3340; --waiting: #7d8ba0; --quote-bg: rgba(204,51,64,.07);
+  }
+</style>
+</head>
+<body></body>
+</html>

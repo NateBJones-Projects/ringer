@@ -1,0 +1,24 @@
+{
+  "claims": [
+    {
+      "id": "claim-01",
+      "claim": "Economy is mandatory for flights under six hours, and those flights have to be reserved through the company's approved booking tool."
+    },
+    {
+      "id": "claim-02",
+      "claim": "Any individual travel expense at or above $75 needs an itemized receipt rather than just the card record."
+    },
+    {
+      "id": "claim-03",
+      "claim": "Travelers receive a daily meal allowance of $85."
+    },
+    {
+      "id": "claim-04",
+      "claim": "A lost or stolen device must be reported within one hour when an employee is outside their home country."
+    },
+    {
+      "id": "claim-05",
+      "claim": "Reaching internal systems while traveling requires both a company-issued device and a second authentication factor."
+    }
+  ]
+}

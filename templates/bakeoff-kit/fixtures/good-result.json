@@ -1,0 +1,39 @@
+{
+  "claims": [
+    {
+      "claim_id": "claim-01",
+      "status": "supported",
+      "source": "travel-policy.md",
+      "quote": "Flights shorter than six hours must be booked in standard economy through the approved travel portal.",
+      "explanation": "The policy states the booking channel, duration threshold, and fare class directly."
+    },
+    {
+      "claim_id": "claim-02",
+      "status": "supported",
+      "source": "travel-policy.md",
+      "quote": "An itemized receipt is required for any single travel expense of $75 or more.",
+      "explanation": "The receipt threshold exactly matches the claim."
+    },
+    {
+      "claim_id": "claim-03",
+      "status": "unsupported",
+      "source": null,
+      "quote": null,
+      "explanation": "Neither allowed source states that travelers receive an $85 daily meal allowance."
+    },
+    {
+      "claim_id": "claim-04",
+      "status": "unclear",
+      "source": "security-note.md",
+      "quote": "Report a lost or stolen device to the service desk promptly. When outside your home country, also notify the regional security contact as soon as practical.",
+      "explanation": "The source requires prompt reporting and an additional international notification, but it does not establish a one-hour deadline."
+    },
+    {
+      "claim_id": "claim-05",
+      "status": "supported",
+      "source": "security-note.md",
+      "quote": "Travelers must use a company-managed device and multi-factor authentication to access internal systems.",
+      "explanation": "The security note states both access requirements directly."
+    }
+  ]
+}

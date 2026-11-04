@@ -456,7 +456,7 @@ class ModelDbTests(unittest.TestCase):
         self.assertEqual("codex", legacy["engine"])
         self.assertTrue(legacy["unattributed"])
         self.assertNotIn("GPT-5.5", json.dumps(payload))
-        self.assertEqual("openrouter/vendor/model", by_model["openrouter/vendor/model"]["model_display"])
+        self.assertEqual("Model", by_model["openrouter/vendor/model"]["model_display"])
         self.assertEqual("OpenCode", by_model["openrouter/vendor/model"]["harness"])
         self.assertEqual("OpenRouter API", by_model["openrouter/vendor/model"]["access"])
         self.assertEqual("vendor?", by_model["openrouter/vendor/model"]["lab"])

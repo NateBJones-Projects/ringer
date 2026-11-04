@@ -12,10 +12,7 @@ sys.path.insert(0, str(ROOT))
 
 from ringer import ARTIFACT_BASE_CSS, ArtifactRenderer, render_final_report_html, render_status_html  # noqa: E402
 
-REFERENCE = Path(
-    "/private/tmp/claude-501/-Users-jonathanedwards-WORKSPACE-20-CLIENTS-NATE-10-ACTIVE-SYSTEMS-ringer-system/"
-    "d4e72b45-c6bd-4928-aaf0-4e3552eb8f04/scratchpad/design-bake/design-reference.html"
-)
+REFERENCE = Path(__file__).resolve().parent / "fixtures" / "design-reference.html"
 
 
 def css_block(css: str, selector: str) -> str:
@@ -51,6 +48,8 @@ class DesignReferenceTests(unittest.TestCase):
         self.renderer = ArtifactRenderer(Path(self.tmp.name) / "artifacts" / "run.html")
 
     def test_renderer_tokens_match_design_reference(self) -> None:
+        # The fixture is committed; a missing file is a broken guard, never a skip.
+        self.assertTrue(REFERENCE.is_file(), f"committed design reference fixture is missing: {REFERENCE}")
         reference_css = REFERENCE.read_text(encoding="utf-8")
 
         expected_dark = token_values(css_block(reference_css, ":root"))
@@ -86,8 +85,8 @@ class DesignReferenceTests(unittest.TestCase):
         self.assertIn('<section class="work"', html)
         self.assertIn('<div class="work-group">', html)
         self.assertIn('<div class="worker">', html)
-        self.assertIn('<span class="state retry">sent back — redoing</span>', html)
-        self.assertIn('<span class="activity" title="Reading section 4">Reading section 4</span>', html)
+        self.assertIn('<span class="retry" aria-label="contract-a: sent back — redoing"></span>', html)
+        self.assertIn('<span class="working" aria-label="contract-b: working"></span>', html)
 
     def test_final_page_uses_static_dot(self) -> None:
         html = render_final_report_html(

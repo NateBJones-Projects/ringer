@@ -14,8 +14,8 @@
       {
         "label": "main",
         "title": "Ringside",
-        "width": 360,
-        "height": 420,
+        "width": 400,
+        "height": 598,
         "minWidth": 280,
         "minHeight": 220,
         "resizable": true,
@@ -28,7 +28,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' data: asset: http://asset.localhost 'unsafe-inline'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self' asset: http://asset.localhost; frame-src 'self' asset: http://asset.localhost http://localhost:* http://127.0.0.1:*",
+      "csp": "default-src 'self' data: asset: http://asset.localhost 'unsafe-inline'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self' asset: http://asset.localhost http://127.0.0.1:*; frame-src 'self' asset: http://asset.localhost http://localhost:* http://127.0.0.1:*",
       "assetProtocol": {
         "enable": true,
         "scope": ["$HOME/.ringer/artifacts/**"]

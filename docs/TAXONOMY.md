@@ -24,6 +24,16 @@ Worked example, because this exact conflation has happened: **"Grok Build" is a 
 
 Access/Plan describes billing and access, such as an OAuth plan or the OpenRouter API. It does not identify the trained model, its lab, or its harness.
 
+## Canonical access routes
+
+A model registry entry may declare `noncanonical_slugs = ["<engine>:<model-slug>", ...]` for known routes that reach the same trained artifact through a harness or access path that is not sanctioned for normal Ringer work. This declaration identifies the artifact; it does not register or approve the alternate route.
+
+Lint must reject a manifest task that resolves to a declared noncanonical engine and slug. `run` must refuse to start it and name the task and canonical route. `--allow-noncanonical-route` is the explicit exception for a deliberate bakeoff. Historical and future log rows from an allowed or previously unguarded noncanonical route remain in the JSONL source of truth. Scoreboards resolve them to the canonical model and lab, retain the actual harness and API/Plan, mark them `misrouted`, and assign no tier or rank.
+
+Grok 4.5 is the worked example: its canonical route is `grok:grok-build`, meaning Grok 4.5 by xAI through the Grok Build CLI on the OAuth plan. `opencode:openrouter/x-ai/grok-4.5` is a noncanonical route to that artifact. A historical row from it displays **Grok 4.5 | xAI | OpenCode | OpenRouter API**, marked `misrouted` and not ranked. It must never become a normal OpenCode registry model entry.
+
+Every primary scoreboard table uses exactly these columns, in this order: **Model | Lab | Harness | API/Plan | Tier | Tasks | First try | Pass | Tokens (median) | Speed (median) | Last used | Notes**. Model contains the registry display name plus the reasoning-effort suffix required below, never a raw slug or slug parenthetical. Unregistered rows derive a readable display name and keep the raw slug only in the diagnostics pointer. Notes is the most recent dated bullet read from `docs/MODEL-NOTES.md` at render time; the other dated bullets may appear in expandable detail. Attempts and failed counts are detail data, not primary columns.
+
 ## Reasoning effort
 
 Reasoning effort is part of model identity when the effective harness invocation sets it. Ringer records only explicit values; it never guesses a harness-side default. If any run for a model records effort, that model's buckets display the recorded value or `(effort unrecorded)` so unlike configurations remain separate. Harnesses and models with no recorded effort remain unsuffixed.
