@@ -3206,9 +3206,48 @@ def active_runs_path() -> Path:
     return ringer_home() / "active-runs.json"
 
 
+def _windows_pid_is_alive(pid: int) -> bool:
+    import ctypes
+    from ctypes import wintypes
+
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    ERROR_ACCESS_DENIED = 5
+    STILL_ACTIVE = 259
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    open_process = kernel32.OpenProcess
+    open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    open_process.restype = wintypes.HANDLE
+    get_exit_code_process = kernel32.GetExitCodeProcess
+    get_exit_code_process.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    get_exit_code_process.restype = wintypes.BOOL
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+    close_handle.restype = wintypes.BOOL
+
+    handle = open_process(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        # Access denied means the process exists but belongs to another user.
+        return ctypes.get_last_error() == ERROR_ACCESS_DENIED
+
+    exit_code = wintypes.DWORD()
+    try:
+        if not get_exit_code_process(handle, ctypes.byref(exit_code)):
+            # The handle is valid, so the process existed. Report it as alive so
+            # that a caller does not prune the record of a live run.
+            return True
+        return exit_code.value == STILL_ACTIVE
+    finally:
+        close_handle(handle)
+
+
 def pid_is_alive(pid: int) -> bool:
     if pid <= 0:
         return False
+    # On Windows, signal 0 is CTRL_C_EVENT. os.kill(pid, 0) then sends a real Ctrl+C
+    # to the console, so Windows uses the Win32 process API instead.
+    if os.name == "nt":
+        return _windows_pid_is_alive(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
