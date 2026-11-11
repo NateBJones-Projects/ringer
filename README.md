@@ -403,6 +403,7 @@ Every community PR that lands in main is credited here — that's a project rule
 - [@mlava](https://github.com/mlava) (Mark Lavercombe) — named setup failures across every diagnostic surface (#37), `run --baseline`, the no-workers check preflight (#38), guidance on check-writing failure modes (#57), early warnings for missing worker commands (#59), and preserving fix-swarm patches across retries (#56)
 - [@blitzmann](https://github.com/blitzmann) (Ryan Holmes) — corrected the license notice to the company's legal name in LICENSE.md and the README (#162)
 - Joshua Pierce — the commit that landed that correction on main
+- [@jeffhamons](https://github.com/jeffhamons) (Jeff Hamons) — restored the contributor audit to green by crediting the contributors it had been failing on (#166)
 
 Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the philosophy and what gets a PR merged fast. The short version: small and scoped, rebased on current main, every claim backed by an executed test. Authorship is always preserved — where a maintainer pushes a mechanical fix to your branch, you remain the commit author.
 
