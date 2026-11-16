@@ -211,6 +211,7 @@ class RingerCliTests(unittest.TestCase):
         rows = self.read_rows()
         self.assertEqual([row["verdict"] for row in rows], ["FAIL", "FAIL"])
         self.assertIn("expected=expected actual=done", rows[0]["notes"])
+        self.assertNotIn("worker_terminated", rows[0]["notes"])
         self.assertIn("Previous attempt failed", rows[1]["spec"])
         self.assertIn("expected=expected actual=done", rows[1]["spec"])
 
@@ -281,7 +282,8 @@ class RingerCliTests(unittest.TestCase):
         rows = self.read_rows()
         self.assertEqual([row["verdict"] for row in rows], ["TIMEOUT", "TIMEOUT"])
         self.assertIn("retry=true", rows[1]["notes"])
-        self.assertIn("worker_returncode=-15", rows[0]["notes"])
+        for row in rows:
+            self.assertIn("worker_terminated=true", row["notes"])
 
     def test_sigterm_cleans_up_active_worker_and_finishes_state(self) -> None:
         manifest = self.write_manifest(

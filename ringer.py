@@ -9328,6 +9328,8 @@ class RingerRunner:
             f"model={stamped_model}",
             f"task_type={runtime.task.task_type}",
         ]
+        if worker.timed_out:
+            notes_parts.append("worker_terminated=true")
         if worker.error:
             notes_parts.append(f"worker_error={worker.error}")
         if verify.missing_files:
