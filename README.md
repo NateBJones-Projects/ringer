@@ -184,9 +184,9 @@ For each task that declares `known_bad`, prove-fail makes a fresh scratch dir (a
 ./ringer.py run swarm.json --prove-fail
 ```
 
-The check FAILING is the good outcome — reported as **proved**, with the check's failure output shown (that output is what a retry prompt would see). A check that PASSES on the known-bad state is **broken**: it cannot be trusted to verify the task. A check that passes while `expect_files` are missing is **inconclusive** — the `known_bad` command must fabricate the deliverables in bad form for the test to mean anything. A `known_bad` command that itself fails or times out is an **error**. Tasks without `known_bad` are **skipped**; coverage is opt-in per task.
+The check FAILING is the good outcome — reported as **proved**, with the check's failure output shown (that output is what a retry prompt would see). A check that PASSES on the known-bad state is **broken**: it cannot be trusted to verify the task. A check that passes while `expect_files` are missing is **inconclusive** — the `known_bad` command must fabricate the deliverables in bad form for the test to mean anything. A `known_bad` command that itself fails or times out is an **error**. A check that times out is also an **error**, never proof: it never completed, so it rejected nothing. Tasks without `known_bad` are **skipped**; coverage is opt-in per task.
 
-The summary reads `prove-fail: P proved, B broken, I inconclusive, E error, S skipped of T task(s).` Exit code is 0 only when broken, inconclusive, and error are all zero — unlike `--baseline` (always 0, judgment left to you), a check that passes on a known-bad state is objectively broken. The two flags cannot be combined in one invocation.
+The summary reads `prove-fail: P proved, B broken, I inconclusive, E error, S skipped, covered N of T task(s).` Exit code is 0 only when at least one task is covered and broken, inconclusive, and error are all zero — unlike `--baseline` (always 0, judgment left to you), a check that passes on a known-bad state is objectively broken. The two flags cannot be combined in one invocation.
 
 ## Make your agent actually use this
 

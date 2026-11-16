@@ -10225,14 +10225,17 @@ async def run_prove_fail(manifest: Manifest, *, config: AppConfig) -> int:
                         "(check passed on a known-bad state)"
                     )
                 elif verify.check_timed_out:
-                    proved += 1
+                    errors += 1
                     print(
-                        f"{task.key:<24} prove-fail: proved "
-                        f"(rc={verify.check_returncode}, timed out)"
+                        f"{task.key:<24} prove-fail: ERROR "
+                        f"(check timed out after {CHECK_TIMEOUT_S}s)"
                     )
                     for line in verify.raw_output_excerpt.strip().splitlines()[:6]:
                         print(f"    {line}")
-                    print("    WARNING: a timeout makes useless retry output.")
+                    print(
+                        "    The check never completed; a timeout is not evidence that "
+                        "it rejected the bad state."
+                    )
                 elif verify.check_returncode == 0:
                     inconclusive += 1
                     print(
@@ -10275,11 +10278,17 @@ async def run_prove_fail(manifest: Manifest, *, config: AppConfig) -> int:
                             print(f"    {line}")
     finally:
         shutil.rmtree(prove_fail_root, ignore_errors=True)
+    covered = total - skipped
     print(
         f"\nprove-fail: {proved} proved, {broken} broken, "
-        f"{inconclusive} inconclusive, {errors} error, {skipped} skipped "
-        f"of {total} task(s)."
+        f"{inconclusive} inconclusive, {errors} error, {skipped} skipped, "
+        f"covered {covered} of {total} task(s)."
     )
+    if covered == 0:
+        print(
+            "prove-fail: this gate proved nothing; every task was skipped because "
+            "no known_bad was declared."
+        )
     if leaked_worktrees:
         print(
             f"WARNING: {len(leaked_worktrees)} prove-fail worktree(s) could not be removed; "
@@ -10289,7 +10298,7 @@ async def run_prove_fail(manifest: Manifest, *, config: AppConfig) -> int:
     # Unlike baseline, there is no judgment to defer: a pass on a known-bad
     # state is objectively broken. Setup errors and inconclusive coverage are
     # also not successful proof.
-    return 0 if broken == inconclusive == errors == 0 else 1
+    return 0 if covered > 0 and broken == inconclusive == errors == 0 else 1
 
 
 def append_text(path: Path, text: str) -> None:
