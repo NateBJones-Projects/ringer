@@ -1128,8 +1128,15 @@
       return `${count} ${count === 1 ? singular : pluralName}`;
     }
 
+    function recordedNumber(value) {
+      if (value === null || value === undefined || value === "") return null;
+      const number = Number(value);
+      return Number.isFinite(number) ? number : null;
+    }
+
     function formatTokens(value) {
-      return `${numberOrZero(value).toLocaleString()} tok`;
+      const number = recordedNumber(value);
+      return number === null ? "—" : `${number.toLocaleString()} tok`;
     }
 
     function fmtElapsed(seconds) {
@@ -1171,7 +1178,7 @@
         const state = run.state || (run.finished ? "finished" : "live");
         const pass = numberOrZero(run.pass ?? summary.pass ?? totals.pass ?? 0);
         const fail = numberOrZero(run.fail ?? summary.fail ?? totals.fail ?? 0);
-        const tokens = numberOrZero(run.tokens ?? summary.tokens ?? totals.tokens ?? 0);
+        const tokens = recordedNumber(run.tokens ?? summary.tokens ?? totals.tokens);
         return {
           ...run,
           state,
@@ -1535,7 +1542,7 @@
     function updateTaskRecord(record, task, run, runRecord) {
       const status = task.status || "queued";
       const tail = taskTailText(task);
-      const tokens = numberOrZero(task.tokens);
+      const tokens = recordedNumber(task.tokens);
       const children = numberOrZero(task.children);
       const name = task.key || "task";
       const title = task.engine ? `${name} / ${task.engine}` : name;

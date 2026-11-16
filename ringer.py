@@ -2300,7 +2300,7 @@ class StateWriter:
         self.pid = os.getpid()
         self.port: int | None = None
         self.finished = False
-        self.summary: dict[str, int] | None = None
+        self.summary: dict[str, int | None] | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.artifact = artifact or ArtifactConfig(
@@ -2423,12 +2423,15 @@ class StateWriter:
             running_count = sum(
                 1 for item in tasks if item["status"] in {"running", "verifying", "retrying"}
             )
+            reported_tokens = [
+                int(item["tokens"]) for item in tasks if item["tokens"] is not None
+            ]
             totals = {
                 "running": running_count,
                 "done": pass_count + fail_count,
                 "pass": pass_count,
                 "fail": fail_count,
-                "tokens": sum(int(item["tokens"] or 0) for item in tasks),
+                "tokens": sum(reported_tokens) if reported_tokens else None,
             }
             return {
                 "run_id": self.run_id,
@@ -2454,12 +2457,15 @@ class StateWriter:
                 "report_ready": self.report_written,
             }
 
-    def build_summary(self) -> dict[str, int]:
+    def build_summary(self) -> dict[str, int | None]:
         with self.lock:
+            reported_tokens = [
+                runtime.tokens for runtime in self.runtimes if runtime.tokens is not None
+            ]
             return {
                 "pass": sum(1 for runtime in self.runtimes if runtime.status == "pass"),
                 "fail": sum(1 for runtime in self.runtimes if runtime.status == "fail"),
-                "tokens": sum(int(runtime.tokens or 0) for runtime in self.runtimes),
+                "tokens": sum(reported_tokens) if reported_tokens else None,
             }
 
     def _write_status_artifact_safe(self, state: dict[str, Any]) -> None:
