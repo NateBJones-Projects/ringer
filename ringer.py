@@ -2895,8 +2895,8 @@ def append_catalog_events(path: Path, events: list[dict[str, Any]]) -> None:
 
 
 @contextlib.contextmanager
-def catalog_refresh_lock(snapshot_path: Path) -> Iterable[None]:
-    lock_path = snapshot_path.with_name(snapshot_path.name + ".lock")
+def exclusive_file_lock(path: Path) -> Iterable[None]:
+    lock_path = path.with_name(path.name + ".lock")
     try:
         import fcntl
     except Exception:
@@ -2919,6 +2919,12 @@ def catalog_refresh_lock(snapshot_path: Path) -> Iterable[None]:
         with contextlib.suppress(Exception):
             fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
         fh.close()
+
+
+@contextlib.contextmanager
+def catalog_refresh_lock(snapshot_path: Path) -> Iterable[None]:
+    with exclusive_file_lock(snapshot_path):
+        yield
 
 
 def refresh_openrouter_catalog(
@@ -3271,7 +3277,12 @@ def read_active_runs() -> dict[str, dict[str, Any]]:
     runs = _read_active_runs_raw(path)
     pruned = _prune_active_runs(runs)
     if pruned != runs:
-        _write_active_runs(pruned)
+        # Reread under the lock so the prune cannot write back a stale copy.
+        with exclusive_file_lock(path):
+            runs = _read_active_runs_raw(path)
+            pruned = _prune_active_runs(runs)
+            if pruned != runs:
+                _write_active_runs(pruned)
     return pruned
 
 
@@ -3284,21 +3295,25 @@ def register_active_run(
     pid: int | None = None,
     started_at: datetime | None = None,
 ) -> None:
-    runs = read_active_runs()
-    runs[run_id] = {
-        "pid": int(pid if pid is not None else os.getpid()),
-        "identity": identity,
-        "run_name": run_name,
-        "workdir": str(workdir),
-        "started_at": (started_at or datetime.now(timezone.utc)).isoformat(),
-    }
-    _write_active_runs(runs)
+    path = active_runs_path()
+    with exclusive_file_lock(path):
+        runs = _read_active_runs_raw(path)
+        runs[run_id] = {
+            "pid": int(pid if pid is not None else os.getpid()),
+            "identity": identity,
+            "run_name": run_name,
+            "workdir": str(workdir),
+            "started_at": (started_at or datetime.now(timezone.utc)).isoformat(),
+        }
+        _write_active_runs(runs)
 
 
 def unregister_active_run(run_id: str) -> None:
-    runs = read_active_runs()
-    runs.pop(run_id, None)
-    _write_active_runs(runs)
+    path = active_runs_path()
+    with exclusive_file_lock(path):
+        runs = _read_active_runs_raw(path)
+        runs.pop(run_id, None)
+        _write_active_runs(runs)
 
 
 def artifacts_dir(state_dir: Path) -> Path:
