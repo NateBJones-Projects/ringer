@@ -101,6 +101,13 @@ display = "GLM 5.2"
 lab = "Z.ai (Zhipu AI)"
 confidence = "verified"
 source = "fixture"
+
+[engines.opencode.models."zai-coding-plan/glm-5.2"]
+display = "GLM 5.2"
+lab = "Z.ai (Zhipu AI)"
+access = "Z.ai Coding Plan"
+confidence = "verified"
+source = "fixture"
 """,
             encoding="utf-8",
         )
@@ -194,6 +201,11 @@ source = "fixture"
         self.assertEqual(("DemoLab", True), (alias.lab, alias.alias))
         self.assertEqual("vendor?", registry.resolve("opencode", "openrouter/vendor/model").lab)
         self.assertEqual("(unverified)", registry.resolve("custom", "model").lab)
+
+    def test_model_access_overrides_engine_access(self) -> None:
+        registry = load_model_identity_registry(self.registry_path)
+        self.assertEqual("Z.ai Coding Plan", registry.resolve("opencode", "zai-coding-plan/glm-5.2").access)
+        self.assertEqual("OpenRouter API", registry.resolve("opencode", "openrouter/z-ai/glm-5.2").access)
 
     def test_attempt_logging_records_explicit_effort_and_null_when_absent(self) -> None:
         log_path = self.root / "attempts.jsonl"

@@ -70,6 +70,8 @@ access = "OpenRouter API"
 # model key = the manifest "model" slug; entries below map slugs to display
 # names. Unlisted slugs are marked unregistered and derive a display name;
 # their complete raw value appears only in scoreboard diagnostics until verified.
+# A model entry may set its own `access`, which overrides the engine value for
+# slugs billed on another plan (e.g. zai-coding-plan/, opencode-go/).
 
 [engines.opencode.models."openrouter/z-ai/glm-5.2"]
 display = "GLM 5.2"
