@@ -1,0 +1,14 @@
+{
+  "name": "referee",
+  "version": "0.1.0",
+  "description": "Watch the live Ringer run beside your Claude Code chat.",
+  "license": "MIT",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "port": { "type": "number", "title": "Ringside port", "description": "Local Ringside HTTP port (1-65535).", "default": 8700 },
+    "pollMs": { "type": "number", "title": "Poll interval", "description": "Milliseconds between read-only polls (at least 100).", "default": 2000 },
+    "paneColumns": { "type": "number", "title": "Pane width", "description": "Requested dock width in columns (at least 24).", "default": 60 },
+    "openOnStart": { "type": "boolean", "title": "Open on start", "description": "Open Referee when the session starts.", "default": true },
+    "statusLine": { "type": "boolean", "title": "Status line", "description": "Keep polling and show a short live-run summary in the status line.", "default": true }
+  }
+}
