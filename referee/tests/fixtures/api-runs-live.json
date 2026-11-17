@@ -1,0 +1,290 @@
+{
+  "active": {
+    "referee-fixture-fleet-20261117T120657Z-p87166": {
+      "identity": "fixture-capture",
+      "pid": 87166,
+      "run_name": "referee-fixture-fleet",
+      "started_at": "2026-11-17T12:06:57.044012+00:00",
+      "workdir": "/tmp/ringer-fixtures/wd1"
+    }
+  },
+  "runs": [
+    {
+      "artifact_path": null,
+      "dashboard_port": null,
+      "elapsed_s": 9.5,
+      "fail": 1,
+      "finished": false,
+      "identity": "fixture-capture",
+      "live_path": null,
+      "max_parallel": 3,
+      "pass": 3,
+      "pid": 87166,
+      "port": null,
+      "report_path": null,
+      "report_ready": false,
+      "run_id": "referee-fixture-fleet-20261117T120657Z-p87166",
+      "run_name": "referee-fixture-fleet",
+      "started_at": "2026-11-17T12:06:57.044012+00:00",
+      "state": "live",
+      "summary": null,
+      "tasks": [
+        {
+          "activity": "mock-worker: wrote 1 file(s): out.txt",
+          "attempts": 1,
+          "check": "grep -q hello out.txt || { echo FAIL: out.txt missing hello; exit 1; }",
+          "check_output_tail": "",
+          "check_returncode": 0,
+          "check_timed_out": false,
+          "children": 0,
+          "deliverable_notes": [],
+          "deliverables": [
+            {
+              "bytes": 6,
+              "name": "out.txt",
+              "path": "/tmp/ringer-fixtures/state/artifacts/deliverables/referee-fixture-fleet-20261117T120657Z-p87166/passes-fast/out.txt"
+            }
+          ],
+          "elapsed_s": 0.0,
+          "engine": "mock",
+          "key": "passes-fast",
+          "log_path": "/tmp/ringer-fixtures/wd1/passes-fast/worker.log",
+          "log_tail": [
+            "MOCK_END' < /dev/null",
+            "mock-worker: wrote 1 file(s): out.txt",
+            "[ringer.py] attempt 1 exited rc=0"
+          ],
+          "log_tail_full": [
+            "",
+            "[ringer.py] attempt 1 started 2026-11-17T12:06:57.089991+00:00",
+            "[ringer.py] engine: mock",
+            "[ringer.py] command: /usr/bin/python3 /opt/ringer/engines/mock_worker.py 'You are the deterministic mock worker. Write only the file in this block.",
+            "MOCK_FILE: out.txt",
+            "hello",
+            "MOCK_END' < /dev/null",
+            "mock-worker: wrote 1 file(s): out.txt",
+            "[ringer.py] attempt 1 exited rc=0"
+          ],
+          "max_attempts": 2,
+          "model": "",
+          "report_paths": {},
+          "setup_error": null,
+          "spec": "You are the deterministic mock worker. Write only the file in this block.\nMOCK_FILE: out.txt\nhello\nMOCK_END",
+          "spec_short": "You are the deterministic mock worker. Write only the file in this block. MOCK_FILE: out.txt hello MOCK_END",
+          "status": "pass",
+          "taskdir": "/tmp/ringer-fixtures/wd1/passes-fast",
+          "timeout_s": 900,
+          "tokens": null,
+          "verdict": "PASS",
+          "verified": ""
+        },
+        {
+          "activity": "mock-worker: simulated failure",
+          "attempts": 2,
+          "check": "test -f never.txt || { echo FAIL: never.txt was not created; exit 1; }",
+          "check_output_tail": "FAIL: never.txt was not created",
+          "check_returncode": 1,
+          "check_timed_out": false,
+          "children": 0,
+          "deliverable_notes": [],
+          "deliverables": [],
+          "elapsed_s": 0.1,
+          "engine": "mock",
+          "key": "fails-twice",
+          "log_path": "/tmp/ringer-fixtures/wd1/fails-twice/worker.log",
+          "log_tail": [
+            "FAIL: never.txt was not created. Fix it.' < /dev/null",
+            "mock-worker: simulated failure",
+            "[ringer.py] attempt 2 exited rc=1"
+          ],
+          "log_tail_full": [
+            "",
+            "[ringer.py] attempt 1 started 2026-11-17T12:06:57.093231+00:00",
+            "[ringer.py] engine: mock",
+            "[ringer.py] command: /usr/bin/python3 /opt/ringer/engines/mock_worker.py 'You are the deterministic mock worker. Write only the file in this block.",
+            "MOCK_FAIL' < /dev/null",
+            "mock-worker: simulated failure",
+            "[ringer.py] attempt 1 exited rc=1",
+            "",
+            "[ringer.py] attempt 2 started 2026-11-17T12:06:57.126725+00:00",
+            "[ringer.py] engine: mock",
+            "[ringer.py] command: /usr/bin/python3 /opt/ringer/engines/mock_worker.py 'You are the deterministic mock worker. Write only the file in this block.",
+            "MOCK_FAIL",
+            "",
+            "Previous attempt failed: [ringer.py] attempt 1 started 2026-11-17T12:06:57.093231+00:00",
+            "[ringer.py] engine: mock",
+            "[ringer.py] command: /usr/bin/python3 /opt/ringer/engines/mock_worker.py '\"'\"'You are the deterministic mock worker. Write only the file in this block.",
+            "MOCK_FAIL'\"'\"' < /dev/null",
+            "mock-worker: simulated failure",
+            "[ringer.py] attempt 1 exited rc=1",
+            "FAIL: never.txt was not created. Fix it.' < /dev/null",
+            "mock-worker: simulated failure",
+            "[ringer.py] attempt 2 exited rc=1"
+          ],
+          "max_attempts": 2,
+          "model": "",
+          "report_paths": {},
+          "setup_error": null,
+          "spec": "You are the deterministic mock worker. Write only the file in this block.\nMOCK_FAIL",
+          "spec_short": "You are the deterministic mock worker. Write only the file in this block. MOCK_FAIL",
+          "status": "fail",
+          "taskdir": "/tmp/ringer-fixtures/wd1/fails-twice",
+          "timeout_s": 900,
+          "tokens": null,
+          "verdict": "FAIL",
+          "verified": ""
+        },
+        {
+          "activity": "mock-worker: wrote 1 file(s): out.txt",
+          "attempts": 1,
+          "check": "sleep 25; grep -q hello out.txt || { echo FAIL; exit 1; }",
+          "check_output_tail": "",
+          "check_returncode": null,
+          "check_timed_out": false,
+          "children": 0,
+          "deliverable_notes": [],
+          "deliverables": [],
+          "elapsed_s": 9.5,
+          "engine": "mock",
+          "key": "slow-check",
+          "log_path": "/tmp/ringer-fixtures/wd1/slow-check/worker.log",
+          "log_tail": [
+            "MOCK_END' < /dev/null",
+            "mock-worker: wrote 1 file(s): out.txt",
+            "[ringer.py] attempt 1 exited rc=0"
+          ],
+          "log_tail_full": [
+            "",
+            "[ringer.py] attempt 1 started 2026-11-17T12:06:57.095687+00:00",
+            "[ringer.py] engine: mock",
+            "[ringer.py] command: /usr/bin/python3 /opt/ringer/engines/mock_worker.py 'You are the deterministic mock worker. Write only the file in this block.",
+            "MOCK_FILE: out.txt",
+            "hello",
+            "MOCK_END' < /dev/null",
+            "mock-worker: wrote 1 file(s): out.txt",
+            "[ringer.py] attempt 1 exited rc=0"
+          ],
+          "max_attempts": 2,
+          "model": "",
+          "report_paths": {},
+          "setup_error": null,
+          "spec": "You are the deterministic mock worker. Write only the file in this block.\nMOCK_FILE: out.txt\nhello\nMOCK_END",
+          "spec_short": "You are the deterministic mock worker. Write only the file in this block. MOCK_FILE: out.txt hello MOCK_END",
+          "status": "verifying",
+          "taskdir": "/tmp/ringer-fixtures/wd1/slow-check",
+          "timeout_s": 900,
+          "tokens": null,
+          "verdict": null,
+          "verified": ""
+        },
+        {
+          "activity": "mock-worker: wrote 1 file(s): out.txt",
+          "attempts": 1,
+          "check": "sleep 8; grep -q hello out.txt || { echo FAIL; exit 1; }",
+          "check_output_tail": "",
+          "check_returncode": 0,
+          "check_timed_out": false,
+          "children": 0,
+          "deliverable_notes": [],
+          "deliverables": [
+            {
+              "bytes": 6,
+              "name": "out.txt",
+              "path": "/tmp/ringer-fixtures/state/artifacts/deliverables/referee-fixture-fleet-20261117T120657Z-p87166/queued-after/out.txt"
+            }
+          ],
+          "elapsed_s": 8.0,
+          "engine": "mock",
+          "key": "queued-after",
+          "log_path": "/tmp/ringer-fixtures/wd1/queued-after/worker.log",
+          "log_tail": [
+            "MOCK_END' < /dev/null",
+            "mock-worker: wrote 1 file(s): out.txt",
+            "[ringer.py] attempt 1 exited rc=0"
+          ],
+          "log_tail_full": [
+            "",
+            "[ringer.py] attempt 1 started 2026-11-17T12:06:57.124173+00:00",
+            "[ringer.py] engine: mock",
+            "[ringer.py] command: /usr/bin/python3 /opt/ringer/engines/mock_worker.py 'You are the deterministic mock worker. Write only the file in this block.",
+            "MOCK_FILE: out.txt",
+            "hello",
+            "MOCK_END' < /dev/null",
+            "mock-worker: wrote 1 file(s): out.txt",
+            "[ringer.py] attempt 1 exited rc=0"
+          ],
+          "max_attempts": 2,
+          "model": "",
+          "report_paths": {},
+          "setup_error": null,
+          "spec": "You are the deterministic mock worker. Write only the file in this block.\nMOCK_FILE: out.txt\nhello\nMOCK_END",
+          "spec_short": "You are the deterministic mock worker. Write only the file in this block. MOCK_FILE: out.txt hello MOCK_END",
+          "status": "pass",
+          "taskdir": "/tmp/ringer-fixtures/wd1/queued-after",
+          "timeout_s": 900,
+          "tokens": null,
+          "verdict": "PASS",
+          "verified": ""
+        },
+        {
+          "activity": "mock-worker: wrote 1 file(s): out.txt",
+          "attempts": 1,
+          "check": "sleep 3; grep -q hello out.txt || { echo FAIL; exit 1; }",
+          "check_output_tail": "",
+          "check_returncode": 0,
+          "check_timed_out": false,
+          "children": 0,
+          "deliverable_notes": [],
+          "deliverables": [
+            {
+              "bytes": 6,
+              "name": "out.txt",
+              "path": "/tmp/ringer-fixtures/state/artifacts/deliverables/referee-fixture-fleet-20261117T120657Z-p87166/passes-later/out.txt"
+            }
+          ],
+          "elapsed_s": 3.0,
+          "engine": "mock",
+          "key": "passes-later",
+          "log_path": "/tmp/ringer-fixtures/wd1/passes-later/worker.log",
+          "log_tail": [
+            "MOCK_END' < /dev/null",
+            "mock-worker: wrote 1 file(s): out.txt",
+            "[ringer.py] attempt 1 exited rc=0"
+          ],
+          "log_tail_full": [
+            "",
+            "[ringer.py] attempt 1 started 2026-11-17T12:06:57.154192+00:00",
+            "[ringer.py] engine: mock",
+            "[ringer.py] command: /usr/bin/python3 /opt/ringer/engines/mock_worker.py 'You are the deterministic mock worker. Write only the file in this block.",
+            "MOCK_FILE: out.txt",
+            "hello",
+            "MOCK_END' < /dev/null",
+            "mock-worker: wrote 1 file(s): out.txt",
+            "[ringer.py] attempt 1 exited rc=0"
+          ],
+          "max_attempts": 2,
+          "model": "",
+          "report_paths": {},
+          "setup_error": null,
+          "spec": "You are the deterministic mock worker. Write only the file in this block.\nMOCK_FILE: out.txt\nhello\nMOCK_END",
+          "spec_short": "You are the deterministic mock worker. Write only the file in this block. MOCK_FILE: out.txt hello MOCK_END",
+          "status": "pass",
+          "taskdir": "/tmp/ringer-fixtures/wd1/passes-later",
+          "timeout_s": 900,
+          "tokens": null,
+          "verdict": "PASS",
+          "verified": ""
+        }
+      ],
+      "tokens": 0,
+      "totals": {
+        "done": 4,
+        "fail": 1,
+        "pass": 3,
+        "running": 1,
+        "tokens": 0
+      }
+    }
+  ],
+  "update": null
+}
