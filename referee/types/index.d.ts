@@ -5,6 +5,7 @@ export type Task = {
   model?: string
   attempts?: number
   max_attempts?: number
+  activity?: string
   check_output_tail?: string
   elapsed_s?: number
   tokens?: number | null
@@ -12,6 +13,7 @@ export type Task = {
 export type Run = {
   run_id: string
   run_name: string
+  max_parallel?: number
   started_at?: string
   state: string
   elapsed_s?: number

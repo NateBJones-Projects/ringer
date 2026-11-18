@@ -1,7 +1,7 @@
 import type { Run, RunData, Snapshot, Task } from '../types'
 
 export type Config = { port: number; pollMs: number; paneColumns: number; openOnStart: boolean; statusLine: boolean }
-export type Piece = { text: string; color?: string; href?: string }
+export type Piece = { text: string; color?: string; bold?: boolean; href?: string }
 export type Line = Piece[]
 export const EMPTY: Snapshot = { runs: [], active: {}, lastSuccess: null, error: null }
 
@@ -40,6 +40,8 @@ export function cellWidth(value: string): number {
 }
 
 export function fit(line: Line, columns: number): Line {
+  columns = Math.max(0, Math.floor(columns))
+  if (!columns) return []
   const clean = line.map(part => ({ ...part, text: sanitize(part.text) }))
   const clipped = clean.reduce((n, p) => n + cellWidth(p.text), 0) > columns
   let room = Math.max(0, Math.floor(columns) - (clipped ? 1 : 0))
@@ -48,7 +50,7 @@ export function fit(line: Line, columns: number): Line {
     let text = ''
     for (const char of part.text) {
       const width = cellWidth(char)
-      if (width > room) { if (text) result.push({ ...part, text }); return [...result, { text: '…' }] }
+      if (width > room) { if (text) result.push({ ...part, text }); return [...result, { ...part, text: '…' }] }
       text += char
       room -= width
     }
@@ -71,9 +73,9 @@ export function parseRuns(text: string): RunData {
       !run.tasks.every(t => object(t) && typeof t.key === 'string' && typeof t.status === 'string')) continue
     runs.push({
       run_id: run.run_id, run_name: run.run_name, state: run.state,
-      started_at: string(run.started_at), elapsed_s: number(run.elapsed_s), tokens: number(run.tokens),
+      started_at: string(run.started_at), elapsed_s: number(run.elapsed_s), tokens: number(run.tokens), max_parallel: integer(run.max_parallel),
       tasks: run.tasks.map(t => ({
-        key: t.key, status: t.status, engine: string(t.engine), model: string(t.model),
+        key: t.key, status: t.status, activity: typeof t.activity === 'string' ? sanitize(t.activity) : undefined, engine: string(t.engine), model: string(t.model),
         attempts: integer(t.attempts), max_attempts: integer(t.max_attempts),
         elapsed_s: number(t.elapsed_s), tokens: number(t.tokens), check_output_tail: string(t.check_output_tail),
       })),
@@ -127,7 +129,7 @@ export function summary(snapshot: Snapshot, now: number, cfg: Config): string {
   const message = snapshot.error === 'unreachable' ? `Ringside not reachable on :${cfg.port}` :
     snapshot.error === 'contract' ? 'Ringside response missing required fields' : ''
   const state = run ? `${selected.last ? 'last run · ' : ''}${runState(run, snapshot.active)} · ${sanitize(run.run_name)} · ${counts(run, runState(run, snapshot.active) !== 'STOPPED')} · ${duration(run.elapsed_s)}${selected.more ? ` · +${selected.more} more live` : ''}` : 'no live run'
-  return `referee · ${isStale(snapshot, now, cfg.pollMs) ? 'STALE · ' : ''}${message ? `${message} · ` : ''}${state}`
+  return `${isStale(snapshot, now, cfg.pollMs) ? 'STALE · ' : ''}${message ? `${message} · ` : ''}${state}`
 }
 
 export function attemptCells(task: Task, stopped: boolean): Line {
@@ -139,56 +141,209 @@ export function attemptCells(task: Task, stopped: boolean): Line {
   })
 }
 
-export function lane(task: Task, stopped: boolean): Line {
-  const color = stopped || task.status === 'fail' ? 'error' : task.status === 'pass' ? 'success' : 'warning'
-  return [{ text: `${task.status === 'pass' ? '+' : task.status === 'fail' ? 'x' : '·'} ${task.key} ${stopped ? 'saved: ' : ''}${task.status} `, color },
-    ...attemptCells(task, stopped), { text: ` ${task.engine ?? '-'}${task.model ? `/${task.model}` : ''} ${task.attempts ?? '-'}${task.max_attempts === undefined ? '' : `/${task.max_attempts}`} ${duration(task.elapsed_s)} tok ${tokenText(task.tokens)}`, color: stopped ? 'error' : undefined }]
+const piece = (text: string, color = 'text', bold = false): Piece => ({ text, color, bold })
+const width = (line: Line): number => line.reduce((n, p) => n + cellWidth(sanitize(p.text)), 0)
+const space = (n = 1): Piece => piece(' '.repeat(Math.max(0, n)), 'subtle')
+const separator = (): Piece => piece(' · ', 'subtle')
+const running = (task: Task): boolean => ['running', 'verifying', 'retrying'].includes(task.status)
+const unfinished = (task: Task): boolean => !['pass', 'fail'].includes(task.status)
+const statusColor = (task: Task, stopped: boolean): string =>
+  stopped && unfinished(task) || task.status === 'fail' ? 'error' :
+    task.status === 'pass' ? 'success' : running(task) ? 'warning' : 'inactive'
+
+function pad(line: Line, columns: number): Line {
+  const fitted = fit(line, columns)
+  return [...fitted, space(columns - width(fitted))]
+}
+
+function sides(left: Line, right: Line, columns: number): Line {
+  const end = fit(right, columns)
+  const start = fit(left, Math.max(0, columns - width(end) - 1))
+  return [...start, space(columns - width(start) - width(end)), ...end]
+}
+
+function centered(line: Line, columns: number): Line {
+  const fitted = fit(line, columns)
+  return [space(Math.floor((columns - width(fitted)) / 2)), ...fitted]
+}
+
+function card(content: Line[], columns: number, color: string): Line[] {
+  const inner = columns - 4
+  return [
+    [piece(`╭${'─'.repeat(columns - 2)}╮`, color)],
+    ...content.map(line => [piece('│ ', color), ...pad(line, inner), piece(' │', color)]),
+    [piece(`╰${'─'.repeat(columns - 2)}╯`, color)],
+  ]
+}
+
+function totals(run: Run, stopped: boolean): number[] {
+  const pass = run.tasks.filter(t => t.status === 'pass').length
+  const fail = run.tasks.filter(t => t.status === 'fail').length
+  const active = stopped ? 0 : run.tasks.filter(running).length
+  return [pass, fail, active, run.tasks.length - pass - fail - active]
+}
+const statusColors = ['success', 'error', 'warning', 'inactive']
+const statusLabels = ['pass', 'fail', 'running', 'queued']
+
+// Reserve one cell per present status, then distribute the remaining cells proportionally.
+function stacked(values: number[], columns: number): Line {
+  const total = values.reduce((a, b) => a + b, 0)
+  if (!total) return [piece('·'.repeat(columns), 'subtle')]
+  const present = values.filter(Boolean).length
+  const remaining = columns - present
+  const sizes = values.map(n => n ? 1 + Math.floor(n / total * remaining) : 0)
+  const fractions = values.map((n, i) => ({ i, fraction: n ? n / total * remaining % 1 : -1 }))
+    .sort((a, b) => b.fraction - a.fraction)
+  const spare = columns - sizes.reduce((a, b) => a + b, 0)
+  for (let i = 0; i < spare; i++) sizes[fractions[i]!.i]!++
+  return sizes.map((n, i) => piece((i === 3 ? '░' : '━').repeat(n), statusColors[i]))
+}
+
+function laneRows(task: Task, run: Run, stopped: boolean, columns: number): Line[] {
+  const color = statusColor(task, stopped)
+  const glyph = stopped && unfinished(task) ? '○' : task.status === 'pass' ? '✓' : task.status === 'fail' ? '✗' : running(task) ? '◐' : '·'
+  const labelWidth = Math.min(18, columns - 20, Math.max(0, ...run.tasks.map(t => cellWidth(sanitize(t.key)))))
+  let label = pad([piece(sanitize(task.key), color)], labelWidth)
+  const clock = fit([piece(duration(task.elapsed_s), 'text', true)], Math.min(12, columns - 8))
+  const attempts = fit([piece(`${task.attempts ?? '-'}/${task.max_attempts ?? '-'}`, 'text', true)], 11)
+  const tail = [...attempts, space(2), ...clock]
+  const widestCells = Math.min(columns, Math.max(0, ...run.tasks.map(t => t.attempts ?? 0)))
+  let cells = pad(attemptCells({ ...task, attempts: Math.min(task.attempts ?? 0, columns) }, stopped), widestCells)
+  // Below 30 columns omit duration bars first; oversized attempt histories lose cells next.
+  let barWidth = columns >= 30 ? columns - (2 + width(label) + 1 + 1 + width(cells) + 1 + width(tail)) : 0
+  if (barWidth < 4) {
+    if (columns >= 30) {
+      cells = []
+      barWidth = columns - (2 + width(label) + 1 + 1 + width(tail))
+    }
+    if (barWidth < 4) barWidth = 0
+  }
+  if (!barWidth && 2 + width(label) + (cells.length ? width(cells) + 1 : 0) + 1 + width(tail) > columns) cells = []
+  label = fit(label, Math.max(0, columns - width(tail) - 3 - (cells.length ? width(cells) + 1 : 0) - (barWidth ? barWidth + 1 : 0)))
+  const longest = Math.max(0, ...run.tasks.map(t => t.elapsed_s ?? 0))
+  // A lane that has not run yet (0s) draws an empty track, not a sliver of progress.
+  const filled = !task.elapsed_s || !barWidth ? 0 : Math.min(barWidth, Math.max(1, Math.round((longest ? task.elapsed_s / longest : 0) * barWidth)))
+  const start: Line = [piece(`${glyph} `, color), ...label]
+  if (barWidth) start.push(space(), piece('━'.repeat(filled), color), piece('·'.repeat(barWidth - filled), 'subtle'))
+  if (cells.length) start.push(space(), ...cells)
+  const lines = [sides(start, tail, columns)]
+  const excerpt = stopped && unfinished(task) ? 'stopped before it finished' : task.status === 'fail' ?
+    task.check_output_tail?.split(/\r?\n/).map(sanitize).filter(line => line.trim()).pop() : running(task) ? sanitize(task.activity ?? '').trim() : ''
+  if (excerpt) lines.push(fit([piece(`  └ ${excerpt}`, task.status === 'fail' || stopped ? 'error' : 'inactive')], columns))
+  return lines
+}
+
+function omitted(tasks: Task[], stopped: boolean): Line {
+  const groups: [string, Task[]][] = [
+    ['failed', tasks.filter(t => t.status === 'fail')],
+    [stopped ? 'stopped' : 'running', tasks.filter(t => stopped ? unfinished(t) : running(t))],
+    ['passed', tasks.filter(t => t.status === 'pass')],
+    ['queued', tasks.filter(t => !stopped && unfinished(t) && !running(t))],
+  ]
+  return [piece(`+${tasks.length} more`, 'inactive'), ...groups.filter(([, group]) => group.length).flatMap(([label, group]) =>
+    [separator(), piece(`${group.length} ${label}: ${group.map(t => sanitize(t.key)).join(', ')}`, 'inactive')])]
 }
 
 export function layout(snapshot: Snapshot, now: number, cfg: Config, placement: string, columns: number, rows?: number): Line[] {
   const selected = selectRun(snapshot, now)
   const run = selected.run
   const stale = isStale(snapshot, now, cfg.pollMs)
-  const plain = (text: string, color?: string): Line => [{ text, color }]
-  const lines: Line[] = []
+  const state = run ? runState(run, snapshot.active) : ''
+  const stopped = state === 'STOPPED'
+  const stateColor = stopped ? 'error' : state === 'LIVE' ? 'claude' : 'success'
+  const heading = `${stale ? 'STALE · ' : snapshot.error ? 'CACHED · ' : ''}${selected.last ? 'last run · ' : ''}${state}`
+  const error = snapshot.error === 'unreachable' ? `Ringside not reachable on :${cfg.port}` : 'Ringside response missing required fields'
+  const errors: Line[] = snapshot.error ? [[piece(error, 'error')], [piece('./ringer.py hud --no-open', 'warning')]] : []
   const budget = Math.max(0, Math.floor(rows ?? 8))
-  if (placement !== 'dock' && placement !== 'inline') return [fit(plain(summary(snapshot, now, cfg), run && runState(run, snapshot.active) === 'STOPPED' ? 'error' : undefined), columns)]
-  if (snapshot.error) {
-    lines.push(plain(snapshot.error === 'unreachable' ? `Ringside not reachable on :${cfg.port}` : 'Ringside response missing required fields', 'error'))
-    lines.push(plain('./ringer.py hud --no-open', 'warning'))
-  }
-  if (!run) lines.push(plain(`${stale ? 'STALE · ' : ''}no live run`))
-  else {
-    const stopped = runState(run, snapshot.active) === 'STOPPED'
-    const heading = `${stale ? 'STALE · ' : snapshot.error ? 'CACHED · ' : ''}${selected.last ? 'last run · ' : ''}${runState(run, snapshot.active)}`
-    lines.push(plain(`${heading} · ${run.run_name}`, stopped ? 'error' : 'success'))
-    if (placement === 'dock') lines.push(plain(`${duration(run.elapsed_s)} · ${counts(run, runState(run, snapshot.active) !== 'STOPPED')} · tokens ${tokenText(run.tokens)}`))
-    if (selected.more) lines.push(plain(`+${selected.more} more live`))
-    const tasks = placement === 'inline' ? [...run.tasks].sort((a, b) => {
-      const priority = (t: Task) => ['running', 'verifying', 'retrying', 'fail'].includes(t.status) ? 0 : 1
-      return priority(a) - priority(b)
-    }) : run.tasks
-    // Even when notices fill the body, reserve a row to account for hidden tasks.
-    if (placement === 'inline' && tasks.length) lines.splice(Math.max(0, budget - 1))
-    const available = placement === 'inline' ? Math.max(0, budget - lines.length) : tasks.length
-    const shown = tasks.length > available ? Math.max(0, available - 1) : available
-    for (const task of tasks.slice(0, shown)) lines.push(lane(task, stopped))
-    if (tasks.length > shown) lines.push(plain(`+${tasks.length - shown} more`))
-    if (placement === 'dock') {
-      if (run.state === 'finished') {
-        lines.push(plain(`Receipt ${duration(run.elapsed_s)} · ${counts(run, false)}`))
-        const retries = run.tasks.some(t => t.attempts === undefined) ? '-' : run.tasks.reduce((n, t) => n + Math.max(0, t.attempts! - 1), 0)
-        lines.push(plain(`${retries} retries · tokens ${tokenText(run.tokens)}`))
-      }
-      for (const task of run.tasks.filter(t => t.status === 'fail')) {
-        const excerpt = task.check_output_tail?.split(/\r?\n/).map(sanitize).filter(line => line.trim()).pop()
-        if (excerpt) lines.push(plain(`${task.key}: ${excerpt}`, 'error'))
-      }
+  if (placement !== 'dock' && placement !== 'inline') return [fit([piece(summary(snapshot, now, cfg), stopped ? 'error' : 'text')], columns)]
+  const tasks = run ? [...run.tasks].sort((a, b) => {
+    const priority = (t: Task) => t.status === 'fail' ? 0 : running(t) ? 1 : 2
+    return priority(a) - priority(b)
+  }) : []
+  const values = run ? totals(run, stopped) : [0, 0, 0, 0]
+  const idle: Line = [piece('REFEREE', 'claude', true), separator(), piece(`${stale ? 'STALE · ' : ''}no live run`, 'inactive')]
+
+  if (placement === 'inline') {
+    const lines = [...errors]
+    if (!run) return [...lines, idle].slice(0, budget).map(line => fit(line, columns))
+    const left = [piece(`● ${heading} `, stateColor), piece(run.run_name, 'text', true), separator(), piece(duration(run.elapsed_s), 'text', true)]
+    const right: Line = values.slice(0, stopped ? 2 : 3).flatMap((n, i) => [
+      ...(i ? [separator()] : []), piece(String(n), statusColors[i], true), piece(` ${statusLabels[i]}`, 'inactive'),
+    ])
+    const barWidth = Math.min(24, columns - width(left) - width(right) - 2)
+    let header: Line
+    if (barWidth >= 6) header = sides([...left, space(), ...stacked(values, barWidth)], right, columns)
+    else if (width(left) + width(right) + 1 <= columns) header = sides(left, right, columns)
+    else {
+      const compact = [piece(`● ${heading} `, stateColor), ...fit([piece(run.run_name, 'text', true)], Math.max(0, columns - width(right) - cellWidth(heading) - 4))]
+      header = width(right) + cellWidth(heading) + 6 <= columns ? sides(compact, right, columns) : fit(left, columns)
     }
+    lines.push(header)
+    if (selected.more) lines.push([piece(`+${selected.more} more live`, 'claude')])
+    // Even when notices fill the body, reserve a row to account for hidden tasks.
+    if (tasks.length) lines.splice(Math.max(0, budget - 1))
+    const lanes = tasks.map(task => laneRows(task, run, stopped, columns))
+    if (lines.length + lanes.reduce((n, lane) => n + lane.length, 0) < budget) lines.splice(errors.length + 1, 0, [])
+    let shown = 0
+    for (const lane of lanes) {
+      const available = budget - lines.length - (shown < tasks.length - 1 ? 1 : 0)
+      if (available < 1) break
+      lines.push(lane[0]!)
+      if (lane[1] && available >= 2) lines.push(lane[1])
+      shown++
+    }
+    if (shown < tasks.length) lines.push(omitted(tasks.slice(shown), stopped))
+    return lines.slice(0, budget).map(line => fit(line, columns))
   }
-  if (placement === 'dock') {
-    if (snapshot.skippedRuns) lines.push(plain(`${snapshot.skippedRuns} unreadable runs skipped`, 'warning'))
-    lines.push([{ text: `http://127.0.0.1:${cfg.port}`, href: `http://127.0.0.1:${cfg.port}` }])
+
+  const title = run ? [piece('REFEREE', 'claude', true), separator(), piece(heading, stateColor), separator(), piece(run.run_name, 'text', true)] : idle
+  const lines: Line[] = [centered(title, columns)]
+  if (columns >= 40) lines.push(centered(statusLabels.flatMap((label, i) => [
+    ...(i ? [space(2)] : []), piece('■', statusColors[i]), piece(` ${label}`, 'subtle'),
+  ]), columns))
+  const split = columns >= 110
+  const bodyWidth = split ? Math.floor((columns - 2) / 2) : columns
+  const left: Line[] = errors.length ? card(errors, bodyWidth, 'error') : []
+  const right: Line[] = []
+  if (run) {
+    const inner = bodyWidth - 4
+    const badge = stopped ? '○ stopped' : state === 'LIVE' ? '● live' : '✓ finished'
+    const metrics: Line[] = [
+      [piece(duration(run.elapsed_s), 'text', true), piece(' elapsed', 'inactive')],
+      [piece(String(tasks.length), 'text', true), piece(' lanes', 'inactive')],
+      [piece(String(run.max_parallel ?? '-'), 'text', true), piece(' parallel', 'inactive')],
+      [piece('tokens ', 'inactive'), piece(tokenText(run.tokens), 'text', true)],
+    ]
+    const stats: Line = []
+    for (const metric of metrics) {
+      const next = [...(stats.length ? [separator()] : []), ...metric]
+      if (width(stats) + width(next) > inner) break
+      stats.push(...next)
+    }
+    const content: Line[] = [
+      sides([piece(run.run_name, 'claude', true)], [piece(badge, stateColor)], inner),
+      stats,
+      stacked(values, inner),
+      values.flatMap((n, i) => [...(i ? [space(3)] : []), piece('■ ', statusColors[i]), piece(String(n), 'text', true), piece(` ${statusLabels[i]}`, 'inactive')]),
+    ]
+    if (run.state === 'finished') {
+      const retries = tasks.some(t => t.attempts === undefined) ? '-' : tasks.reduce((n, t) => n + Math.max(0, t.attempts! - 1), 0)
+      content.push([piece('receipt', 'inactive'), separator(), piece(String(retries), 'text', true), piece(' retries', 'inactive'), separator(), piece('tokens ', 'inactive'), piece(tokenText(run.tokens), 'text', true)])
+    }
+    left.push(...card(content, bodyWidth, stopped ? 'error' : 'claude'))
+    if (selected.more) left.push([piece(`+${selected.more} more live`, 'claude')])
+    const longest = tasks.reduce<number | undefined>((n, task) => task.elapsed_s === undefined ? n : Math.max(n ?? 0, task.elapsed_s), undefined)
+    right.push(sides([piece('lanes · ', 'suggestion'), piece(String(values[2]), 'suggestion', true), piece(' running · ', 'suggestion'), piece(String(tasks.length), 'suggestion', true), piece(' total', 'suggestion')],
+      [piece('longest ', 'inactive'), piece(duration(longest), 'text', true)], bodyWidth))
+    right.push(...tasks.flatMap(task => laneRows(task, run, stopped, bodyWidth)))
   }
-  return (placement === 'inline' ? lines.slice(0, budget) : lines).map(line => fit(line, columns))
+  if (split) {
+    for (let i = 0; i < Math.max(left.length, right.length); i++) lines.push([...pad(left[i] ?? [], bodyWidth), space(2), ...(right[i] ?? [])])
+  } else lines.push(...left, ...right)
+  const url = `http://127.0.0.1:${cfg.port}`
+  const link: Line = [{ text: `Ringside ${url}`, color: 'suggestion', href: url }]
+  lines.push(snapshot.lastSuccess === null ? fit(link, columns) : sides(link,
+    [piece(`updated ${Math.max(0, Math.floor((now - snapshot.lastSuccess) / 1000))}s ago`, 'inactive')], columns))
+  if (snapshot.skippedRuns) lines.push([piece(`${snapshot.skippedRuns} unreadable runs skipped`, 'warning')])
+  return lines.map(line => fit(line, columns))
 }

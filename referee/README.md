@@ -15,7 +15,7 @@ claude --plugin-dir ./referee
 
 `/referee open` opens the pane. `/referee close` closes it. `/referee status`
 returns a one-line summary. The terminal docks the pane in fullscreen from 110
-columns; narrower terminals request eight rows above the prompt, including the
+columns; narrower terminals request fourteen rows above the prompt, including the
 frame's two border rows. Inline content fits the available body rows, with the
 header and error notices included in that budget. When tasks do not all fit,
 the last row says `+N more` and counts every omitted task. A minimized widget
@@ -47,20 +47,24 @@ state file) can appear as **STOPPED** in the error colour: it must have
 `state: "died"`, or `state: "live"` with no entry in `active`.
 Otherwise the pane says **no live run**.
 
-Task statuses, including `verifying` and unfamiliar values, come from Ringside.
-Stopped runs label their task statuses as saved and draw lanes in the error
-colour; those statuses describe the last capture, not ongoing work.
-No verdict is inferred from an exit code.
-There are no per-attempt records: each cell before the last is a failed attempt,
-because Ringer retries only after a failed check. The last cell uses the task's
-status: green for pass, red for fail, an outlined warning cell for an unfinished
-attempt. Stopped unfinished cells use the error colour.
+The orange run card pairs the run name with its live, finished, or stopped badge.
+It shows elapsed time, lane and parallel counts, tokens, and a stacked status bar.
+Wide docks put the card beside the lanes. Blue marks the lanes header and Ringside link.
 
-The finished receipt shows duration, pass/fail counts, retries, and tokens.
-Failed lanes show the last non-empty line of `check_output_tail`. Unknown tokens
-show `-`; missing models leave the engine name alone. Missing durations and
-attempt counts show `-`. Without `max_attempts`, the attempt count appears alone.
-Without `check_output_tail`, there is no failure excerpt.
+Failed lanes come first, then running lanes, then the rest in manifest order.
+Green means pass, red fail, amber running, and muted gray queued. Lane bars compare
+elapsed durations with the longest lane; they are not a timeline. Attempt cells
+and clocks align on the right. Each cell before the last is a failed attempt;
+the last reflects the captured status. No verdict is inferred from an exit code.
+Stopped unfinished lanes use a red hollow circle and say “stopped before it finished.”
+
+A failed lane shows its last non-empty check output line underneath. A running
+lane shows its latest activity. Inline includes these details when space allows;
+its last row counts omitted lanes and groups their names by status. With spare
+room, a blank row separates the header from the lanes.
+
+Finished cards add a receipt with retries and tokens. Unknown values show `-`,
+including an unknown attempt maximum (`2/-`). Text truncates instead of wrapping.
 
 After three polling intervals without success, the header says **STALE** and all
 rows dim. A connection failure includes the port and Ringside startup command.
@@ -94,8 +98,8 @@ python3 -m unittest discover -s tests
 The Mod runner cannot import JSON or read fixture files. Its test module embeds
 the captured response text; the Python test verifies those copies against the
 read-only fixtures. UI tests exercise all four surfaces, three placements, and
-widths of 24, 40, 60, and 90 columns. They validate render trees, not terminal or
-app pixels. Inline tests also check body heights of 3, 4, and 6 rows, including
+widths from 24 through 160 columns. They validate render trees, not terminal or
+app pixels. Inline tests cover tiny budgets, the 6-, 8-, and 14-row layouts, and
 cached errors, and account for every task drawn or counted in `+N more`.
 The terminal renders the Ringside URL as a link; remote surfaces
 show plain text because their link policy rejects HTTP URLs on `127.0.0.1`.

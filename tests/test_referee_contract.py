@@ -24,12 +24,12 @@ NUMBER = (int, float)
 FIELDS = {
     "run": {
         "run_id": (str,), "run_name": (str,), "started_at": (str,),
-        "state": (str,),
+        "state": (str,), "max_parallel": (int,),
         "elapsed_s": NUMBER, "tokens": (*NUMBER, type(None)), "tasks": (list,),
     },
     "task": {
         "key": (str,), "status": (str,), "engine": (str,), "model": (str,),
-        "attempts": (int,), "max_attempts": (int,), "check_output_tail": (str,),
+        "activity": (str,), "attempts": (int,), "max_attempts": (int,), "check_output_tail": (str,),
         "elapsed_s": NUMBER, "tokens": (*NUMBER, type(None)),
     },
     "response": {"runs": (list,), "active": (dict,)},

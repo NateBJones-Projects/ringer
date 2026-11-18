@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
-import { attemptCells, cellWidth, config, fit, layout, parseRuns, sanitize, selectRun } from '../hooks/core'
+import { attemptCells, cellWidth, config, fit, layout, parseRuns, sanitize, selectRun, summary } from '../hooks/core'
 import type { Run } from '../types'
 // Captured response: api-runs-empty.json (the test sandbox cannot import JSON or read files).
 const emptyText = "{\n  \"active\": {},\n  \"runs\": [],\n  \"update\": null\n}"
@@ -81,21 +81,21 @@ for (const [name, fixture, expected, now] of [
     await setup($, on, fixture, now)
     const text = await drawn($)
     expect(text).toContain(expected)
-    if (name === 'codex finished') expect(text).toContain('gpt-6-astra')
-    if (name === 'finished') expect(text).toContain('Receipt')
+    if (name === 'codex finished') expect(parseRuns(fixture).runs[0]!.tasks[0]!.model).toBe('gpt-6-astra')
+    if (name === 'finished') expect(text).toContain('receipt')
   })
 }
 
 test('failed attempts remain two red cells; verifying is not a pass', async ($, on) => {
   await setup($, on)
   const ui = await $.ui.mount(PANE)
-  const failed = await ui.find({ type: 'Text', text: /fails-twice fail/ })
+  const failed = await ui.find({ type: 'Text', text: /✗ fails-twice/ })
   expect(failed?.text).toContain('■■')
   const run = parseRuns(JSON.stringify(live)).runs[0]!
   expect(attemptCells(run.tasks.find(t => t.key === 'fails-twice')!, false)).toEqual([
     { text: '■', color: 'error' }, { text: '■', color: 'error' },
   ])
-  expect((await ui.find({ type: 'Text', text: /slow-check/ }))?.text).toContain('verifying □')
+  expect((await ui.find({ type: 'Text', text: /slow-check/ }))?.text).toContain('□')
   expect(rowsOf(await ui.drawn()).join('\n')).toContain('FAIL: never.txt was not created')
   await ui.unmount()
 })
@@ -106,10 +106,13 @@ test('a dead orchestrator is STOPPED in error colour, never running', async ($, 
   await setup($, on, data)
   const text = await drawn($)
   expect(text).toContain('STOPPED')
-  expect(text).toContain('saved: verifying')
-  expect(text).not.toContain('running')
+  expect(text).toContain('○ slow-check')
+  expect(text).toContain('└ stopped before it finished')
+  expect(text).toContain('0 running')
+  expect(text).not.toContain('◐ slow-check')
   const lines = layout({ ...data, lastSuccess: NOW, error: null }, NOW, CFG, 'dock', 90)
-  expect(lines[0]![0]!.color).toBe('error')
+  expect(lines[0]!.find(p => p.text === 'STOPPED')?.color).toBe('error')
+  expect(lines.find(line => line.some(p => p.text.startsWith('○ slow-check') || p.text === '○ '))?.[0]?.color).toBe('error')
 })
 
 test('unknown tokens are a dash and missing models leave the engine alone', async ($, on) => {
@@ -120,7 +123,9 @@ test('unknown tokens are a dash and missing models leave the engine alone', asyn
   const text = await drawn($)
   expect(text).toContain('tokens -')
   expect(text).not.toContain('tokens 0')
-  expect(text).toContain('mock 1/2')
+  expect(parseRuns(JSON.stringify(data)).runs[0]!.tasks[0]!.engine).toBe('mock')
+  expect(parseRuns(JSON.stringify(data)).runs[0]!.tasks[0]!.model).toBeUndefined()
+  expect(text).toContain('1/2')
   expect(text).not.toContain('mock/')
 })
 
@@ -145,7 +150,8 @@ test('untrusted names, keys, models, statuses and check output are sanitized', a
   expect(text).not.toContain('\u001b')
   expect(text).not.toContain('\u0007')
   expect(text).not.toContain('evil.test')
-  expect(text).toContain('bad: check')
+  expect(text).toContain('✗ bad')
+  expect(text).toContain('└ check')
   expect(text).not.toContain('first line')
 })
 
@@ -158,7 +164,7 @@ for (const [name, fixture, now] of [
     for (const surface of ['terminal', 'desktop', 'vscode', 'mobile'] as const) {
       for (const placement of ['dock', 'inline', 'widget'] as const) {
         for (const bodyColumns of [24, 40, 60, 90]) {
-          const ui = await $.ui.mount({ ...PANE, surface, props: { ...PANE.props, placement, bodyColumns } })
+          const ui = await $.ui.mount({ ...PANE, surface, props: { ...PANE.props, placement, bodyColumns, scroll: { offset: 0, bodyRows: 8 } } })
           const rows = rowsOf(await ui.drawn())
           expect(rows.length).toBeGreaterThan(0)
           for (const row of rows) expect(cellWidth(row) <= bodyColumns).toBe(true)
@@ -192,7 +198,7 @@ test('stale data keeps its verdicts and is marked after three poll intervals', a
   expect(await drawn($)).not.toContain('STALE')
   await world.clock.advance(2000)
   expect(await drawn($)).toContain('STALE')
-  expect(await drawn($)).toContain('fails-twice fail')
+  expect(await drawn($)).toContain('✗ fails-twice')
   expect(world.status()).toContain('STALE')
   world.replace(live)
   await world.clock.advance(2000)
@@ -201,7 +207,8 @@ test('stale data keeps its verdicts and is marked after three poll intervals', a
 
 test('status line clears when the run becomes idle', async ($, on) => {
   const world = await setup($, on)
-  expect(world.status()).toContain('referee · LIVE')
+  expect(world.status()).toContain('LIVE · referee-fixture-fleet')
+  expect(world.status()?.startsWith('referee')).toBe(false)
   world.replace(empty)
   await world.clock.advance(2000)
   expect(world.status()).toBeUndefined()
@@ -225,7 +232,8 @@ test('unknown task status is literal, never derived from worker exit code', asyn
   const data = JSON.parse(JSON.stringify(live))
   data.runs[0].tasks[0].status = 'review-needed'
   await setup($, on, data)
-  expect(await drawn($)).toContain('passes-fast review-needed')
+  expect(await drawn($)).toContain('· passes-fast')
+  expect(parseRuns(JSON.stringify(data)).runs[0]!.tasks[0]!.status).toBe('review-needed')
 })
 
 test('invalid response contract is visible and never replaced by guessed liveness', async ($, on) => {
@@ -253,8 +261,8 @@ test('inline prioritizes failed and active lanes and counts omitted lanes', () =
   const rows = layout({ runs: [run], active: live.active, lastSuccess: NOW, error: null }, NOW, CFG, 'inline', 90).map(line => line.map(p => p.text).join(''))
   expect(rows.length).toBe(8)
   expect(rows[1]).toContain('fails-twice')
-  expect(rows[2]).toContain('slow-check')
-  expect(rows[7]).toBe('+9 more')
+  expect(rows[3]).toContain('slow-check')
+  expect(rows[7]).toContain('+11 more · 11 passed:')
 })
 
 for (const bodyRows of [3, 4, 6]) {
@@ -276,9 +284,8 @@ for (const bodyRows of [3, 4, 6]) {
         .map(line => line.map(part => part.text).join(''))
       expect(rows).toEqual(expected)
       expect(rows.length <= bodyRows).toBe(true)
-      const drawn = data.runs[0]!.tasks.filter(task => rows.some(row => row.startsWith(`+ ${task.key} `) ||
-        row.startsWith(`x ${task.key} `) || row.startsWith(`· ${task.key} `))).length
-      const more = rows[rows.length - 1]?.match(/^\+(\d+) more$/)
+      const drawn = data.runs[0]!.tasks.filter(task => rows.some(row => /^[✓✗◐·○] /.test(row) && row.includes(` ${task.key} `))).length
+      const more = rows[rows.length - 1]?.match(/^\+(\d+) more\b/)
       expect(drawn + Number(more?.[1] ?? 0)).toBe(data.runs[0]!.tasks.length)
       await ui.unmount()
     }
@@ -292,8 +299,8 @@ test('six lanes in six body rows reserve the last row for two omitted lanes', ()
   const rows = layout({ ...data, lastSuccess: NOW, error: null }, NOW, CFG, 'inline', 80, 6)
     .map(line => line.map(part => part.text).join(''))
   expect(rows.length).toBe(6)
-  expect(rows.filter(row => row.startsWith('+ lane-')).length).toBe(4)
-  expect(rows[5]).toBe('+2 more')
+  expect(rows.filter(row => row.startsWith('✓ lane-')).length).toBe(4)
+  expect(rows[5]).toContain('+2 more · 2 passed:')
 })
 
 test('tiny inline bodies keep the omitted count visible even with cached errors', () => {
@@ -303,7 +310,7 @@ test('tiny inline bodies keep the omitted count visible even with cached errors'
     const rows = layout(snapshot, NOW + 8000, CFG, 'inline', 80, bodyRows)
       .map(line => line.map(part => part.text).join(''))
     expect(rows.length).toBe(bodyRows)
-    if (bodyRows) expect(rows[bodyRows - 1]).toBe(`+${data.runs[0]!.tasks.length} more`)
+    if (bodyRows) expect(rows[bodyRows - 1]).toContain(`+${data.runs[0]!.tasks.length} more`)
   }
 })
 
@@ -333,8 +340,10 @@ test('a died run is STOPPED even when listed as active', async ($, on) => {
   await setup($, on, data)
   const text = await drawn($)
   expect(text).toContain('STOPPED')
-  expect(text).toContain('saved: verifying')
-  expect(text).not.toContain('running')
+  expect(text).toContain('○ slow-check')
+  expect(text).toContain('└ stopped before it finished')
+  expect(text).toContain('0 running')
+  expect(text).not.toContain('◐ slow-check')
 })
 
 test('a status-looking state cannot bypass active membership', () => {
@@ -349,8 +358,9 @@ test('legacy fixture draws attempts without a maximum or a contract error', asyn
   await setup($, on, legacyText, Date.parse(run.started_at) + run.elapsed_s * 1000)
   const text = await drawn($)
   expect(text).toContain('legacy-example')
-  expect(text).toContain('lane-1 fail ■■ codex 2 5:24 tok 111,553')
-  expect(text).not.toContain('2/')
+  expect(text).toContain('✗ lane-1')
+  expect(text).toContain('■■ 2/-  5:24')
+  expect(text).toContain('tokens 111,553')
   expect(text).not.toContain('Ringside response missing required fields')
 })
 
@@ -387,7 +397,7 @@ test('a stuck-live run first in server order draws STOPPED regardless of start t
   expect(await drawn($)).toContain('STOPPED · referee-fixture-fleet')
 })
 
-test('absent optional fields draw dashes, engine alone, and no excerpt', async ($, on) => {
+test('absent optional fields draw dashes and no excerpt; engine remains parsed', async ($, on) => {
   const data = JSON.parse(liveText)
   const run = data.runs[0]
   delete run.elapsed_s
@@ -397,9 +407,12 @@ test('absent optional fields draw dashes, engine alone, and no excerpt', async (
   await setup($, on, data)
   const text = await drawn($)
   expect(text).toContain('LIVE · referee-fixture-fleet')
-  expect(text).toContain('- · 0 pass 1 fail 0 running · tokens -')
-  expect(text).toContain('minimal fail ■■ codex 2 - tok -')
-  expect(text).not.toContain('minimal:')
+  expect(text).toContain('- elapsed')
+  expect(text).toContain('tokens -')
+  expect(text).toContain('✗ minimal')
+  expect(text).toContain('■■ 2/-  -')
+  expect(parseRuns(JSON.stringify(data)).runs[0]!.tasks[0]!.engine).toBe('codex')
+  expect(text).not.toContain('└')
   expect(text).not.toContain('undefined')
   expect(text).not.toContain('NaN')
 })
@@ -414,7 +427,9 @@ test('only required run and task fields determine unreadable runs', () => {
   expect(data.runs.length).toBe(1)
   expect(data.skippedRuns).toBe(bad.length)
   const text = layout({ ...data, lastSuccess: NOW, error: null }, NOW, CFG, 'dock', 90).map(line => line.map(p => p.text).join('')).join('\n')
-  expect(text).toContain('task fail  - - - tok -')
+  expect(text).toContain('✗ task')
+  expect(text).toContain('-/-  -')
+  expect(text).toContain('tokens -')
   expect(text).not.toContain('NaN')
 })
 
@@ -424,3 +439,163 @@ for (const body of ['not JSON', '{}', '{"runs":[]}', '{"active":{},"runs":{}}', 
     expect(await drawn($)).toContain('Ringside response missing required fields')
   })
 }
+
+const rowText = (lines: ReturnType<typeof layout>): string[] => lines.map(line => line.map(p => p.text).join(''))
+const liveSnapshot = () => ({ ...parseRuns(liveText), lastSuccess: NOW, error: null })
+
+for (const [name, fixture] of [
+  ['empty', emptyText], ['live', liveText], ['killed', killedText],
+  ['finished', finishedText], ['codex', codexText], ['legacy', legacyText],
+] as const) {
+  test(`${name}: width sweep includes errors, stale, stopped and all inline budgets`, () => {
+    const data = parseRuns(fixture)
+    const run = data.runs[0]
+    const now = run?.state === 'finished' ? Date.parse(run.started_at!) + run.elapsed_s! * 1000 : NOW
+    const base = { ...data, lastSuccess: now, error: null }
+    const variants = [base, { ...base, error: 'unreachable' as const }, { ...base, error: 'contract' as const },
+      { ...base, lastSuccess: now - 60000 }, { ...base, active: {} }]
+    for (const snapshot of variants) {
+      for (const columns of [24, 40, 56, 80, 120]) {
+        for (const placement of ['dock', 'inline', 'widget']) {
+          for (const budget of placement === 'inline' ? [3, 6, 8, 14] : [8]) {
+            const rows = rowText(layout(snapshot, now, CFG, placement, columns, budget))
+            for (const row of rows) expect(cellWidth(row) <= columns).toBe(true)
+            if (placement === 'widget') expect(rows.length).toBe(1)
+            if (placement === 'inline') {
+              expect(rows.length <= budget).toBe(true)
+              const selected = selectRun(snapshot, now).run
+              const drawn = rows.filter(row => /^[✓✗◐·○] /.test(row)).length
+              const hidden = rows.find(row => /^\+\d+ more\b/.test(row) && !row.includes('more live'))?.match(/^\+(\d+)/)
+              expect(drawn + Number(hidden?.[1] ?? 0)).toBe(selected?.tasks.length ?? 0)
+            }
+          }
+        }
+      }
+    }
+  })
+}
+
+for (const columns of [56, 120]) {
+  test(`dock ${columns}: card, paired details, aligned clocks and column split`, () => {
+    const rows = rowText(layout(liveSnapshot(), NOW, CFG, 'dock', columns))
+    const bodyWidth = columns === 120 ? 59 : columns
+    const body = rows.slice(2, -1)
+    const left = columns === 120 ? body.map(row => row.slice(0, bodyWidth)) : body
+    const lanes = columns === 120 ? body.map(row => row.slice(bodyWidth + 2)) : body
+    expect(rows[0]?.trim()).toBe('REFEREE · LIVE · referee-fixture-fleet')
+    expect(rows[0]?.startsWith(' ')).toBe(true)
+    expect(left[0]).toBe(`╭${'─'.repeat(bodyWidth - 2)}╮`)
+    expect(left[1]).toContain('referee-fixture-fleet')
+    expect(left[1]).toContain('● live')
+    expect(left[2]).toContain('0:09 elapsed · 5 lanes · 3 parallel · tokens 0')
+    expect(left[3]?.slice(2, -2)).toMatch(/^━+$/)
+    expect(left[4]).toContain('■ 3 pass   ■ 1 fail   ■ 1 running   ■ 0 queued')
+    expect(left[5]).toBe(`╰${'─'.repeat(bodyWidth - 2)}╯`)
+    const failed = lanes.findIndex(row => row.startsWith('✗ fails-twice'))
+    const active = lanes.findIndex(row => row.startsWith('◐ slow-check'))
+    expect(lanes[failed + 1]).toBe('  └ FAIL: never.txt was not created')
+    expect(lanes[active + 1]).toBe('  └ mock-worker: wrote 1 file(s): out.txt')
+    expect(active > failed).toBe(true)
+    for (const row of lanes.filter(row => /^[✓✗◐·○] /.test(row))) {
+      expect(cellWidth(row)).toBe(bodyWidth)
+      expect(row).toMatch(/\d\/\d  \d+:\d\d$/)
+    }
+    if (columns === 120) expect(rows.some(row => row.includes('│') && row.includes('✗ fails-twice'))).toBe(true)
+    expect(rows[rows.length - 1]).toContain('Ringside http://127.0.0.1:8700')
+    expect(rows[rows.length - 1]?.endsWith('updated 0s ago')).toBe(true)
+  })
+}
+
+for (const budget of [6, 8, 14]) {
+  test(`inline live at 80 columns and ${budget} rows matches the requested order and details`, () => {
+    const rows = rowText(layout(liveSnapshot(), NOW, CFG, 'inline', 80, budget))
+    expect(rows[0]).toContain('● LIVE referee-fixture-fleet · 0:09')
+    expect(rows[0]).toContain('3 pass · 1 fail · 1 running')
+    const start = budget === 14 ? 2 : 1
+    if (budget === 14) expect(rows[1]).toBe('')
+    expect(rows[start]).toMatch(/^✗ fails-twice /)
+    expect(rows[start + 1]).toBe('  └ FAIL: never.txt was not created')
+    expect(rows[start + 2]).toMatch(/^◐ slow-check /)
+    expect(rows[start + 3]).toBe('  └ mock-worker: wrote 1 file(s): out.txt')
+    if (budget === 6) {
+      expect(rows.length).toBe(6)
+      expect(rows[5]).toBe('+3 more · 3 passed: passes-fast, queued-after, passes-later')
+    } else {
+      expect(rows.length).toBe(budget === 14 ? 9 : 8)
+      expect(rows[start + 4]).toMatch(/^✓ passes-fast /)
+      expect(rows[start + 5]).toMatch(/^✓ queued-after /)
+      expect(rows[start + 6]).toMatch(/^✓ passes-later /)
+    }
+  })
+}
+
+test('dock uses disciplined theme colors and bold values with no uncolored content rows', () => {
+  const lines = layout(liveSnapshot(), NOW, CFG, 'dock', 56)
+  for (const color of ['claude', 'suggestion', 'success', 'error', 'warning', 'inactive', 'subtle']) {
+    expect(lines.flat().some(p => p.color === color)).toBe(true)
+  }
+  expect(lines.flat().some(p => p.bold)).toBe(true)
+  for (const line of lines) expect(line.some(p => p.color)).toBe(true)
+  expect(lines.flat().find(p => p.text === 'REFEREE')?.bold).toBe(true)
+  expect(lines.flat().find(p => p.href)?.color).toBe('suggestion')
+})
+
+test('max_parallel is an optional non-negative integer; activity is sanitized at parsing', () => {
+  const raw = JSON.parse(liveText)
+  expect(parseRuns(liveText).runs[0]!.max_parallel).toBe(3)
+  for (const value of [-1, 2.5, '3', null]) {
+    raw.runs[0].max_parallel = value
+    expect(parseRuns(JSON.stringify(raw)).runs[0]!.max_parallel).toBeUndefined()
+  }
+  raw.runs[0].max_parallel = 0
+  raw.runs[0].tasks[2].activity = '\u001b[31mworking\u0007\n'
+  const parsed = parseRuns(JSON.stringify(raw))
+  expect(parsed.runs[0]!.max_parallel).toBe(0)
+  expect(parsed.runs[0]!.tasks[2]!.activity).toBe('working')
+  expect(rowText(layout({ ...parsed, lastSuccess: NOW, error: null }, NOW, CFG, 'dock', 56)).join('\n')).toContain('└ working')
+  raw.runs[0].tasks[2].activity = 42
+  expect(parseRuns(JSON.stringify(raw)).runs[0]!.tasks[2]!.activity).toBeUndefined()
+})
+
+test('all widths from 24 through 160 tolerate wide labels and huge attempt counts', () => {
+  const snapshot = liveSnapshot()
+  const run = snapshot.runs[0]!
+  run.run_name = '漢字🙂'.repeat(30)
+  run.tasks[0]!.key = '漢字🙂'.repeat(30)
+  run.tasks[0]!.attempts = 1000000000
+  run.tasks[0]!.max_attempts = 1000000001
+  run.tasks[0]!.elapsed_s = 1000000000000
+  for (let columns = 24; columns <= 160; columns++) {
+    for (const placement of ['dock', 'inline', 'widget']) {
+      for (const row of rowText(layout(snapshot, NOW, CFG, placement, columns, 6))) {
+        expect(cellWidth(row) <= columns).toBe(true)
+      }
+    }
+  }
+  expect(fit([{ text: 'abc' }], 0)).toEqual([])
+})
+
+test('three-run notices and summary retain live selection without repeating the plugin name', () => {
+  const snapshot = liveSnapshot()
+  const run = snapshot.runs[0]!
+  for (const id of ['second', 'third']) {
+    snapshot.runs.push({ ...run, run_id: id, started_at: '2026-11-17T12:00:00Z' })
+    snapshot.active[id] = {}
+  }
+  for (const placement of ['dock', 'inline', 'widget']) {
+    expect(rowText(layout(snapshot, NOW, CFG, placement, 120, 14)).join('\n')).toContain('+2 more live')
+  }
+  expect(summary(snapshot, NOW, CFG)).toBe('LIVE · referee-fixture-fleet · 3 pass 1 fail 1 running · 0:09 · +2 more live')
+})
+
+test('stacked progress gives each nonzero status a cell and fills the entire card', () => {
+  const snapshot = liveSnapshot()
+  snapshot.runs[0]!.tasks.push({ key: 'queued', status: 'queued' })
+  for (const columns of [24, 40, 56, 80]) {
+    const lines = layout(snapshot, NOW, CFG, 'dock', columns)
+    const bar = lines.find(line => line.some(p => p.color === 'inactive' && p.text.includes('░')))!
+    const segments = bar.filter(p => /^[━░]+$/.test(p.text))
+    expect(segments.map(p => p.color)).toEqual(['success', 'error', 'warning', 'inactive'])
+    expect(segments.reduce((n, p) => n + cellWidth(p.text), 0)).toBe(columns - 4)
+  }
+})

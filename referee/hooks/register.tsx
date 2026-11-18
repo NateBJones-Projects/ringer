@@ -16,7 +16,7 @@ async function refreshStatus($: EngineInterface, cfg: Config) {
 
 // Open pane
 async function openPane($: EngineInterface, cfg: Config) {
-  return $.ui.open({ id: 'referee', title: 'Referee', columns: cfg.paneColumns, rows: 8 })
+  return $.ui.open({ id: 'referee', title: 'Referee', columns: cfg.paneColumns, rows: 14 })
 }
 
 // Fetch one Ringside snapshot; prevent overlapping requests and late session writes.
@@ -106,7 +106,7 @@ export const register: Register = (on, options) => {
       <Box flexDirection="column" width={e.props.bodyColumns}>
         {lines.map(line => (
           <Text dimColor={stale} wrap="truncate" maxLines={1}>
-            {line.map(part => part.href && e.surface === 'terminal' ? <Link href={part.href}>{part.text}</Link> : <Text color={part.color}>{part.text}</Text>)}
+            {line.map(part => part.href && e.surface === 'terminal' ? <Link href={part.href}><Text color={part.color} bold={part.bold}>{part.text}</Text></Link> : <Text color={part.color} bold={part.bold}>{part.text}</Text>)}
           </Text>
         ))}
       </Box>
