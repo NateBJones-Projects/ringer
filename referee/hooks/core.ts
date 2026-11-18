@@ -11,7 +11,7 @@ export function config(options: Readonly<Record<string, unknown>>): Config {
     return typeof value === 'number' && Number.isFinite(value) ? Math.max(min, Math.min(max, Math.round(value))) : fallback
   }
   return {
-    port: integer('port', 8700, 1, 65535), pollMs: integer('pollMs', 2000, 100, 3600000),
+    port: integer('port', 8700, 1, 65535), pollMs: integer('pollMs', 1000, 100, 3600000),
     paneColumns: integer('paneColumns', 60, 24, 500),
     openOnStart: options.openOnStart !== false, statusLine: options.statusLine !== false,
   }

@@ -194,14 +194,14 @@ test('newest active live run wins; completed runs expire after thirty minutes', 
 test('stale data keeps its verdicts and is marked after three poll intervals', async ($, on) => {
   const world = await setup($, on)
   world.fail()
-  await world.clock.advance(6000)
+  await world.clock.advance(3000)
   expect(await drawn($)).not.toContain('STALE')
-  await world.clock.advance(2000)
+  await world.clock.advance(1000)
   expect(await drawn($)).toContain('STALE')
   expect(await drawn($)).toContain('✗ fails-twice')
   expect(world.status()).toContain('STALE')
   world.replace(live)
-  await world.clock.advance(2000)
+  await world.clock.advance(1000)
   expect(await drawn($)).not.toContain('STALE')
 })
 
@@ -210,7 +210,7 @@ test('status line clears when the run becomes idle', async ($, on) => {
   expect(world.status()).toContain('LIVE · referee-fixture-fleet')
   expect(world.status()?.startsWith('referee')).toBe(false)
   world.replace(empty)
-  await world.clock.advance(2000)
+  await world.clock.advance(1000)
   expect(world.status()).toBeUndefined()
 })
 
@@ -326,7 +326,7 @@ test('clear keeps polling; exiting cancels the timer and clears status', async (
   const world = await setup($, on)
   const end = { sessionId: 'test-session', resume: { id: 'test-session' } }
   await $.session.end({ ...end, reason: 'clear' })
-  await world.clock.advance(2000)
+  await world.clock.advance(1000)
   expect(world.requests()).toBe(2)
   await $.session.end({ ...end, reason: 'prompt_input_exit' })
   await world.clock.advance(4000)

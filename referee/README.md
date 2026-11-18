@@ -28,7 +28,7 @@ Set these plugin userConfig fields through Claude Code's plugin settings:
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `port` | `8700` | Ringside port on `127.0.0.1` (1-65535). |
-| `pollMs` | `2000` | Poll interval in milliseconds (minimum 100). |
+| `pollMs` | `1000` | Poll interval in milliseconds (minimum 100). |
 | `paneColumns` | `60` | Requested dock width (minimum 24). |
 | `openOnStart` | `true` | Open the pane at session start. |
 | `statusLine` | `true` | Poll and show a live-run status summary, even with the pane closed. |
