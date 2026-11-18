@@ -282,6 +282,8 @@ A native desktop build (Tauri, under `hud/`) exists as a v0.1.1 prototype. It sh
 
 The visual direction is recorded in [the Ringside Figma design](https://www.figma.com/design/iG6yecFGAcwTH4rUos3Juk?node-id=5-2). Verification and a disposable preview fixture are documented in [tests/TESTING.md](tests/TESTING.md).
 
+Watch Ringer beside your Claude Code chat with [Referee](referee/README.md), a read-only function-hooks plugin.
+
 ## Self-update
 
 Ringer checks `origin/main` at process start, before it dispatches the requested command. Checks are throttled to once per hour by default. You can also run `./ringer.py self-update` for an immediate, human-readable check that ignores the throttle.
