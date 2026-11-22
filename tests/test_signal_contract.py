@@ -167,7 +167,7 @@ source = "fixture"
             notes_path=self.notes_path,
         )
 
-    def test_shipped_registry_resolves_openrouter_probation_models(self) -> None:
+    def test_shipped_registry_resolves_openrouter_models(self) -> None:
         registry = load_model_identity_registry(
             ROOT / "registry" / "model-identity.toml"
         )
