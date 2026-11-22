@@ -10489,8 +10489,34 @@ def claude_root(project: bool) -> Path:
     return (Path.cwd() if project else Path.home()) / ".claude"
 
 
+def codex_root(project: bool) -> Path:
+    # Hooks/config root only. CODEX_HOME is honored for user hook storage;
+    # skill discovery is NOT tied to CODEX_HOME (skills live under .agents).
+    if project:
+        return Path.cwd() / ".codex"
+    configured = os.environ.get("CODEX_HOME", "").strip()
+    return Path(configured).expanduser() if configured else Path.home() / ".codex"
+
+
+def codex_skill_target(project: bool) -> Path:
+    # Codex discovers repository skills under .agents/skills and user skills
+    # under $HOME/.agents/skills. CODEX_HOME does not affect skill discovery.
+    return (Path.cwd() if project else Path.home()) / ".agents" / "skills" / "ringer"
+
+
 def ringer_skill_source() -> Path:
     return repo_root() / ".claude" / "skills" / "ringer" / "SKILL.md"
+
+
+def ringer_codex_skill_source() -> Path:
+    return repo_root() / ".agents" / "skills" / "ringer"
+
+
+def same_path(a: Path, b: Path) -> bool:
+    try:
+        return a.resolve() == b.resolve()
+    except OSError:
+        return str(a) == str(b)
 
 
 def ringer_hook_command(action: str) -> str:
@@ -10660,6 +10686,86 @@ def uninstall_agent(project: bool = False) -> int:
     print(f"Uninstalled ringer agent for {scope} scope.")
     print(f"Hooks removed: {removed_hooks}")
     print(f"Skill removed: {'yes' if removed_skill else 'no'}")
+    return 0
+
+
+def install_codex_agent(project: bool = False) -> int:
+    skill_source = ringer_codex_skill_source()
+    if not (skill_source / "SKILL.md").exists():
+        raise ValueError(f"ringer Codex skill source not found: {skill_source}")
+    skill_target = codex_skill_target(project)
+    self_source = same_path(skill_source, skill_target)
+    if self_source:
+        # Installing from the Ringer repo itself into its own canonical
+        # skill location: the source IS the target, so a copy would be a
+        # no-op (and copytree into itself errors). Leave the packaged skill
+        # in place.
+        pass
+    else:
+        skill_target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(skill_source, skill_target, dirs_exist_ok=True)
+
+    hooks_root = codex_root(project)
+    hooks_path = hooks_root / "hooks.json"
+    settings = load_settings(hooks_path)
+    changed = False
+    changed |= merge_ringer_hook(
+        settings,
+        "PreToolUse",
+        "",
+        ringer_hook_command("codex-pre-tool"),
+    )
+    changed |= merge_ringer_hook(
+        settings,
+        "PostToolUse",
+        "",
+        ringer_hook_command("codex-post-tool"),
+    )
+    if changed or not hooks_path.exists():
+        write_settings(hooks_path, settings)
+
+    scope = "project" if project else "user"
+    print(f"Installed ringer Codex agent for {scope} scope.")
+    print(f"Skill: {skill_target}")
+    if self_source:
+        print("Skill: source is target (Ringer repo); left packaged skill in place.")
+    if changed:
+        print(f"Hooks: added PreToolUse and PostToolUse in {hooks_path}")
+        print("Hook trust: start a new Codex session, open /hooks, and approve the two Ringer hooks.")
+    else:
+        print(f"Hooks: already present in {hooks_path}")
+    return 0
+
+
+def uninstall_codex_agent(project: bool = False) -> int:
+    hooks_root = codex_root(project)
+    hooks_path = hooks_root / "hooks.json"
+    removed_hooks = 0
+    if hooks_path.exists():
+        settings = load_settings(hooks_path)
+        removed_hooks = remove_ringer_hooks(settings)
+        if removed_hooks:
+            write_settings(hooks_path, settings)
+
+    skill_source = ringer_codex_skill_source()
+    skill_dir = codex_skill_target(project)
+    self_source = same_path(skill_source, skill_dir)
+    removed_skill = False
+    if self_source:
+        # Uninstalling from the Ringer repo itself: never delete the
+        # packaged canonical skill. Hooks above were still removed.
+        pass
+    elif skill_dir.exists():
+        shutil.rmtree(skill_dir)
+        removed_skill = True
+
+    scope = "project" if project else "user"
+    print(f"Uninstalled ringer Codex agent for {scope} scope.")
+    print(f"Hooks removed: {removed_hooks}")
+    if self_source:
+        print("Skill: source is target (Ringer repo); preserved packaged skill.")
+    else:
+        print(f"Skill removed: {'yes' if removed_skill else 'no'}")
     return 0
 
 
@@ -11145,11 +11251,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     demo_parser.add_argument("--dry-run", action="store_true", help="print the demo plan without spawning codex")
 
-    install_parser = subparsers.add_parser("install-agent", help="install the ringer Claude Code skill and hooks")
-    install_parser.add_argument("--project", action="store_true", help="install into ./.claude instead of ~/.claude")
+    install_parser = subparsers.add_parser("install-agent", help="install the ringer skill and hooks for Claude Code or Codex")
+    install_parser.add_argument("--project", action="store_true", help="install under the current project instead of the user config directory")
+    install_parser.add_argument("--codex", action="store_true", help="install for Codex under .codex instead of Claude Code")
 
-    uninstall_parser = subparsers.add_parser("uninstall-agent", help="remove the ringer Claude Code skill and hooks")
-    uninstall_parser.add_argument("--project", action="store_true", help="remove from ./.claude instead of ~/.claude")
+    uninstall_parser = subparsers.add_parser("uninstall-agent", help="remove the ringer skill and hooks for Claude Code or Codex")
+    uninstall_parser.add_argument("--project", action="store_true", help="remove from the current project instead of the user config directory")
+    uninstall_parser.add_argument("--codex", action="store_true", help="remove the Codex installation instead of Claude Code")
     return parser
 
 
@@ -11195,8 +11303,12 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Self-update skipped: {result.reason or 'not available'}.")
             return 0
         if args.command == "install-agent":
+            if args.codex:
+                return install_codex_agent(project=args.project)
             return install_agent(project=args.project)
         if args.command == "uninstall-agent":
+            if args.codex:
+                return uninstall_codex_agent(project=args.project)
             return uninstall_agent(project=args.project)
 
         if args.command == "lint":
