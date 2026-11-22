@@ -9,9 +9,8 @@ import os
 import sys
 import tempfile
 import unittest
-from datetime import datetime
-from pathlib import Path
 from unittest import mock
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))

@@ -6,8 +6,7 @@ description: >-
   harness, or CLI agent; before an edit-test-edit loop or batch of similar
   edits; when reviewing failed worker output; and when writing or reviewing
   manifests, choosing swarm patterns or worker engines, or debugging a run.
-  Codex coordinates while OpenCode plus OpenRouter is the implementation
-  lane unless the user changes that policy. Skip for read-only file search,
+  Use the engines configured and authorized for the project. Skip for read-only file search,
   git operations, pure conversation or prose, and one one-file, few-line,
   one-shot edit; a second pass is a loop and triggers Ringer.
 ---
@@ -32,9 +31,7 @@ description: >-
    moment this skill loads for real work, before you write a single spec,
    put Ringside on the human's screen: `./ringer.py hud` (idempotent — if
    one is already up it says so and opens the page; runs also auto-start
-   it). Ringside is the PAGE at http://127.0.0.1:8700 — NEVER launch the
-   Ringside.app application (`open -a Ringside`); it is a parked prototype
-   with a stale frontend. Never go dark: if your prep will take more than
+   it). Use the URL printed by the command. If your prep will take more than
    ~30 seconds, tell the human in one sentence what you're doing before
    you start. Never pass `--no-dashboard` except in automated tests or
    when the user explicitly asks.
@@ -87,19 +84,11 @@ you intend to act on, and anything whose output a check could execute keep the
 full path. If you could write a check that catches a wrong answer, write it and
 make it a manifest.
 
-## Preserve the lane policy
+## Worker routing
 
-- Use the current Codex model for planning, manifest writing, check
-  design, routing decisions, and post-run review.
-- Set every implementation task to `"engine": "opencode"`.
-- Use an OpenRouter model through the task's `"model"` field or the
-  configured OpenCode default (`z-ai/glm-5.3-flash`). Do not create duplicate
-  engine blocks or splice `-m` flags to change models — that is what the
-  `model` field is for.
-- Do not use Codex as a Ringer worker and do not use Grok unless the user
-  explicitly changes the worker policy.
-- Honor an explicit request to work inline. Otherwise, treat a single
-  delegated task as a one-task manifest.
+Use the project's configured engines and the user's authorization. Set each
+task's `engine` and use the task's `model` field for an explicit model override.
+Honor requests to work inline.
 
 ## One job, one artifact
 
@@ -219,25 +208,9 @@ don't re-ask every round of the same job unless the mix isn't working.
 This is per-user by design: the scoreboard learns THIS user's workload —
 never import another machine's conclusions.
 
-**Explore or the scoreboard fossilizes.** In any run of 3+ tasks that has
-a low-stakes lane (docs sweeps, mechanical edits, persona reviews — strong
-executed check, retry to absorb failure), assign roughly ONE task to an
-exploration candidate from `./ringer.py models --explore --task-type
-<type>` (untested + cheap or free). Free promos from `catalog --changes`
-jump the queue. Never explore on time-critical work. Promotion ladder
-(computed by --explore): untested → probation → proven for a task_type
-(3+ tasks, first-try ≥ 0.67). Record demotions in `docs/MODEL-NOTES.md`.
-
-**OpenCode is the harness; the model is a manifest field.** Under this
-host's lane policy every implementation task runs through the `opencode`
-engine with the task's `"model"` field set to the OpenRouter slug — e.g.
-`"engine": "opencode", "model":
-"openrouter/z-ai/glm-5.3-flash"`. This holds even when someone —
-including the user, in the heat of a run — says to "call kimi directly":
-the harness is what provides the sandbox, raw logs, token counts, and
-executed verification, so routing around it silently drops all four. Never
-clone an engine block or splice `-m` through `engine_args` to change
-models; that's what the `model` field is for.
+For authorized evaluation runs, `./ringer.py models --explore --task-type
+<type>` lists exploration candidates. Use first-try outcomes and the executed
+checks to evaluate results for that task type.
 
 - **Check the evidence before assigning models to tasks.** Run
   `./ringer.py models` — `first_try_pass_rate` is the routing signal;

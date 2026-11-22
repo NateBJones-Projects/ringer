@@ -8474,7 +8474,6 @@ def write_model_scoreboard_html(
     notes_path: Path,
     notes_sections: dict[str, list[str]],
     catalog_events: list[dict[str, Any]] | None = None,
-    generated_at: str | None = None,
 ) -> Path:
     target = path
     if target is None:
