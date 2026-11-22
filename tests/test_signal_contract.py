@@ -330,5 +330,20 @@ source = "fixture"
             self.assertIn("lint: clean", output.getvalue())
 
 
+    def test_shipped_registry_resolves_glm_5_3_flash(self) -> None:
+        registry = load_model_identity_registry(
+            ROOT / "registry" / "model-identity.toml"
+        )
+        identity = registry.resolve("opencode", "openrouter/z-ai/glm-5.3-flash")
+        self.assertFalse(identity.unregistered)
+        self.assertFalse(identity.misrouted)
+        self.assertEqual("GLM 5.3 Flash", identity.model_display)
+        self.assertEqual("Z.ai (Zhipu AI)", identity.lab)
+        self.assertEqual("OpenCode", identity.harness)
+        self.assertEqual("OpenRouter API", identity.access)
+        self.assertEqual("verified", identity.confidence)
+        self.assertEqual("2026-08-30", identity.last_verified)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

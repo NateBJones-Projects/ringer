@@ -78,6 +78,13 @@ confidence = "verified"
 source = "manifest model field; OpenRouter slug z-ai/glm-5.2"
 last_verified = 2026-07-10
 
+[engines.opencode.models."openrouter/z-ai/glm-5.3-flash"]
+display = "GLM 5.3 Flash"
+lab = "Z.ai (Zhipu AI)"
+confidence = "verified"     # OpenRouter catalog + endpoints read-back 2026-08-30; see capability file glm-5.3-flash.toml
+source = "https://z.ai/blog/glm-5.3-flash"
+last_verified = 2026-08-30
+
 [engines.opencode.models."openrouter/moonshotai/kimi-k2.7-code"]
 display = "Kimi K2.7 Code"
 lab = "Moonshot AI"
