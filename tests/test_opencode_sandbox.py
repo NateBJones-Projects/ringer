@@ -226,6 +226,11 @@ class OpenCodeSandboxWrapperTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
         self.assertEqual(self._argv(), ["run", "--q"])
 
+    def test_no_sandbox_preserves_end_of_options(self) -> None:
+        r = self._run([self.taskdir, "--no-sandbox", "run", "--", "--writable-root"])
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        self.assertEqual(self._argv(), ["run", "--", "--writable-root"])
+
     # ---- Seatbelt-specific: real write confinement -------------------------
 
     @unittest.skipUnless(SEATBELT, SEATBELT_REASON)

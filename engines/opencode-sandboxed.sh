@@ -21,11 +21,7 @@
 # edit — e.g. engine_args = ["--writable-root", "{{REPO_PATH}}"]. Because ringer
 # splices {engine_args} into the middle of the engine's args_template, this
 # option is recognized anywhere after <taskdir> and stripped before OpenCode is
-# invoked (in both sandbox and --no-sandbox mode); a bare "--" ends wrapper-option
-# stripping and is itself consumed. This replaces the Codex-only config string
-# -c sandbox_workspace_write.writable_roots=... that the OpenCode wrapper does
-# NOT understand — custom engines must provide an equivalent mechanism or their
-# workers hit EPERM on every repo edit.
+# invoked in both modes. A bare "--" is forwarded and ends wrapper parsing.
 set -euo pipefail
 
 TASKDIR="${1:?usage: opencode-sandboxed.sh <taskdir> [--no-sandbox] [--writable-root PATH]... <args...>}"; shift
@@ -34,7 +30,7 @@ if [ "${1:-}" = "--no-sandbox" ]; then SANDBOX=0; shift; fi
 
 # Parse the remaining arguments: collect every --writable-root PATH (validated
 # and canonicalized), stripping all wrapper options so OpenCode never sees them.
-# A bare "--" terminates wrapper-option parsing and is consumed. Validation is
+# A bare "--" terminates wrapper-option parsing and is forwarded. Validation is
 # mode-independent: a bad root fails even under --no-sandbox.
 WR_ROOTS=()
 OC_ARGS=()
@@ -50,10 +46,16 @@ while [ $# -gt 0 ]; do
         echo "opencode-sandboxed.sh: --writable-root not a directory: $root" >&2
         exit 2
       fi
-      WR_ROOTS+=( "$(cd "$root" && pwd -P)" )
+      case "$root" in
+        /*) ;;
+        *) root="./$root" ;;
+      esac
+      # Preserve trailing newlines in directory names through command substitution.
+      root="$(cd -P -- "$root" && printf '%s/.' "$PWD")"
+      WR_ROOTS+=( "${root%/.}" )
       ;;
     --)
-      shift; OC_ARGS+=( "$@" ); break ;;
+      OC_ARGS+=( "$@" ); break ;;
     *)
       OC_ARGS+=( "$1" ); shift ;;
   esac
